@@ -34,7 +34,10 @@ Finds the PR opened from the current branch into `--target-branch`, prints
 each pipeline's latest build, and inlines failed-step logs. `--wait` polls
 every 30s until every pipeline finishes (use this after pushing, instead of
 guessing when CI is done). Exits non-zero if any pipeline failed — safe to
-gate a script on.
+gate a script on. If the PR has merge conflicts (or failed/was rejected by
+policy), that's reported immediately instead of waiting for builds that
+will never run — check the error message for `mergeStatus=conflicts` and
+tell the user to resolve conflicts rather than assuming CI is just slow.
 
 Auth: works with no setup if the caller is already `az login`'d. Only pass
 `--pat`/`AZURE_DEVOPS_PAT` if there's no `az` session available.

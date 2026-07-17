@@ -15,9 +15,28 @@ from .gitrepo import AdoRemote, current_branch
 # Matches an ISO 8601 timestamp at the start of a log line, e.g. 2024-03-21T15:01:23.1234567Z
 TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*")
 
+# GitPullRequest.mergeStatus values (PullRequestAsyncStatus) that mean the PR
+# can't be merged as-is — build status is moot until this is resolved.
+BAD_MERGE_STATUSES = {
+    "conflicts": "has merge conflicts with the target branch",
+    "failure": "merge failed",
+    "rejectedByPolicy": "merge was rejected by branch policy",
+}
+
 
 def _base_url(remote: AdoRemote) -> str:
     return f"https://dev.azure.com/{remote.org}/{quote(remote.project, safe='')}"
+
+
+def merge_conflict_message(pr: dict) -> str | None:
+    """None if the PR's mergeStatus is fine; else a human-readable description of the problem."""
+    merge_status = pr.get("mergeStatus")
+    if merge_status not in BAD_MERGE_STATUSES:
+        return None
+    pr_id = pr.get("pullRequestId")
+    title = pr.get("title", "?")
+    detail = pr.get("mergeFailureMessage") or BAD_MERGE_STATUSES[merge_status]
+    return f"PR #{pr_id} ({title!r}) {detail} (mergeStatus={merge_status})"
 
 
 def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, target_branch: str) -> dict:
@@ -36,7 +55,11 @@ def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, tar
         r.raise_for_status()
         items = r.json().get("value", [])
         if items:
-            return items[0]
+            pr = items[0]
+            conflict = merge_conflict_message(pr)
+            if conflict:
+                sys.exit(conflict)
+            return pr
 
     print(f"No PR found from '{source_branch}' → '{target_branch}'")
     sys.exit(1)

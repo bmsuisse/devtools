@@ -24,6 +24,12 @@ logs inline).
 bdt pr status [--target-branch main] [--wait]
 ```
 
+If the PR can't be merged (`mergeStatus` is `conflicts`, `failure`, or
+`rejectedByPolicy`), that's reported immediately instead of polling for
+builds that will never run against a merge ref that doesn't exist — e.g.
+`PR #42 ('feat: widgets') has merge conflicts with the target branch (mergeStatus=conflicts)`,
+exit code 1.
+
 Org/project/repo are auto-detected from `git remote get-url origin`
 (handles SSH, `dev.azure.com` HTTPS, and `*.visualstudio.com` HTTPS forms).
 Auth is an explicit PAT (`--pat` or `AZURE_DEVOPS_PAT` env var), falling
