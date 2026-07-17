@@ -13,6 +13,8 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
+from .cli_tools import require_az
+
 SEVERITY_MAP = {"verbose": 0, "information": 1, "warning": 2, "error": 3, "critical": 4}
 
 COLORS = {
@@ -26,7 +28,10 @@ COLORS = {
 
 
 def run_az(*args: str) -> tuple[int, str]:
-    result = subprocess.run(["az", *args], capture_output=True, text=True, shell=sys.platform == "win32")
+    az = require_az()
+    # Never shell=True here: KQL queries contain `|`, which a Windows cmd.exe
+    # shell would reinterpret as a pipe instead of passing through literally.
+    result = subprocess.run([az, *args], capture_output=True, encoding="utf-8")
     return result.returncode, result.stdout + result.stderr
 
 

@@ -15,12 +15,15 @@ import subprocess
 import sys
 import zipfile
 
+from .cli_tools import require_az
+
 # Matches common error/warning markers across granian, uvicorn, and python tracebacks.
 ERROR_RE = re.compile(r"\b(ERROR|CRITICAL|WARNING|Traceback|Exception|\b[45]\d\d\b|FAILED|FATAL)\b")
 
 
 def run_az(args: list[str]) -> str:
-    proc = subprocess.run(["az", *args], capture_output=True, text=True)
+    az = require_az()
+    proc = subprocess.run([az, *args], capture_output=True, encoding="utf-8")
     if proc.returncode != 0:
         sys.exit(proc.stderr.strip() or proc.stdout.strip())
     return proc.stdout

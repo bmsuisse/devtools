@@ -6,16 +6,18 @@ import base64
 import subprocess
 import sys
 
+from .cli_tools import require_az
+
 # Well-known Azure DevOps resource ID for `az account get-access-token`.
 ADO_RESOURCE_ID = "499b84ac-1321-427f-aa17-267ca6975798"
 
 
 def get_az_devops_token() -> str:
-    az = "az.cmd" if sys.platform == "win32" else "az"
+    az = require_az()
     result = subprocess.run(
         [az, "account", "get-access-token", "--resource", ADO_RESOURCE_ID, "--query", "accessToken", "-o", "tsv"],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
     )
     if result.returncode != 0:
         sys.exit(f"az login required and no PAT provided.\n{result.stderr.strip()}")

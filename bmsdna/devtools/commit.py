@@ -15,7 +15,10 @@ IS_SANDBOX_ENV_VAR = "IS_BMS_AI_SANDBOX"
 
 
 def _run(cmd: list[str], cwd: str | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+    try:
+        return subprocess.run(cmd, capture_output=True, encoding="utf-8", cwd=cwd)
+    except FileNotFoundError:
+        sys.exit("'git' is required for this command but wasn't found on PATH.")
 
 
 def _sha(cwd: str | None = None) -> str | None:
@@ -94,6 +97,10 @@ def commit_and_push(
     files under one of those prefixes are committed/pushed inside the
     submodule first, then the submodule bump is staged in the parent repo.
     """
+    # Normalize to forward slashes so subrepo-prefix matching below works the
+    # same whether a caller passes "database/x.sql" or "database\x.sql" (both
+    # os.path.exists and git accept either separator fine on Windows).
+    files = [f.replace("\\", "/") for f in files]
     subrepos = subrepos or []
     print("pre-flight checks:", flush=True)
 

@@ -8,6 +8,13 @@ import sys
 from pathlib import Path
 
 
+def _run(cmd: list[str], cwd: Path) -> None:
+    try:
+        subprocess.run(cmd, cwd=cwd, check=True)
+    except FileNotFoundError:
+        sys.exit(f"'{cmd[0]}' is required for this command but wasn't found on PATH.")
+
+
 def create(
     name: str,
     base: str = "dev",
@@ -21,10 +28,10 @@ def create(
     if path.exists():
         sys.exit(f"error: {path} already exists")
 
-    subprocess.run(["git", "worktree", "add", str(path), "-b", name, base], cwd=root, check=True)
+    _run(["git", "worktree", "add", str(path), "-b", name, base], cwd=root)
 
     if submodules and (root / ".gitmodules").exists():
-        subprocess.run(["git", "submodule", "update", "--init"], cwd=path, check=True)
+        _run(["git", "submodule", "update", "--init"], cwd=path)
 
     if env_file is None:
         for candidate in (".local_env", ".env"):
@@ -36,7 +43,7 @@ def create(
         shutil.copy(root / env_file, path / ".env")
 
     if install_cmd:
-        subprocess.run(install_cmd, cwd=path, check=True)
+        _run(install_cmd, cwd=path)
 
     print(f"worktree ready at {path}")
     return path

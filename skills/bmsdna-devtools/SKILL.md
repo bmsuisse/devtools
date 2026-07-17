@@ -2,13 +2,14 @@
 name: bmsdna-devtools
 description: >
   Use the `bdt` CLI (from the bmsdna-devtools package) instead of ad hoc git/az/gh
-  commands or repo-local scripts for: checking Azure DevOps PR build status,
-  creating an Azure DevOps PR, creating a git worktree, committing and pushing
-  files (with pre-flight checks), and querying Application Insights logs.
-  Trigger whenever the user asks to check a build/PR status, create a PR,
-  make a worktree, commit changes, or fetch/tail application logs in a repo
-  that has bmsdna-devtools installed (check for `bdt` on PATH, or `bmsdna-devtools`
-  in pyproject.toml, before assuming it applies).
+  commands or repo-local scripts for: checking PR build/check status, creating
+  a PR, creating a git worktree, committing and pushing files (with pre-flight
+  checks), and querying Azure logs. `bdt pr *` works against both Azure DevOps
+  and GitHub — it auto-detects which one from the `origin` remote. Trigger
+  whenever the user asks to check a build/PR status, create a PR, make a
+  worktree, commit changes, or fetch/tail application logs in a repo that has
+  bmsdna-devtools installed (check for `bdt` on PATH, or `bmsdna-devtools` in
+  pyproject.toml, before assuming it applies).
 ---
 
 # bmsdna-devtools — shared BMS developer tooling
@@ -19,37 +20,51 @@ copy-pasted across OneSales, ccmt2, and MDMApp. Install with
 `uv tool install bmsdna-devtools` (global) or `uv add bmsdna-devtools`
 (per-project).
 
-Before using any command below, confirm it actually applies: `bdt pr *` and
-the Azure DevOps auth flow only work in a repo whose `origin` remote points
-at Azure DevOps (`dev.azure.com` / `ssh.dev.azure.com` / `*.visualstudio.com`).
-For a repo hosted on GitHub, use `gh pr create` / `gh pr checks` instead.
+`bdt pr *` auto-detects Azure DevOps vs. GitHub from the `origin` remote and
+shells out to `az`/`gh` accordingly — you don't need to pick a backend
+yourself, and there's no need to fall back to raw `gh pr create`/`gh pr
+checks` for a GitHub-hosted repo, `bdt pr *` covers that too. Each external
+CLI (`az`, `gh`) is only required for the commands that actually need it,
+and is checked lazily with a clear "not found, install it here" error
+rather than a raw traceback — if you see that error, tell the user which
+CLI to install rather than trying to work around it.
 
-## Checking PR build status
+## Checking PR build/check status
 
 ```bash
 bdt pr status [--target-branch main] [--wait]
 ```
 
-Finds the PR opened from the current branch into `--target-branch`, prints
-each pipeline's latest build, and inlines failed-step logs. `--wait` polls
-every 30s until every pipeline finishes (use this after pushing, instead of
-guessing when CI is done). Exits non-zero if any pipeline failed — safe to
-gate a script on. If the PR has merge conflicts (or failed/was rejected by
-policy), that's reported immediately instead of waiting for builds that
-will never run — check the error message for `mergeStatus=conflicts` and
-tell the user to resolve conflicts rather than assuming CI is just slow.
+Finds the PR opened from the current branch and prints build/check status,
+inlining failed-step logs. `--wait` polls until everything finishes (use
+this after pushing, instead of guessing when CI is done). Exits non-zero if
+anything failed — safe to gate a script on. If the PR has merge conflicts
+(or, on Azure DevOps, failed/was rejected by policy), that's reported
+immediately instead of waiting for builds that will never run — check the
+error message for `mergeStatus=conflicts` (ADO) or `mergeable=CONFLICTING`
+(GitHub) and tell the user to resolve conflicts rather than assuming CI is
+just slow.
 
-Auth: works with no setup if the caller is already `az login`'d. Only pass
-`--pat`/`AZURE_DEVOPS_PAT` if there's no `az` session available.
+`--target-branch` only applies on Azure DevOps (its search API needs one to
+find the right PR); on GitHub, `gh pr view` always resolves the PR for the
+current branch regardless, so the flag is ignored there — the PR's actual
+base branch is shown in the output instead.
 
-## Creating an Azure DevOps PR
+Auth: Azure DevOps works with no setup if the caller is already `az
+login`'d (only pass `--pat`/`AZURE_DEVOPS_PAT` if there's no `az` session
+available); GitHub uses whatever `gh auth login` session is active.
+
+## Creating a PR
 
 ```bash
 bdt pr create --target main    # or --target test
 ```
 
-Uses the current branch as source. Extra args pass straight through to
-`az repos pr create`, e.g. `bdt pr create --target main -- --title "..." --description "..."`.
+Uses the current branch as source. On Azure DevOps this wraps `az repos pr
+create`; on GitHub, `gh pr create --fill` (autofills title/body from commit
+info, so it never blocks waiting on an interactive prompt). Extra args pass
+straight through either way, e.g.
+`bdt pr create --target main -- --title "..." --description "..."`.
 
 ## Creating a worktree
 

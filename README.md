@@ -1,10 +1,20 @@
 # bmsdna-devtools
 
-Shared developer tooling for BMS projects that live in Azure DevOps: PR
-build status, PR creation, git worktrees, a commit-and-push helper with
-pre-flight checks, and Application Insights log queries. Consolidates
-near-duplicate scripts that used to be copy-pasted across OneSales, ccmt2,
-and MDMApp into one versioned package with a `bdt` CLI.
+Shared developer tooling for BMS projects: PR build/check status, PR
+creation, git worktrees, a commit-and-push helper with pre-flight checks,
+and Azure log queries. `bdt pr *` auto-detects whether the current repo's
+`origin` remote is Azure DevOps or GitHub and uses `az`/`gh` accordingly.
+Consolidates near-duplicate scripts that used to be copy-pasted across
+OneSales, ccmt2, and MDMApp into one versioned package with a `bdt` CLI.
+
+Requires `git` always, plus `az` (Azure DevOps commands, and all `bdt logs`
+commands) and/or `gh` (GitHub commands) on PATH as needed — each is checked
+lazily, only when a command actually needs it, with a clear error and an
+install link if missing rather than a raw traceback. Works on Windows: CLI
+shims (e.g. `az.cmd`) are resolved via `shutil.which` (which honors
+`PATHEXT`) rather than shelling out, output is decoded as UTF-8 rather than
+relying on the console's default codepage, and file arguments accept either
+slash style.
 
 ## Install
 
@@ -16,25 +26,33 @@ Or as a project dependency: `uv add bmsdna-devtools`.
 
 ## `bdt pr status`
 
-Find the Azure DevOps PR opened from the current branch and report build
-status for every pipeline that ran against it (failed steps print their
-logs inline).
+Find the PR opened from the current branch and report build/check status
+(failed steps print their logs inline). Works against Azure DevOps or
+GitHub — whichever `origin` points at.
 
 ```bash
 bdt pr status [--target-branch main] [--wait]
 ```
 
-If the PR can't be merged (`mergeStatus` is `conflicts`, `failure`, or
-`rejectedByPolicy`), that's reported immediately instead of polling for
-builds that will never run against a merge ref that doesn't exist — e.g.
-`PR #42 ('feat: widgets') has merge conflicts with the target branch (mergeStatus=conflicts)`,
-exit code 1.
+If the PR can't be merged, that's reported immediately instead of polling
+for builds/checks that will never run — e.g. on Azure DevOps:
+`PR #42 ('feat: widgets') has merge conflicts with the target branch (mergeStatus=conflicts)`;
+on GitHub: `PR #42 ('feat: widgets') has merge conflicts with 'main' (mergeable=CONFLICTING)`.
+Exit code 1 either way.
 
-Org/project/repo are auto-detected from `git remote get-url origin`
-(handles SSH, `dev.azure.com` HTTPS, and `*.visualstudio.com` HTTPS forms).
-Auth is an explicit PAT (`--pat` or `AZURE_DEVOPS_PAT` env var), falling
-back to a short-lived token from the caller's own `az login` — never embed
-a PAT literal in a script or CI file.
+**Azure DevOps**: org/project/repo are auto-detected from
+`git remote get-url origin` (handles SSH, `dev.azure.com` HTTPS, and
+`*.visualstudio.com` HTTPS forms). Auth is an explicit PAT (`--pat` or
+`AZURE_DEVOPS_PAT` env var), falling back to a short-lived token from the
+caller's own `az login` — never embed a PAT literal in a script or CI file.
+`--target-branch` selects which PR to look at (ADO's search API needs one).
+
+**GitHub**: uses `gh`'s own auth (`gh auth login`) and always resolves the
+PR opened from the current branch — `gh pr view` has no target-branch
+filter, so `--target-branch` is ignored here; the PR's actual base branch
+is shown in the output. Check status is computed from
+`gh pr view --json statusCheckRollup` rather than `gh pr checks --json`,
+since the latter flag isn't available in all `gh` releases.
 
 ## `bdt pr create`
 
@@ -42,9 +60,12 @@ a PAT literal in a script or CI file.
 bdt pr create --target main   # or --target test
 ```
 
-Thin wrapper around `az repos pr create` using the current branch as
-source; org/project/repo are inferred by `az` itself from the git remote.
-Extra arguments pass through, e.g. `bdt pr create --target main -- --title "..."`.
+Creates a PR from the current branch into `--target`. On Azure DevOps,
+a thin wrapper around `az repos pr create` (org/project/repo inferred by
+`az` itself from the git remote). On GitHub, `gh pr create --fill` (autofills
+title/body from commit info so it never blocks on an interactive prompt).
+Extra arguments pass through either way, e.g.
+`bdt pr create --target main -- --title "..."`.
 
 ## `bdt worktree`
 

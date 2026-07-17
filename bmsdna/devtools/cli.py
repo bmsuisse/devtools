@@ -1,18 +1,28 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import typer
 
 from . import app_service_logs, commit as commit_mod
+from . import gh_pr
 from . import logs as logs_mod
 from . import pr_build, worktree as worktree_mod
-from .gitrepo import current_ado_remote, current_branch
+from .cli_tools import require_az, require_gh
+from .gitrepo import GitHubRemote, current_branch, current_remote
 
-app = typer.Typer(name="bdt", help="Shared BMS developer tooling: Azure DevOps PRs/builds, worktrees, commits, logs")
+# Non-ASCII output (checkmarks, en-dashes in ADO project names, etc.) needs a
+# UTF-8 stream — the default Windows console codepage isn't UTF-8, and would
+# otherwise raise UnicodeEncodeError on the first ✓/✗ printed.
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+    sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
 
-pr_app = typer.Typer(name="pr", help="Azure DevOps pull request commands")
+app = typer.Typer(name="bdt", help="Shared BMS developer tooling: PRs/builds (Azure DevOps or GitHub), worktrees, commits, logs")
+
+pr_app = typer.Typer(name="pr", help="Pull request commands (Azure DevOps or GitHub, auto-detected from the git remote)")
 app.add_typer(pr_app, name="pr")
 
 logs_app = typer.Typer(name="logs", help="Application Insights / Log Analytics queries")
@@ -22,11 +32,16 @@ app.add_typer(logs_app, name="logs")
 @pr_app.command("create")
 def pr_create(
     target: str = typer.Option("main", "--target", help="Target branch (e.g. main, test)"),
-    args: list[str] = typer.Argument(None, help="Extra args passed through to `az repos pr create`"),
+    args: list[str] = typer.Argument(None, help="Extra args passed through to `az repos pr create` / `gh pr create`"),
 ) -> None:
-    """Create an Azure DevOps PR from the current branch into --target."""
+    """Create a PR from the current branch into --target (Azure DevOps or GitHub, auto-detected)."""
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        raise typer.Exit(gh_pr.create(require_gh(), target, args or []))
+
+    az = require_az()
     cmd = [
-        "az", "repos", "pr", "create",
+        az, "repos", "pr", "create",
         "--target-branch", target,
         "--source-branch", current_branch(),
         "--auto-complete", "false",
@@ -37,12 +52,15 @@ def pr_create(
 
 @pr_app.command("status")
 def pr_status(
-    target_branch: str = typer.Option("main", "--target-branch", help="Target branch of the PR"),
-    wait: bool = typer.Option(False, "--wait", help="Poll until all pipelines are completed"),
+    target_branch: str = typer.Option("main", "--target-branch", help="Target branch of the PR (Azure DevOps only — gh has no equivalent filter, it always resolves the PR for the current branch)"),
+    wait: bool = typer.Option(False, "--wait", help="Poll until all pipelines/checks are completed"),
     pat: str | None = typer.Option(None, "--pat", envvar="AZURE_DEVOPS_PAT", help="Azure DevOps PAT (else falls back to `az` login)"),
 ) -> None:
-    """Show Azure DevOps build status for the PR opened from the current branch."""
-    remote = current_ado_remote()
+    """Show build/check status for the PR opened from the current branch (Azure DevOps or GitHub, auto-detected)."""
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh_pr.run(require_gh(), wait)
+        return
     pr_build.run(remote, pat, target_branch, wait)
 
 
