@@ -10,8 +10,8 @@ packages = ["bmsdna"]
 
 [project]
 name = "bmsdna-devtools"
-version = "0.1.0"
-description = "Shared Azure DevOps / git / Azure Monitor developer tooling for BMS projects"
+version = "0.2.0"
+description = "Shared Azure DevOps / GitHub / git / Azure Monitor developer tooling for BMS projects"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
