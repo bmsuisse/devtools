@@ -30,6 +30,12 @@ def _in_sandbox() -> bool:
     return os.getenv(IS_SANDBOX_ENV_VAR, "0").lower() in ("1", "true", "yes")
 
 
+def _known_to_git(path: str, cwd: str | None = None) -> bool:
+    """True if HEAD has this path — lets a deleted-but-tracked file pass the
+    existence check below (os.path.exists is false for a path being removed)."""
+    return _run(["git", "cat-file", "-e", f"HEAD:{path}"], cwd=cwd).returncode == 0
+
+
 @dataclass
 class CommitResult:
     success: bool
@@ -108,8 +114,8 @@ def commit_and_push(
         print(f"  {'✓' if ok else '✗'} {label}", file=sys.stdout if ok else sys.stderr)
         return ok
 
-    missing = [f for f in files if not os.path.exists(f)]
-    if not check(not missing, "files exist"):
+    missing = [f for f in files if not os.path.exists(f) and not _known_to_git(f)]
+    if not check(not missing, "files exist (or are a tracked deletion)"):
         return CommitResult(
             False, False, False, message, files,
             error=f"File not found: {missing[0]} — did you typo the path? Run `git status` to see changed files",
