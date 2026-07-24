@@ -2,9 +2,8 @@
 
 Pulls the log zip via `az webapp log download`, unpacks it in memory, and
 writes every line matching common error/warning markers to a filtered file.
-No defaults are baked in here (unlike Azure DevOps org/project/repo, which
-comes from the git remote) — pass --webapp/--resource-group/--slot
-explicitly, or set AZURE_WEBAPP/AZURE_RESOURCE_GROUP/AZURE_SLOT.
+The webapp/resource-group/slot for a given `--env` come from the consuming
+repo's pyproject.toml (see env_config.py) rather than being baked in here.
 """
 
 from __future__ import annotations

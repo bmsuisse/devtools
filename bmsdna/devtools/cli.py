@@ -7,6 +7,7 @@ from pathlib import Path
 import typer
 
 from . import app_service_logs, commit as commit_mod
+from . import env_config
 from . import gh_pr
 from . import logs as logs_mod
 from . import pr_build, worktree as worktree_mod
@@ -124,14 +125,13 @@ def logs_tail(
 
 @logs_app.command("fetch")
 def logs_fetch(
-    webapp: str = typer.Option(..., "--webapp", envvar="AZURE_WEBAPP"),
-    resource_group: str = typer.Option(..., "--resource-group", envvar="AZURE_RESOURCE_GROUP"),
-    slot: str = typer.Option(..., "--slot", envvar="AZURE_SLOT"),
+    env: str = typer.Option(..., "--env", help="Named environment configured under tool.bdt.envs in pyproject.toml"),
     out: Path = typer.Option(Path("logs"), "--out", help="Output directory for the extracted error log"),
     keep_archive: bool = typer.Option(False, "--keep-archive", help="Keep the downloaded .zip instead of deleting it"),
 ) -> None:
     """Download an App Service log archive and extract error/warning lines."""
-    app_service_logs.fetch(webapp, resource_group, slot, out, keep_archive=keep_archive)
+    cfg = env_config.resolve_env(env)
+    app_service_logs.fetch(cfg["webapp"], cfg["resource_group"], cfg["slot"], out, keep_archive=keep_archive)
 
 
 if __name__ == "__main__":
