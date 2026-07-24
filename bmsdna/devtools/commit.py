@@ -177,7 +177,7 @@ def commit_and_push(
     pr = _run(["git", "push"])
     if pr.returncode != 0:
         return CommitResult(
-            True, committed, False, message, files,
+            False, committed, False, message, files,
             commit_sha=_sha(),
             error=(pr.stdout + pr.stderr).strip(),
             hint="Push rejected. Run `git pull --rebase`, resolve conflicts, then retry.",
