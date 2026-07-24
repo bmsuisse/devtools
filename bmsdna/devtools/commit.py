@@ -30,10 +30,24 @@ def _in_sandbox() -> bool:
     return os.getenv(IS_SANDBOX_ENV_VAR, "0").lower() in ("1", "true", "yes")
 
 
-def _known_to_git(path: str, cwd: str | None = None) -> bool:
-    """True if HEAD has this path — lets a deleted-but-tracked file pass the
-    existence check below (os.path.exists is false for a path being removed)."""
-    return _run(["git", "cat-file", "-e", f"HEAD:{path}"], cwd=cwd).returncode == 0
+def _staged_deletion(path: str, cwd: str | None = None) -> bool:
+    """True if `path` is already staged as a deletion (e.g. via `git rm`) in
+    the repo at `cwd`. This is a deliberate-intent signal, not just "HEAD used
+    to have this path" — a file that vanished because a write failed or raced
+    would be missing from disk but NOT staged as a deletion, so it still
+    fails the check below instead of silently being committed as removed."""
+    r = _run(["git", "diff", "--cached", "--name-only", "--diff-filter=D", "--", path], cwd=cwd)
+    return r.returncode == 0 and path in r.stdout.splitlines()
+
+
+def _present_or_staged_deletion(path: str, subrepos: list[str]) -> bool:
+    if os.path.exists(path):
+        return True
+    for subrepo in subrepos:
+        prefix = subrepo + "/"
+        if path.startswith(prefix):
+            return _staged_deletion(path[len(prefix):], cwd=subrepo)
+    return _staged_deletion(path)
 
 
 @dataclass
@@ -114,8 +128,8 @@ def commit_and_push(
         print(f"  {'✓' if ok else '✗'} {label}", file=sys.stdout if ok else sys.stderr)
         return ok
 
-    missing = [f for f in files if not os.path.exists(f) and not _known_to_git(f)]
-    if not check(not missing, "files exist (or are a tracked deletion)"):
+    missing = [f for f in files if not _present_or_staged_deletion(f, subrepos)]
+    if not check(not missing, "files exist (or are a staged deletion)"):
         return CommitResult(
             False, False, False, message, files,
             error=f"File not found: {missing[0]} — did you typo the path? Run `git status` to see changed files",
