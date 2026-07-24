@@ -93,3 +93,15 @@ slot = "production"
         "resource_group": "my-app-rg",
         "slot": "production",
     }
+
+
+def test_resolve_env_allows_missing_slot(tmp_path):
+    write_pyproject(
+        tmp_path,
+        """
+[tool.bdt.envs.prod]
+webapp = "my-app"
+resource_group = "my-app-rg"
+""",
+    )
+    assert resolve_env("prod", tmp_path) == {"webapp": "my-app", "resource_group": "my-app-rg"}

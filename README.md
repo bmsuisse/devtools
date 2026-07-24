@@ -127,13 +127,19 @@ often preferable to the KQL commands above when you just want "what broke
 recently" rather than a queryable trace stream.
 
 The webapp/resource-group/slot come from a named environment configured in
-the calling repo's `pyproject.toml`:
+the calling repo's `pyproject.toml`. `slot` is optional — omit it for an
+app's default/production slot (no `--slot` is passed to `az`); set it for a
+named deployment slot:
 
 ```toml
 [tool.bdt.envs.prod]
 webapp = "my-webapp"
 resource_group = "my-rg"
-slot = "production"
+
+[tool.bdt.envs.test]
+webapp = "my-webapp"
+resource_group = "my-rg"
+slot = "test"
 ```
 
 ```bash

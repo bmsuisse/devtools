@@ -28,13 +28,13 @@ def run_az(args: list[str]) -> str:
     return proc.stdout
 
 
-def download_logs(webapp: str, resource_group: str, slot: str, archive: pathlib.Path) -> None:
-    print(f"Downloading logs for {webapp}/{slot}...", flush=True)
+def download_logs(webapp: str, resource_group: str, slot: str | None, archive: pathlib.Path) -> None:
+    print(f"Downloading logs for {webapp}/{slot or '(production)'}...", flush=True)
     run_az([
         "webapp", "log", "download",
         "--name", webapp,
         "--resource-group", resource_group,
-        "--slot", slot,
+        *(["--slot", slot] if slot else []),
         "--log-file", str(archive),
     ])
 
@@ -58,13 +58,14 @@ def extract_errors(archive: pathlib.Path, error_file: pathlib.Path) -> int:
 def fetch(
     webapp: str,
     resource_group: str,
-    slot: str,
+    slot: str | None,
     out_dir: pathlib.Path,
     keep_archive: bool = False,
 ) -> pathlib.Path:
     out_dir.mkdir(parents=True, exist_ok=True)
-    archive = out_dir / f"{slot}_logs.zip"
-    error_file = out_dir / f"{slot}_errors.log"
+    label = slot or "production"
+    archive = out_dir / f"{label}_logs.zip"
+    error_file = out_dir / f"{label}_errors.log"
 
     download_logs(webapp, resource_group, slot, archive)
     count = extract_errors(archive, error_file)

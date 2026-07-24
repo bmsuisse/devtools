@@ -11,13 +11,19 @@ import sys
 import tomllib
 from pathlib import Path
 
-REQUIRED_KEYS = ("webapp", "resource_group", "slot")
+REQUIRED_KEYS = ("webapp", "resource_group")
 
 CONFIG_EXAMPLE = """\
 [tool.bdt.envs.prod]
 webapp = "my-app"
 resource_group = "my-app-rg"
-slot = "production"
+# slot is optional — omit it for an app's default/production slot,
+# set it for a named deployment slot (e.g. "test", "stage").
+
+[tool.bdt.envs.test]
+webapp = "my-app"
+resource_group = "my-app-rg"
+slot = "test"
 """
 
 

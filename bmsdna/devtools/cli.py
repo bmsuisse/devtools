@@ -131,7 +131,7 @@ def logs_fetch(
 ) -> None:
     """Download an App Service log archive and extract error/warning lines."""
     cfg = env_config.resolve_env(env)
-    app_service_logs.fetch(cfg["webapp"], cfg["resource_group"], cfg["slot"], out, keep_archive=keep_archive)
+    app_service_logs.fetch(cfg["webapp"], cfg["resource_group"], cfg.get("slot"), out, keep_archive=keep_archive)
 
 
 if __name__ == "__main__":
