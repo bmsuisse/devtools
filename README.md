@@ -124,10 +124,19 @@ Downloads the App Service log archive for a webapp/slot via
 common error/warning marker (`ERROR`, `CRITICAL`, `WARNING`, tracebacks,
 `4xx`/`5xx`, `FAILED`, `FATAL`) to `<out>/<slot>_errors.log`. Simpler and
 often preferable to the KQL commands above when you just want "what broke
-recently" rather than a queryable trace stream — no defaults are baked in
-here either.
+recently" rather than a queryable trace stream.
+
+The webapp/resource-group/slot come from a named environment configured in
+the calling repo's `pyproject.toml`:
+
+```toml
+[tool.bdt.envs.prod]
+webapp = "my-webapp"
+resource_group = "my-rg"
+slot = "production"
+```
 
 ```bash
-bdt logs fetch --webapp my-webapp --resource-group my-rg --slot production
-bdt logs fetch --webapp my-webapp --resource-group my-rg --slot production --out logs/ --keep-archive
+bdt logs fetch --env prod
+bdt logs fetch --env prod --out logs/ --keep-archive
 ```
