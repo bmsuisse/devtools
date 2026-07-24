@@ -84,17 +84,29 @@ def _git_commit(message: str, cwd: str | None = None, no_verify: bool = False) -
     return _run(cmd, cwd=cwd)
 
 
+def _add(files: list[str], cwd: str | None) -> None:
+    """`git add`, excluding paths already fully removed (disk + index) by a
+    prior `git rm` -- those have nothing left to add, and `git add` fails its
+    ENTIRE invocation (staging nothing, for any path in the same call) if even
+    one pathspec doesn't match anything. Passing only what's actually present
+    on disk avoids silently dropping the other files' staged content."""
+    root = cwd or "."
+    addable = [f for f in files if os.path.exists(os.path.join(root, f))]
+    if addable:
+        _run(["git", "add", *addable], cwd=cwd)
+
+
 def _commit_with_retry(
     message: str, files: list[str], cwd: str | None, no_verify: bool
 ) -> tuple[bool, subprocess.CompletedProcess | None]:
     """Commit, retrying once (re-`git add`) if a pre-commit hook reformatted files."""
-    _run(["git", "add", *files], cwd=cwd)
+    _add(files, cwd)
     r = _git_commit(message, cwd=cwd, no_verify=no_verify)
     if r.returncode == 0:
         return True, None
     if "nothing to commit" in r.stdout + r.stderr:
         return False, None
-    _run(["git", "add", *files], cwd=cwd)
+    _add(files, cwd)
     r2 = _git_commit(message, cwd=cwd, no_verify=no_verify)
     if r2.returncode == 0:
         return True, None

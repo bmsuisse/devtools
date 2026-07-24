@@ -70,6 +70,36 @@ def test_commit_and_push_rejects_unstaged_missing_file(tmp_path, monkeypatch):
     assert result.error == "File not found: a.txt — did you typo the path? Run `git status` to see changed files"
 
 
+def test_commit_and_push_stages_modified_file_alongside_staged_deletion(tmp_path, monkeypatch):
+    """Regression test: `git add <modified-file> <already-git-rm'd-file>` fails
+    its ENTIRE invocation (git errors "pathspec did not match any files" for
+    the already-removed path, staging nothing at all in that call) -- which
+    previously silently dropped the modified file's new content from the
+    commit, since _commit_with_retry didn't check git add's exit code."""
+    init_repo(tmp_path)
+    (tmp_path / "a.md").write_text("old")
+    (tmp_path / "gone.py").write_text("old")
+    subprocess.run(["git", "add", "a.md", "gone.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    monkeypatch.chdir(tmp_path)
+
+    subprocess.run(["git", "rm", "-q", "gone.py"], cwd=tmp_path, check=True)
+    (tmp_path / "a.md").write_text("new content")
+
+    result = commit_and_push(
+        "feat(x): update a.md and remove gone.py",
+        ["a.md", "gone.py"],
+        require_message_quality=False,
+        require_feature_branch=False,
+    )
+
+    assert result.committed is True
+    committed_content = subprocess.run(
+        ["git", "show", "HEAD:a.md"], cwd=tmp_path, capture_output=True, text=True, check=True
+    ).stdout
+    assert committed_content == "new content"
+
+
 def test_commit_and_push_allows_staged_deletion_in_subrepo(tmp_path, monkeypatch):
     subrepo = tmp_path / "database"
     subrepo.mkdir()
