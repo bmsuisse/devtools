@@ -38,17 +38,25 @@ def pr_create(
     """Create a PR from the current branch into --target (Azure DevOps or GitHub, auto-detected)."""
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        raise typer.Exit(gh_pr.create(require_gh(), target, args or []))
+        gh = require_gh()
+        returncode = gh_pr.create(gh, target, args or [])
+        build_policy = gh_pr.has_build_policy(gh, target)
+    else:
+        az = require_az()
+        cmd = [
+            az, "repos", "pr", "create",
+            "--target-branch", target,
+            "--source-branch", current_branch(),
+            "--auto-complete", "false",
+            *(args or []),
+        ]
+        returncode = subprocess.run(cmd).returncode
+        build_policy = pr_build.has_build_policy(remote, target)
 
-    az = require_az()
-    cmd = [
-        az, "repos", "pr", "create",
-        "--target-branch", target,
-        "--source-branch", current_branch(),
-        "--auto-complete", "false",
-        *(args or []),
-    ]
-    raise typer.Exit(subprocess.run(cmd).returncode)
+    if returncode == 0 and build_policy:
+        print("\nRun `bdt pr status` to check whether the CI build passes.")
+
+    raise typer.Exit(returncode)
 
 
 @pr_app.command("status")

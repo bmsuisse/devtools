@@ -138,3 +138,31 @@ def create(gh: str, target: str, extra_args: list[str]) -> int:
     """
     cmd = [gh, "pr", "create", "--base", target, "--fill", *extra_args]
     return subprocess.run(cmd).returncode
+
+
+def protection_requires_status_checks(protection: dict) -> bool:
+    """True if a branch's `.../protection` response requires status checks to pass."""
+    return bool(protection.get("required_status_checks"))
+
+
+def has_build_policy(gh: str, branch: str) -> bool:
+    """Best-effort check for whether `branch` has branch protection requiring status checks.
+
+    Only used to decide whether to print a `bdt pr status` reminder after
+    `pr create` — `{owner}`/`{repo}` are resolved by `gh` from the current
+    repo, and any failure (no permission to read protection settings, branch
+    not protected at all, etc.) fails open (returns False) rather than
+    blocking PR creation.
+    """
+    r = subprocess.run(
+        [gh, "api", f"repos/{{owner}}/{{repo}}/branches/{branch}/protection"],
+        capture_output=True,
+        encoding="utf-8",
+    )
+    if r.returncode != 0:
+        return False
+    try:
+        data = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        return False
+    return protection_requires_status_checks(data)

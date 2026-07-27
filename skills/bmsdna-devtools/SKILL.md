@@ -66,6 +66,9 @@ info, so it never blocks waiting on an interactive prompt). Extra args pass
 straight through either way, e.g.
 `bdt pr create --target main -- --title "..." --description "..."`.
 
+After creating a PR, use `bdt pr status` (see above) to check whether the
+CI build passes.
+
 ## Creating a worktree
 
 ```bash

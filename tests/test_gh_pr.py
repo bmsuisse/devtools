@@ -1,6 +1,6 @@
 import pytest
 
-from bmsdna.devtools.gh_pr import check_bucket, check_label, merge_conflict_message
+from bmsdna.devtools.gh_pr import check_bucket, check_label, merge_conflict_message, protection_requires_status_checks
 
 # Real statusCheckRollup entries captured from `gh pr view 13902 -R cli/cli --json statusCheckRollup`.
 COMPLETED_SUCCESS_CHECK_RUN = {
@@ -60,3 +60,13 @@ def test_merge_conflict_message_conflicting() -> None:
     assert msg is not None
     assert "PR #42" in msg
     assert "main" in msg
+
+
+def test_protection_requires_status_checks_true_when_configured() -> None:
+    protection = {"required_status_checks": {"strict": True, "contexts": ["build"]}}
+    assert protection_requires_status_checks(protection) is True
+
+
+@pytest.mark.parametrize("protection", [{}, {"required_status_checks": None}])
+def test_protection_requires_status_checks_false_when_absent(protection: dict) -> None:
+    assert protection_requires_status_checks(protection) is False

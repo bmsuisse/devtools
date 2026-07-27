@@ -67,6 +67,12 @@ title/body from commit info so it never blocks on an interactive prompt).
 Extra arguments pass through either way, e.g.
 `bdt pr create --target main -- --title "..."`.
 
+If `--target` has a build policy configured (an Azure DevOps Build policy,
+or a GitHub branch protection rule requiring status checks), a successful
+create prints a reminder to run `bdt pr status` afterward to check whether
+the CI build passes. This is a best-effort check — failures reading policy
+config (auth, permissions) fail open and simply skip the reminder.
+
 ## `bdt worktree`
 
 ```bash

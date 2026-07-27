@@ -28,6 +28,60 @@ def _base_url(remote: AdoRemote) -> str:
     return f"https://dev.azure.com/{remote.org}/{quote(remote.project, safe='')}"
 
 
+# PolicyType.id for the built-in "Build" policy (branch policy requiring a
+# build to pass) — same GUID across every ADO organization.
+BUILD_POLICY_TYPE_ID = "0609b952-1397-4640-95ec-e00a01b2c241"
+
+
+def _scope_matches(scope: dict, repo_id: str, target_ref: str, default_branch: str | None) -> bool:
+    if scope.get("repositoryId") not in (None, repo_id):
+        return False
+    if scope.get("matchKind") == "DefaultBranch":
+        return default_branch == target_ref
+    return scope.get("refName") in (None, target_ref)
+
+
+def policy_configs_include_branch(configs: list, repo_id: str, branch: str, default_branch: str | None) -> bool:
+    """True if any enabled, non-deleted Build-type policy configuration's scope covers `branch`."""
+    target_ref = f"refs/heads/{branch}"
+    for config in configs:
+        if not config.get("isEnabled") or config.get("isDeleted"):
+            continue
+        if config.get("type", {}).get("id") != BUILD_POLICY_TYPE_ID:
+            continue
+        scopes = config.get("settings", {}).get("scope", [])
+        if any(_scope_matches(scope, repo_id, target_ref, default_branch) for scope in scopes):
+            return True
+    return False
+
+
+def has_build_policy(remote: AdoRemote, branch: str, pat: str | None = None) -> bool:
+    """Best-effort check for whether `branch` has an enabled Build policy configured.
+
+    Only used to decide whether to print a `bdt pr status` reminder after
+    `pr create` — failures here (auth, permissions, network) fail open
+    (return False) rather than blocking PR creation.
+    """
+    try:
+        session = requests.Session()
+        session.headers.update(auth_header(pat))
+
+        r = session.get(
+            f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}",
+            params={"api-version": "7.1"},
+        )
+        r.raise_for_status()
+        repo = r.json()
+
+        r = session.get(f"{_base_url(remote)}/_apis/policy/configurations", params={"api-version": "7.1"})
+        r.raise_for_status()
+        configs = r.json().get("value", [])
+    except (requests.RequestException, SystemExit):
+        return False
+
+    return policy_configs_include_branch(configs, repo.get("id"), branch, repo.get("defaultBranch"))
+
+
 def merge_conflict_message(pr: dict) -> str | None:
     """None if the PR's mergeStatus is fine; else a human-readable description of the problem."""
     merge_status = pr.get("mergeStatus")
