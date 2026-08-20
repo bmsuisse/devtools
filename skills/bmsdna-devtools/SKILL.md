@@ -51,7 +51,7 @@ current branch regardless, so the flag is ignored there — the PR's actual
 base branch is shown in the output instead.
 
 Auth: Azure DevOps works with no setup if the caller is already `az
-login`'d (only pass `--pat`/`AZURE_DEVOPS_PAT` if there's no `az` session
+login`'d (only pass `--pat`/`AZURE_DEVOPS_EXT_PAT`/`AZURE_DEVOPS_PAT` if there's no `az` session
 available); GitHub uses whatever `gh auth login` session is active.
 
 ## Creating a PR
