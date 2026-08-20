@@ -43,7 +43,7 @@ Exit code 1 either way.
 **Azure DevOps**: org/project/repo are auto-detected from
 `git remote get-url origin` (handles SSH, `dev.azure.com` HTTPS, and
 `*.visualstudio.com` HTTPS forms). Auth is an explicit PAT (`--pat` or
-`AZURE_DEVOPS_PAT` env var), falling back to a short-lived token from the
+`AZURE_DEVOPS_EXT_PAT`/`AZURE_DEVOPS_PAT` env var), falling back to a short-lived token from the
 caller's own `az login` — never embed a PAT literal in a script or CI file.
 `--target-branch` selects which PR to look at (ADO's search API needs one).
 

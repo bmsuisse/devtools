@@ -63,7 +63,7 @@ def pr_create(
 def pr_status(
     target_branch: str = typer.Option("main", "--target-branch", help="Target branch of the PR (Azure DevOps only — gh has no equivalent filter, it always resolves the PR for the current branch)"),
     wait: bool = typer.Option(False, "--wait", help="Poll until all pipelines/checks are completed"),
-    pat: str | None = typer.Option(None, "--pat", envvar="AZURE_DEVOPS_PAT", help="Azure DevOps PAT (else falls back to `az` login)"),
+    pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
 ) -> None:
     """Show build/check status for the PR opened from the current branch (Azure DevOps or GitHub, auto-detected)."""
     remote = current_remote()
