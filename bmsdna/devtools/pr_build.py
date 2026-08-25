@@ -118,8 +118,13 @@ def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, tar
     sys.exit(1)
 
 
-def upload_attachment(session: requests.Session, remote: AdoRemote, pr_id: int, attachment_name: str, file_path: str) -> None:
-    """Upload `file_path` as a pull request attachment named `attachment_name`."""
+def upload_attachment(session: requests.Session, remote: AdoRemote, pr_id: int, attachment_name: str, file_path: str) -> str:
+    """Upload `file_path` as a pull request attachment named `attachment_name`; returns its download URL.
+
+    Embedding that URL in the PR description works because the browser
+    request for the image is same-origin (dev.azure.com) and carries the
+    viewer's own auth session/cookies — no separate hosting needed.
+    """
     r = session.post(
         f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}"
         f"/pullRequests/{pr_id}/attachments/{quote(attachment_name, safe='')}",
@@ -128,24 +133,7 @@ def upload_attachment(session: requests.Session, remote: AdoRemote, pr_id: int, 
         headers={"Content-Type": "application/octet-stream"},
     )
     r.raise_for_status()
-
-
-def _embeddable_attachment_url(remote: AdoRemote, pr_id: int, attachment_name: str) -> str:
-    """The attachment URL to use *in markdown*, as opposed to the API's own base URL.
-
-    Azure DevOps' PR-description markdown renderer only reliably inlines
-    attachment images hosted under the legacy `{org}.visualstudio.com` domain
-    — `dev.azure.com/{org}` (what every other call in this file uses, since
-    that's the modern API host) renders as a slow/broken image there. The
-    attachments API's own response `url` field mirrors whatever host the
-    request was made against, so we build this one ourselves instead of
-    trusting that field.
-    """
-    return (
-        f"https://{remote.org}.visualstudio.com/{quote(remote.project, safe='')}"
-        f"/_apis/git/repositories/{quote(remote.repo, safe='')}"
-        f"/pullRequests/{pr_id}/attachments/{quote(attachment_name, safe='')}"
-    )
+    return r.json()["url"]
 
 
 def add_screenshots(session: requests.Session, remote: AdoRemote, pr: dict, screenshot_paths: list[str]) -> None:
@@ -155,11 +143,10 @@ def add_screenshots(session: requests.Session, remote: AdoRemote, pr: dict, scre
     (e.g. two 'before.png' from different folders) don't overwrite each other.
     """
     pr_id = pr["pullRequestId"]
-    images = []
-    for i, path in enumerate(screenshot_paths):
-        attachment_name = f"{i:02d}-{Path(path).name}"
-        upload_attachment(session, remote, pr_id, attachment_name, path)
-        images.append((Path(path).name, _embeddable_attachment_url(remote, pr_id, attachment_name)))
+    images = [
+        (Path(path).name, upload_attachment(session, remote, pr_id, f"{i:02d}-{Path(path).name}", path))
+        for i, path in enumerate(screenshot_paths)
+    ]
     description = build_screenshots_section(pr.get("description"), images)
 
     r = session.patch(
