@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
+import requests
 import typer
 
 from . import app_service_logs, commit as commit_mod
@@ -11,6 +13,7 @@ from . import env_config
 from . import gh_pr
 from . import logs as logs_mod
 from . import pr_build, worktree as worktree_mod
+from .ado_auth import auth_header
 from .cli_tools import require_az, require_gh
 from .gitrepo import GitHubRemote, current_branch, current_remote
 
@@ -30,28 +33,66 @@ logs_app = typer.Typer(name="logs", help="Application Insights / Log Analytics q
 app.add_typer(logs_app, name="logs")
 
 
+def _attach_screenshots(attach: Callable[[], None]) -> None:
+    """Run an attach-screenshots step without letting its failure mask an already-successful `pr create`.
+
+    The PR itself is already live by the time this runs; a transient failure
+    here (a rejected push, an attachment upload error, a stale --target not
+    matching the PR ADO actually created) should surface as a warning, not
+    flip the whole command's exit code or hide the fact that the PR exists.
+    """
+    try:
+        attach()
+    except (Exception, SystemExit) as e:
+        print(f"Warning: PR created, but attaching screenshots failed: {e}")
+
+
 @pr_app.command("create")
 def pr_create(
     target: str = typer.Option("main", "--target", help="Target branch (e.g. main, test)"),
+    screenshot: list[str] = typer.Option(
+        [], "--screenshot", help="Path to an image to attach to the PR description (repeatable)"
+    ),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
     args: list[str] = typer.Argument(None, help="Extra args passed through to `az repos pr create` / `gh pr create`"),
 ) -> None:
     """Create a PR from the current branch into --target (Azure DevOps or GitHub, auto-detected)."""
+    for path in screenshot:
+        if not Path(path).is_file():
+            raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
+
     remote = current_remote()
+    source_branch = current_branch()
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
         returncode = gh_pr.create(gh, target, args or [])
         build_policy = gh_pr.has_build_policy(gh, target)
+        if returncode == 0 and screenshot:
+            _attach_screenshots(lambda: gh_pr.add_screenshots(gh, remote.owner, remote.repo, source_branch, screenshot))
     else:
         az = require_az()
         cmd = [
             az, "repos", "pr", "create",
             "--target-branch", target,
-            "--source-branch", current_branch(),
+            "--source-branch", source_branch,
             "--auto-complete", "false",
             *(args or []),
         ]
         returncode = subprocess.run(cmd).returncode
-        build_policy = pr_build.has_build_policy(remote, target)
+        session = requests.Session()
+        session.headers.update(auth_header(pat))
+        build_policy = pr_build.has_build_policy(session, remote, target)
+        if returncode == 0 and screenshot:
+            def _add() -> None:
+                pr = pr_build.get_pr(session, remote, source_branch, target)
+                pr_build.add_screenshots(session, remote, pr, screenshot)
+
+            _attach_screenshots(_add)
 
     if returncode == 0 and build_policy:
         print("\nRun `bdt pr status` to check whether the CI build passes.")

@@ -5,12 +5,14 @@ from __future__ import annotations
 import re
 import sys
 import time
+from pathlib import Path
 from urllib.parse import quote
 
 import requests
 
 from .ado_auth import auth_header
 from .gitrepo import AdoRemote, current_branch
+from .pr_markdown import build_screenshots_section
 
 # Matches an ISO 8601 timestamp at the start of a log line, e.g. 2024-03-21T15:01:23.1234567Z
 TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*")
@@ -55,7 +57,7 @@ def policy_configs_include_branch(configs: list, repo_id: str, branch: str, defa
     return False
 
 
-def has_build_policy(remote: AdoRemote, branch: str, pat: str | None = None) -> bool:
+def has_build_policy(session: requests.Session, remote: AdoRemote, branch: str) -> bool:
     """Best-effort check for whether `branch` has an enabled Build policy configured.
 
     Only used to decide whether to print a `bdt pr status` reminder after
@@ -63,9 +65,6 @@ def has_build_policy(remote: AdoRemote, branch: str, pat: str | None = None) -> 
     (return False) rather than blocking PR creation.
     """
     try:
-        session = requests.Session()
-        session.headers.update(auth_header(pat))
-
         r = session.get(
             f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}",
             params={"api-version": "7.1"},
@@ -117,6 +116,46 @@ def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, tar
 
     print(f"No PR found from '{source_branch}' → '{target_branch}'")
     sys.exit(1)
+
+
+def upload_attachment(session: requests.Session, remote: AdoRemote, pr_id: int, attachment_name: str, file_path: str) -> str:
+    """Upload `file_path` as a pull request attachment named `attachment_name`; returns its download URL.
+
+    Embedding that URL in the PR description works because the browser
+    request for the image is same-origin (dev.azure.com) and carries the
+    viewer's own auth session/cookies — no separate hosting needed.
+    """
+    r = session.post(
+        f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}"
+        f"/pullRequests/{pr_id}/attachments/{quote(attachment_name, safe='')}",
+        params={"api-version": "7.1"},
+        data=Path(file_path).read_bytes(),
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    r.raise_for_status()
+    return r.json()["url"]
+
+
+def add_screenshots(session: requests.Session, remote: AdoRemote, pr: dict, screenshot_paths: list[str]) -> None:
+    """Upload each screenshot as a PR attachment and append them to the PR description.
+
+    Attachment names are index-prefixed so two screenshots sharing a basename
+    (e.g. two 'before.png' from different folders) don't overwrite each other.
+    """
+    pr_id = pr["pullRequestId"]
+    images = [
+        (Path(path).name, upload_attachment(session, remote, pr_id, f"{i:02d}-{Path(path).name}", path))
+        for i, path in enumerate(screenshot_paths)
+    ]
+    description = build_screenshots_section(pr.get("description"), images)
+
+    r = session.patch(
+        f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}/pullRequests/{pr_id}",
+        params={"api-version": "7.1"},
+        json={"description": description},
+    )
+    r.raise_for_status()
+    print(f"Attached {len(screenshot_paths)} screenshot(s) to PR #{pr_id}")
 
 
 def get_builds_for_pr(session: requests.Session, remote: AdoRemote, source_branch: str, pr_id: int) -> list:
