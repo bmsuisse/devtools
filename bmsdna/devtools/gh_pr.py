@@ -209,17 +209,57 @@ def push_screenshots(owner: str, repo: str, branch: str, paths: list[str], max_a
     return []  # unreachable; loop always returns or exits
 
 
+def _screenshot_images(owner: str, repo: str, branch: str, screenshot_paths: list[str]) -> list[tuple[str, str]]:
+    urls = push_screenshots(owner, repo, branch, screenshot_paths)
+    return list(zip((Path(p).name for p in screenshot_paths), urls))
+
+
 def add_screenshots(gh: str, owner: str, repo: str, branch: str, screenshot_paths: list[str]) -> None:
     """Push screenshots to the `pr-assets` branch and append them to the current branch's PR body."""
-    urls = push_screenshots(owner, repo, branch, screenshot_paths)
-    images = list(zip((Path(p).name for p in screenshot_paths), urls))
-
+    images = _screenshot_images(owner, repo, branch, screenshot_paths)
     pr = _run_gh_json(gh, ["pr", "view", "--json", "number,body"])
     body = build_screenshots_section(pr.get("body"), images)
     r = subprocess.run([gh, "pr", "edit", str(pr["number"]), "--body", body], capture_output=True, encoding="utf-8")
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or "`gh pr edit` failed")
     print(f"Attached {len(screenshot_paths)} screenshot(s) to PR #{pr['number']}")
+
+
+def update(
+    gh: str,
+    owner: str,
+    repo: str,
+    branch: str,
+    title: str | None = None,
+    description: str | None = None,
+    screenshot_paths: list[str] | None = None,
+) -> None:
+    """Update a PR's title and/or body, optionally appending screenshots to the body."""
+    pr = _run_gh_json(gh, ["pr", "view", "--json", "number,body"])
+    args = [gh, "pr", "edit", str(pr["number"])]
+    if title:
+        args += ["--title", title]
+    if description is not None or screenshot_paths:
+        new_body: str = description if description is not None else (pr.get("body") or "")
+        if screenshot_paths:
+            new_body = build_screenshots_section(new_body, _screenshot_images(owner, repo, branch, screenshot_paths))
+        args += ["--body", new_body]
+    if len(args) == 3:
+        return
+    r = subprocess.run(args, capture_output=True, encoding="utf-8")
+    if r.returncode != 0:
+        sys.exit((r.stderr or r.stdout).strip() or "`gh pr edit` failed")
+    print(f"Updated PR #{pr['number']}")
+
+
+def comment_with_screenshots(gh: str, owner: str, repo: str, branch: str, message: str | None, screenshot_paths: list[str]) -> None:
+    """Post a comment, with a message and/or screenshots, on the current branch's PR."""
+    images = _screenshot_images(owner, repo, branch, screenshot_paths) if screenshot_paths else []
+    content = build_screenshots_section(message, images).strip() if images else (message or "")
+    r = subprocess.run([gh, "pr", "comment", "--body", content], capture_output=True, encoding="utf-8")
+    if r.returncode != 0:
+        sys.exit((r.stderr or r.stdout).strip() or "`gh pr comment` failed")
+    print(f"Added comment ({len(screenshot_paths)} screenshot(s)) to the current PR")
 
 
 def protection_requires_status_checks(protection: dict) -> bool:

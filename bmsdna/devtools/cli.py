@@ -15,7 +15,7 @@ from . import logs as logs_mod
 from . import pr_build, worktree as worktree_mod
 from .ado_auth import auth_header
 from .cli_tools import require_az, require_gh
-from .gitrepo import GitHubRemote, current_branch, current_remote
+from .gitrepo import AdoRemote, GitHubRemote, current_branch, current_remote
 
 # Non-ASCII output (checkmarks, en-dashes in ADO project names, etc.) needs a
 # UTF-8 stream — the default Windows console codepage isn't UTF-8, and would
@@ -31,6 +31,13 @@ app.add_typer(pr_app, name="pr")
 
 logs_app = typer.Typer(name="logs", help="Application Insights / Log Analytics queries")
 app.add_typer(logs_app, name="logs")
+
+
+def _resolve_ado_pr(pat: str | None, remote: AdoRemote, source_branch: str, target: str) -> tuple[requests.Session, dict]:
+    session = requests.Session()
+    session.headers.update(auth_header(pat))
+    pr = pr_build.get_pr(session, remote, source_branch, target)
+    return session, pr
 
 
 def _attach_screenshots(attach: Callable[[], None]) -> None:
@@ -112,6 +119,69 @@ def pr_status(
         gh_pr.run(require_gh(), wait)
         return
     pr_build.run(remote, pat, target_branch, wait)
+
+
+@pr_app.command("update")
+def pr_update(
+    title: str | None = typer.Option(None, "--title", help="New PR title"),
+    description: str | None = typer.Option(
+        None, "--description", help="New PR description (replaces the existing one)"
+    ),
+    screenshot: list[str] = typer.Option(
+        [], "--screenshot", help="Path to an image to append to the PR description (repeatable)"
+    ),
+    target: str = typer.Option("main", "--target", help="Target branch of the PR (Azure DevOps only)"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
+) -> None:
+    """Update the title/description of the PR opened from the current branch (Azure DevOps or GitHub, auto-detected)."""
+    for path in screenshot:
+        if not Path(path).is_file():
+            raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
+    if title is None and description is None and not screenshot:
+        raise typer.BadParameter("Provide at least one of --title, --description, --screenshot")
+
+    remote = current_remote()
+    source_branch = current_branch()
+    if isinstance(remote, GitHubRemote):
+        gh_pr.update(require_gh(), remote.owner, remote.repo, source_branch, title, description, screenshot)
+    else:
+        session, pr = _resolve_ado_pr(pat, remote, source_branch, target)
+        pr_build.update(session, remote, pr, title, description, screenshot)
+
+
+@pr_app.command("comment")
+def pr_comment(
+    message: str | None = typer.Option(None, "--message", help="Comment text"),
+    screenshot: list[str] = typer.Option(
+        [], "--screenshot", help="Path to an image to embed in the comment (repeatable)"
+    ),
+    target: str = typer.Option("main", "--target", help="Target branch of the PR (Azure DevOps only)"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
+) -> None:
+    """Post a comment on the PR opened from the current branch (Azure DevOps or GitHub, auto-detected)."""
+    for path in screenshot:
+        if not Path(path).is_file():
+            raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
+    if not message and not screenshot:
+        raise typer.BadParameter("Provide at least one of --message, --screenshot")
+
+    remote = current_remote()
+    source_branch = current_branch()
+    if isinstance(remote, GitHubRemote):
+        gh_pr.comment_with_screenshots(require_gh(), remote.owner, remote.repo, source_branch, message, screenshot)
+    else:
+        session, pr = _resolve_ado_pr(pat, remote, source_branch, target)
+        pr_build.comment_with_screenshots(session, remote, pr["pullRequestId"], message, screenshot)
 
 
 @app.command()
