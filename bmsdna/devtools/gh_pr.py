@@ -140,15 +140,23 @@ def run(gh: str, wait: bool) -> None:
         return
 
 
-def create(gh: str, target: str, extra_args: list[str]) -> int:
+def create(gh: str, target: str, extra_args: list[str], draft: bool = False) -> int:
     """Create a GitHub PR from the current branch into `target`.
 
     --fill autofills title/body from commit info so this never blocks on an
     interactive prompt; pass --title/--body in extra_args to override (gh
     lets explicit values take precedence over --fill).
     """
-    cmd = [gh, "pr", "create", "--base", target, "--fill", *extra_args]
+    cmd = [gh, "pr", "create", "--base", target, "--fill", *(["--draft"] if draft else []), *extra_args]
     return subprocess.run(cmd).returncode
+
+
+def publish(gh: str) -> None:
+    """Mark the current branch's draft PR as ready for review."""
+    r = subprocess.run([gh, "pr", "ready"], capture_output=True, encoding="utf-8")
+    if r.returncode != 0:
+        sys.exit((r.stderr or r.stdout).strip() or "`gh pr ready` failed")
+    print("Marked PR as ready for review")
 
 
 def _git(args: list[str], env: dict[str, str] | None = None) -> str:

@@ -189,6 +189,13 @@ def update(
     print(f"Updated PR #{pr_id}")
 
 
+def publish(session: requests.Session, remote: AdoRemote, pr: dict) -> None:
+    """Mark a draft PR as ready for review (clears isDraft)."""
+    pr_id = pr["pullRequestId"]
+    _patch_pr(session, remote, pr_id, {"isDraft": False})
+    print(f"Marked PR #{pr_id} as ready for review")
+
+
 def add_comment(session: requests.Session, remote: AdoRemote, pr_id: int, content: str) -> None:
     """Post a new top-level comment thread on the PR."""
     r = session.post(
