@@ -57,6 +57,7 @@ def _attach_screenshots(attach: Callable[[], None]) -> None:
 @pr_app.command("create")
 def pr_create(
     target: str = typer.Option("main", "--target", help="Target branch (e.g. main, test)"),
+    draft: bool = typer.Option(False, "--draft", help="Create the PR as a draft (not ready for review)"),
     screenshot: list[str] = typer.Option(
         [], "--screenshot", help="Path to an image to attach to the PR description (repeatable)"
     ),
@@ -77,10 +78,11 @@ def pr_create(
     source_branch = current_branch()
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
-        returncode = gh_pr.create(gh, target, args or [])
+        returncode = gh_pr.create(gh, target, args or [], draft=draft)
         build_policy = gh_pr.has_build_policy(gh, target)
         if returncode == 0 and screenshot:
             _attach_screenshots(lambda: gh_pr.add_screenshots(gh, remote.owner, remote.repo, source_branch, screenshot))
+        publish_hint = "`gh pr ready`"
     else:
         az = require_az()
         cmd = [
@@ -88,6 +90,7 @@ def pr_create(
             "--target-branch", target,
             "--source-branch", source_branch,
             "--auto-complete", "false",
+            *(["--draft", "true"] if draft else []),
             *(args or []),
         ]
         returncode = subprocess.run(cmd).returncode
@@ -100,11 +103,35 @@ def pr_create(
                 pr_build.add_screenshots(session, remote, pr, screenshot)
 
             _attach_screenshots(_add)
+        publish_hint = "`az repos pr update --id <PR-ID> --draft false`"
+
+    if returncode == 0 and draft:
+        print(f"\nCreated as a draft PR. Run `bdt pr publish` (or {publish_hint}) to mark it ready for review.")
 
     if returncode == 0 and build_policy:
         print("\nRun `bdt pr status` to check whether the CI build passes.")
 
     raise typer.Exit(returncode)
+
+
+@pr_app.command("publish")
+def pr_publish(
+    target: str = typer.Option("main", "--target", help="Target branch of the PR (Azure DevOps only)"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
+) -> None:
+    """Mark the draft PR opened from the current branch as ready for review (Azure DevOps or GitHub, auto-detected)."""
+    remote = current_remote()
+    source_branch = current_branch()
+    if isinstance(remote, GitHubRemote):
+        gh_pr.publish(require_gh())
+    else:
+        session, pr = _resolve_ado_pr(pat, remote, source_branch, target)
+        pr_build.publish(session, remote, pr)
 
 
 @pr_app.command("status")
