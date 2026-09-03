@@ -1,12 +1,16 @@
-"""Azure DevOps work items ("issues"): create, comment, and screenshot support.
+"""Azure DevOps work items ("issues"): create/update/delete, comment
+add/update/delete, and screenshot support.
 
 Built directly on the Work Item Tracking REST API (api-version 7.1):
-  - Create:      POST   {org}/{project}/_apis/wit/workitems/${type}
-  - Update:      PATCH  {org}/{project}/_apis/wit/workitems/{id}
-  - Get:         GET    {org}/{project}/_apis/wit/workitems/{id}
-  - Attachments: POST   {org}/{project}/_apis/wit/attachments?fileName=...
-  - Comments:    POST   {org}/{project}/_apis/wit/workItems/{id}/comments (api-version 7.1-preview.4 — the
-                 "Comments"/discussion resource is still in preview even on the 7.1 line)
+  - Create:      POST    {org}/{project}/_apis/wit/workitems/${type}
+  - Update:      PATCH   {org}/{project}/_apis/wit/workitems/{id}
+  - Delete:      DELETE  {org}/{project}/_apis/wit/workitems/{id} (soft-delete to the Recycle Bin — recoverable;
+                 there is no `destroy=true` support here on purpose, since that's a permanent, unrecoverable delete)
+  - Get:         GET     {org}/{project}/_apis/wit/workitems/{id}
+  - Attachments: POST    {org}/{project}/_apis/wit/attachments?fileName=...
+  - Comments:    POST/PATCH/DELETE {org}/{project}/_apis/wit/workItems/{id}/comments[/{commentId}]
+                 (api-version 7.1-preview.4 — the "Comments"/discussion resource is still in preview
+                 even on the 7.1 line)
 
 Screenshots are handled in two steps, since the classic long-text fields
 (Description, Repro Steps, ...) default to HTML formatting via the REST API
@@ -82,6 +86,28 @@ def build_attach_ops(images: list[tuple[str, str]]) -> list[dict]:
     ]
 
 
+def build_update_ops(
+    title: str | None = None,
+    description: str | None = None,
+    area_path: str | None = None,
+    tags: list[str] | None = None,
+    state: str | None = None,
+) -> list[dict]:
+    """The JSON Patch document body for updating a work item — only fields that aren't None are touched."""
+    ops = []
+    if title is not None:
+        ops.append({"op": "add", "path": "/fields/System.Title", "value": title})
+    if description is not None:
+        ops.append({"op": "add", "path": "/fields/System.Description", "value": description})
+    if area_path is not None:
+        ops.append({"op": "add", "path": "/fields/System.AreaPath", "value": area_path})
+    if tags is not None:
+        ops.append({"op": "add", "path": "/fields/System.Tags", "value": "; ".join(tags)})
+    if state is not None:
+        ops.append({"op": "add", "path": "/fields/System.State", "value": state})
+    return ops
+
+
 def create_work_item(
     session: requests.Session,
     remote: AdoRemote,
@@ -103,6 +129,45 @@ def create_work_item(
         sys.exit(f"Work item type '{work_item_type}' not found in project '{remote.project}'. Check --type.")
     r.raise_for_status()
     return r.json()
+
+
+def update_work_item(
+    session: requests.Session,
+    remote: AdoRemote,
+    work_item_id: int,
+    title: str | None = None,
+    description: str | None = None,
+    area_path: str | None = None,
+    tags: list[str] | None = None,
+    state: str | None = None,
+) -> dict:
+    ops = build_update_ops(title, description, area_path, tags, state)
+    if not ops:
+        sys.exit("Nothing to update — provide at least one of --title, --description, --board, --tag, --state.")
+
+    r = session.patch(
+        f"{_base_url(remote)}/_apis/wit/workitems/{work_item_id}",
+        params={"api-version": "7.1"},
+        json=ops,
+        headers={"Content-Type": "application/json-patch+json"},
+    )
+    if r.status_code == 404:
+        sys.exit(f"Work item #{work_item_id} not found in project '{remote.project}'.")
+    r.raise_for_status()
+    return r.json()
+
+
+def delete_work_item(session: requests.Session, remote: AdoRemote, work_item_id: int) -> None:
+    """Soft-delete: moves the work item to the project's Recycle Bin, where it can be restored.
+
+    Deliberately doesn't expose the REST API's `destroy=true` option — that's
+    a permanent, unrecoverable delete, and there's no confirmation step that
+    makes that safe to offer from a CLI flag.
+    """
+    r = session.delete(f"{_base_url(remote)}/_apis/wit/workitems/{work_item_id}", params={"api-version": "7.1"})
+    if r.status_code == 404:
+        sys.exit(f"Work item #{work_item_id} not found in project '{remote.project}'.")
+    r.raise_for_status()
 
 
 def upload_attachment(session: requests.Session, remote: AdoRemote, attachment_name: str, file_path: str) -> tuple[str, str]:
@@ -142,31 +207,57 @@ def link_attachments(session: requests.Session, remote: AdoRemote, work_item_id:
     r.raise_for_status()
 
 
-def add_comment(session: requests.Session, remote: AdoRemote, work_item_id: int, text: str) -> None:
+def add_comment(session: requests.Session, remote: AdoRemote, work_item_id: int, text: str) -> dict:
     r = session.post(
         f"{_base_url(remote)}/_apis/wit/workItems/{work_item_id}/comments",
         params={"api-version": COMMENTS_API_VERSION},
         json={"text": text},
     )
     r.raise_for_status()
+    return r.json()
+
+
+def update_comment(session: requests.Session, remote: AdoRemote, work_item_id: int, comment_id: int, text: str) -> dict:
+    r = session.patch(
+        f"{_base_url(remote)}/_apis/wit/workItems/{work_item_id}/comments/{comment_id}",
+        params={"api-version": COMMENTS_API_VERSION},
+        json={"text": text},
+    )
+    if r.status_code == 404:
+        sys.exit(f"Comment #{comment_id} not found on work item #{work_item_id}.")
+    r.raise_for_status()
+    print(f"Updated comment #{comment_id} on work item #{work_item_id}")
+    return r.json()
+
+
+def delete_comment(session: requests.Session, remote: AdoRemote, work_item_id: int, comment_id: int) -> None:
+    r = session.delete(
+        f"{_base_url(remote)}/_apis/wit/workItems/{work_item_id}/comments/{comment_id}",
+        params={"api-version": COMMENTS_API_VERSION},
+    )
+    if r.status_code == 404:
+        sys.exit(f"Comment #{comment_id} not found on work item #{work_item_id}.")
+    r.raise_for_status()
+    print(f"Deleted comment #{comment_id} on work item #{work_item_id}")
 
 
 def add_screenshots(session: requests.Session, remote: AdoRemote, work_item_id: int, screenshot_paths: list[str]) -> None:
     """Upload+link screenshots as attachments, then post a comment embedding them (Markdown)."""
     images = _upload_screenshots(session, remote, screenshot_paths)
     link_attachments(session, remote, work_item_id, images)
-    add_comment(session, remote, work_item_id, build_screenshots_section(None, images).strip())
-    print(f"Attached {len(screenshot_paths)} screenshot(s) to work item #{work_item_id}")
+    comment = add_comment(session, remote, work_item_id, build_screenshots_section(None, images).strip())
+    print(f"Attached {len(screenshot_paths)} screenshot(s) to work item #{work_item_id} (comment #{comment['id']})")
 
 
-def comment_with_screenshots(session: requests.Session, remote: AdoRemote, work_item_id: int, message: str | None, screenshot_paths: list[str]) -> None:
+def comment_with_screenshots(session: requests.Session, remote: AdoRemote, work_item_id: int, message: str | None, screenshot_paths: list[str]) -> dict:
     """Post a comment, with a message and/or screenshots, on the work item."""
     images = _upload_screenshots(session, remote, screenshot_paths) if screenshot_paths else []
     if images:
         link_attachments(session, remote, work_item_id, images)
     content = build_screenshots_section(message, images).strip() if images else (message or "")
-    add_comment(session, remote, work_item_id, content)
-    print(f"Added comment ({len(screenshot_paths)} screenshot(s)) to work item #{work_item_id}")
+    comment = add_comment(session, remote, work_item_id, content)
+    print(f"Added comment #{comment['id']} ({len(screenshot_paths)} screenshot(s)) to work item #{work_item_id}")
+    return comment
 
 
 def html_url(work_item: dict) -> str | None:
@@ -196,3 +287,28 @@ def create(
         add_screenshots(session, remote, work_item_id, screenshot_paths)
 
     return work_item
+
+
+def update(
+    session: requests.Session,
+    remote: AdoRemote,
+    work_item_id: int,
+    title: str | None = None,
+    description: str | None = None,
+    board: str | None = None,
+    tags: list[str] | None = None,
+    state: str | None = None,
+) -> dict:
+    """Update a work item's fields. Unlike `create`, `board` is only resolved (and the Area Path only
+    touched) when explicitly given — it never falls back to `[tool.bdt.ado].board`, so an unrelated
+    field update (e.g. just `--title`) can't silently move the item to a different team's board.
+    """
+    area_path = get_team_area_path(session, remote, board) if board else None
+    work_item = update_work_item(session, remote, work_item_id, title, description, area_path, tags, state)
+    print(f"Updated work item #{work_item_id}")
+    return work_item
+
+
+def delete(session: requests.Session, remote: AdoRemote, work_item_id: int) -> None:
+    delete_work_item(session, remote, work_item_id)
+    print(f"Deleted work item #{work_item_id} (moved to the Recycle Bin — restorable)")

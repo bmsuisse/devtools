@@ -74,27 +74,41 @@ create prints a reminder to run `bdt pr status` afterward to check whether
 the CI build passes. This is a best-effort check — failures reading policy
 config (auth, permissions) fail open and simply skip the reminder.
 
-## `bdt issue create` / `bdt issue comment`
+## `bdt issue create` / `update` / `delete`, `bdt issue comment add` / `update` / `delete`
 
 ```bash
 bdt issue create --title "Nightly job fails" --description "..." --type Bug --screenshot before.png
-bdt issue comment 1234 --message "Repro'd, see attached" --screenshot repro.png
+bdt issue update 1234 --state Resolved --tag fixed
+bdt issue delete 1234 --yes
+
+bdt issue comment add 1234 --message "Repro'd, see attached" --screenshot repro.png
+bdt issue comment update 1234 5678 --message "Actually, see the second screenshot"
+bdt issue comment delete 1234 5678 --yes
 ```
 
-Creates/comments on an issue (GitHub) or work item (Azure DevOps),
-auto-detected from `origin` like `bdt pr *`.
+Creates/updates/deletes an issue (GitHub) or work item (Azure DevOps), and
+adds/edits/deletes comments on one, auto-detected from `origin` like `bdt pr
+*`. `bdt issue comment add` prints the new comment's ID so you can pass it to
+`update`/`delete` later.
 
-**Azure DevOps**: `--type` selects the work item type (`Bug`, `Task`,
-`User Story`, ... — whatever the project's process defines; default `Bug`).
-`--tag` adds a tag (repeatable). `--screenshot` uploads each image as a work
-item attachment (visible in the Attachments tab) and posts a comment
-embedding them inline with Markdown — the Description field defaults to
-HTML via the REST API, where a raw `![]()` would just show as literal text,
-but the work item Discussion/Comments control has always rendered Markdown.
-`bdt issue comment <id>` takes the numeric work item ID.
+Destructive commands (`issue delete`, `issue comment delete`) require an
+explicit `--yes` — there's no interactive confirmation prompt, since `bdt` is
+also invoked by AI-agent callers that can't answer one.
 
-`--board <team>` sets the new work item's Area Path to that Azure Boards
-team's default, so it shows up on that team's board — a CLI flag beats
+**Azure DevOps**: `--type` selects the work item type on `create` (`Bug`,
+`Task`, `User Story`, ... — whatever the project's process defines; default
+`Bug`). `--tag` sets/replaces the full tag list (repeatable; omit on
+`update` to leave tags unchanged). `--state` (`update` only) sets
+`System.State`, e.g. `Active`, `Resolved`, `Closed`. `--screenshot` uploads
+each image as a work item attachment (visible in the Attachments tab) and
+posts a comment embedding them inline with Markdown — the Description field
+defaults to HTML via the REST API, where a raw `![]()` would just show as
+literal text, but the work item Discussion/Comments control has always
+rendered Markdown. `issue delete` soft-deletes to the project's Recycle Bin
+(restorable, not permanent).
+
+`--board <team>` sets the work item's Area Path to that Azure Boards team's
+default, so it shows up on that team's board — a CLI flag beats
 `[tool.bdt.ado].board` in `pyproject.toml`, which beats filing under the
 project's root area:
 
@@ -103,13 +117,20 @@ project's root area:
 board = "My Team"
 ```
 
-**GitHub**: a thin wrapper around `gh issue create` / `gh issue comment`.
-`--label` adds a label (repeatable, must already exist in the repo).
-`--screenshot` pushes images to a `pr-assets` branch (same trick `bdt pr
-create --screenshot` uses, since GitHub has no API for uploading an image
+On `update`, `--board` only moves the item when you pass it explicitly — it
+never falls back to `pyproject.toml`, so an unrelated field update (e.g.
+just `--title`) can't silently relocate the item to a different board.
+
+**GitHub**: a thin wrapper around `gh issue create` / `edit` / `delete` /
+`comment`. `--label` adds a label on `create`, or adds/removes one on
+`update` (paired with `--remove-label`); labels must already exist in the
+repo. `--screenshot` pushes images to a `pr-assets` branch (same trick `bdt
+pr create --screenshot` uses, since GitHub has no API for uploading an image
 into an issue) and appends them to the issue body / comment as Markdown.
-`bdt issue comment <number>` takes the issue number. Extra arguments to
-`bdt issue create` pass through to `gh issue create`, e.g.
+`issue delete` is **permanent** — GitHub has no recycle bin for issues.
+Comment update/delete go through `gh api` directly (`gh issue` has no
+subcommand for editing/deleting an arbitrary comment by ID). Extra arguments
+to `bdt issue create` pass through to `gh issue create`, e.g.
 `bdt issue create --title "..." -- --assignee @me`.
 
 ## `bdt worktree`

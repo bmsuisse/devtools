@@ -32,6 +32,9 @@ app.add_typer(pr_app, name="pr")
 issue_app = typer.Typer(name="issue", help="Issue / work item commands (Azure DevOps or GitHub, auto-detected from the git remote)")
 app.add_typer(issue_app, name="issue")
 
+issue_comment_app = typer.Typer(name="comment", help="Comment on an issue / work item")
+issue_app.add_typer(issue_comment_app, name="comment")
+
 logs_app = typer.Typer(name="logs", help="Application Insights / Log Analytics queries")
 app.add_typer(logs_app, name="logs")
 
@@ -253,8 +256,69 @@ def issue_create(
         ado_issue.create(session, remote, type_, title, description, resolved_board, tag, screenshot)
 
 
-@issue_app.command("comment")
-def issue_comment(
+@issue_app.command("update")
+def issue_update(
+    number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
+    title: str | None = typer.Option(None, "--title", help="New title"),
+    description: str | None = typer.Option(None, "--description", help="New description body (replaces the existing one)"),
+    board: str | None = typer.Option(
+        None,
+        "--board",
+        help="Move the work item to this Azure Boards team's Area Path (Azure DevOps only). Unlike `issue create`, "
+        r"this is only applied when explicitly given here — it does not fall back to \[tool.bdt.ado].board, "
+        "so an unrelated field update can't silently move the item onto a different board.",
+    ),
+    state: str | None = typer.Option(None, "--state", help="New work item state, e.g. Active, Resolved, Closed (Azure DevOps only)"),
+    tag: list[str] | None = typer.Option(None, "--tag", help="Replaces all tags (Azure DevOps only, repeatable); omit to leave unchanged"),
+    label: list[str] | None = typer.Option(None, "--label", help="Label to add (GitHub only, repeatable)"),
+    remove_label: list[str] | None = typer.Option(None, "--remove-label", help="Label to remove (GitHub only, repeatable)"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
+) -> None:
+    """Update an issue / work item's fields (Azure DevOps or GitHub, auto-detected)."""
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh_issue.update(require_gh(), number, title, description, label, remove_label)
+    else:
+        session = requests.Session()
+        session.headers.update(auth_header(pat))
+        ado_issue.update(session, remote, number, title, description, board, tag, state)
+
+
+@issue_app.command("delete")
+def issue_delete(
+    number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
+    yes: bool = typer.Option(False, "--yes", help="Confirm deletion without prompting"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
+) -> None:
+    """Delete an issue / work item (Azure DevOps or GitHub, auto-detected).
+
+    Azure DevOps soft-deletes to the project's Recycle Bin (restorable).
+    GitHub deletion is permanent — there's no recycle bin for issues.
+    """
+    if not yes:
+        raise typer.BadParameter("Pass --yes to confirm deletion.", param_hint="--yes")
+
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh_issue.delete(require_gh(), number)
+    else:
+        session = requests.Session()
+        session.headers.update(auth_header(pat))
+        ado_issue.delete(session, remote, number)
+
+
+@issue_comment_app.command("add")
+def issue_comment_add(
     number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
     message: str | None = typer.Option(None, "--message", help="Comment text"),
     screenshot: list[str] = typer.Option(
@@ -281,6 +345,53 @@ def issue_comment(
         session = requests.Session()
         session.headers.update(auth_header(pat))
         ado_issue.comment_with_screenshots(session, remote, number, message, screenshot)
+
+
+@issue_comment_app.command("update")
+def issue_comment_update(
+    number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
+    comment_id: int = typer.Argument(..., help="Comment ID, as printed by `issue comment add`"),
+    message: str = typer.Option(..., "--message", help="New comment text"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
+) -> None:
+    """Edit an existing comment on an issue / work item (Azure DevOps or GitHub, auto-detected)."""
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh_issue.update_comment(require_gh(), remote.owner, remote.repo, str(comment_id), message)
+    else:
+        session = requests.Session()
+        session.headers.update(auth_header(pat))
+        ado_issue.update_comment(session, remote, number, comment_id, message)
+
+
+@issue_comment_app.command("delete")
+def issue_comment_delete(
+    number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
+    comment_id: int = typer.Argument(..., help="Comment ID, as printed by `issue comment add`"),
+    yes: bool = typer.Option(False, "--yes", help="Confirm deletion without prompting"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
+) -> None:
+    """Delete a comment on an issue / work item (Azure DevOps or GitHub, auto-detected)."""
+    if not yes:
+        raise typer.BadParameter("Pass --yes to confirm deletion.", param_hint="--yes")
+
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh_issue.delete_comment(require_gh(), remote.owner, remote.repo, str(comment_id))
+    else:
+        session = requests.Session()
+        session.headers.update(auth_header(pat))
+        ado_issue.delete_comment(session, remote, number, comment_id)
 
 
 @app.command()

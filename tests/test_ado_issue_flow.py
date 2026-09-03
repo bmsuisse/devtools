@@ -1,4 +1,4 @@
-"""End-to-end request sequencing for ado_issue.create()/comment_with_screenshots(),
+"""End-to-end request sequencing for ado_issue's create/update/delete flows,
 against a fake `requests.Session` (no real network) so the call order, URLs,
 and payloads sent to each Azure DevOps endpoint are verified together rather
 than one function at a time.
@@ -8,7 +8,14 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from bmsdna.devtools.ado_issue import comment_with_screenshots, create
+from bmsdna.devtools.ado_issue import (
+    comment_with_screenshots,
+    create,
+    delete,
+    delete_comment,
+    update,
+    update_comment,
+)
 from bmsdna.devtools.gitrepo import AdoRemote
 
 REMOTE = AdoRemote(org="myorg", project="MyProj", repo="myrepo")
@@ -48,12 +55,18 @@ def make_session(get_map: dict[str, dict] | None = None) -> MagicMock:
             return FakeResponse({"id": 123, "_links": {"html": {"href": "https://dev.azure.com/myorg/web/wi.aspx?id=123"}}})
         raise AssertionError(f"unexpected POST {url}")
 
-    def fake_patch(url, params=None, **kwargs):
-        return FakeResponse({})
+    def fake_patch(url, params: dict | None = None, **kwargs):
+        if "/comments/" in url:
+            return FakeResponse({"id": int(url.rsplit("/", 1)[-1]), "text": kwargs["json"]["text"]})
+        return FakeResponse({"id": 123, "rev": 2})
+
+    def fake_delete(url, params: dict | None = None, **kwargs):
+        return FakeResponse({}, status_code=204)
 
     session.get.side_effect = fake_get
     session.post.side_effect = fake_post
     session.patch.side_effect = fake_patch
+    session.delete.side_effect = fake_delete
     return session
 
 
@@ -122,3 +135,55 @@ def test_comment_with_screenshots_links_attachments_before_commenting(tmp_path) 
     comment_text = session.post.call_args_list[-1].kwargs["json"]["text"]
     assert "![after.png]" in comment_text
     assert "Fixed" in comment_text
+
+
+def test_update_title_only_does_not_touch_board() -> None:
+    session = make_session()
+
+    update(session, REMOTE, 123, title="New title")
+
+    session.get.assert_not_called()  # no --board given, so no team field values lookup at all
+    patch_kwargs = session.patch.call_args.kwargs
+    assert patch_kwargs["json"] == [{"op": "add", "path": "/fields/System.Title", "value": "New title"}]
+    assert patch_kwargs["headers"]["Content-Type"] == "application/json-patch+json"
+
+
+def test_update_with_board_resolves_area_path() -> None:
+    session = make_session(get_map={"teamsettings/teamfieldvalues": {"defaultValue": "MyProj\\Other Team"}})
+
+    update(session, REMOTE, 123, board="Other Team")
+
+    get_url = session.get.call_args.args[0]
+    assert "myorg/MyProj/Other%20Team/_apis/work/teamsettings/teamfieldvalues" in get_url
+    ops = session.patch.call_args.kwargs["json"]
+    assert ops == [{"op": "add", "path": "/fields/System.AreaPath", "value": "MyProj\\Other Team"}]
+
+
+def test_delete_hits_work_item_delete_endpoint() -> None:
+    session = make_session()
+
+    delete(session, REMOTE, 123)
+
+    session.delete.assert_called_once()
+    delete_url, delete_kwargs = session.delete.call_args.args[0], session.delete.call_args.kwargs
+    assert delete_url == "https://dev.azure.com/myorg/MyProj/_apis/wit/workitems/123"
+    assert delete_kwargs["params"] == {"api-version": "7.1"}
+
+
+def test_update_comment_hits_comment_id_endpoint() -> None:
+    session = make_session()
+
+    update_comment(session, REMOTE, 42, 7, "edited text")
+
+    url, kwargs = session.patch.call_args.args[0], session.patch.call_args.kwargs
+    assert url == "https://dev.azure.com/myorg/MyProj/_apis/wit/workItems/42/comments/7"
+    assert kwargs["json"] == {"text": "edited text"}
+
+
+def test_delete_comment_hits_comment_id_endpoint() -> None:
+    session = make_session()
+
+    delete_comment(session, REMOTE, 42, 7)
+
+    url = session.delete.call_args.args[0]
+    assert url == "https://dev.azure.com/myorg/MyProj/_apis/wit/workItems/42/comments/7"

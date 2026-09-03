@@ -1,4 +1,4 @@
-from bmsdna.devtools.ado_issue import build_attach_ops, build_create_ops, html_url, resolve_board
+from bmsdna.devtools.ado_issue import build_attach_ops, build_create_ops, build_update_ops, html_url, resolve_board
 
 
 def write_pyproject(tmp_path, body: str):
@@ -55,6 +55,33 @@ def test_build_attach_ops_shape() -> None:
             },
         }
     ]
+
+
+def test_build_update_ops_empty_when_nothing_given() -> None:
+    assert build_update_ops() == []
+
+
+def test_build_update_ops_only_touches_given_fields() -> None:
+    ops = build_update_ops(title="New title")
+    assert ops == [{"op": "add", "path": "/fields/System.Title", "value": "New title"}]
+
+
+def test_build_update_ops_all_fields() -> None:
+    ops = build_update_ops(title="T", description="D", area_path="Proj\\Team", tags=["a", "b"], state="Resolved")
+    paths = {op["path"]: op["value"] for op in ops}
+    assert paths == {
+        "/fields/System.Title": "T",
+        "/fields/System.Description": "D",
+        "/fields/System.AreaPath": "Proj\\Team",
+        "/fields/System.Tags": "a; b",
+        "/fields/System.State": "Resolved",
+    }
+
+
+def test_build_update_ops_empty_tags_list_clears_tags() -> None:
+    # An explicit [] (distinct from the default None) is a deliberate "clear all tags".
+    ops = build_update_ops(tags=[])
+    assert ops == [{"op": "add", "path": "/fields/System.Tags", "value": ""}]
 
 
 def test_html_url_present() -> None:
