@@ -8,9 +8,9 @@ from pathlib import Path
 import requests
 import typer
 
-from . import app_service_logs, commit as commit_mod
+from . import ado_issue, app_service_logs, commit as commit_mod
 from . import env_config
-from . import gh_pr
+from . import gh_issue, gh_pr
 from . import logs as logs_mod
 from . import pr_build, worktree as worktree_mod
 from .ado_auth import auth_header
@@ -28,6 +28,12 @@ app = typer.Typer(name="bdt", help="Shared BMS developer tooling: PRs/builds (Az
 
 pr_app = typer.Typer(name="pr", help="Pull request commands (Azure DevOps or GitHub, auto-detected from the git remote)")
 app.add_typer(pr_app, name="pr")
+
+issue_app = typer.Typer(name="issue", help="Issue / work item commands (Azure DevOps or GitHub, auto-detected from the git remote)")
+app.add_typer(issue_app, name="issue")
+
+issue_comment_app = typer.Typer(name="comment", help="Comment on an issue / work item")
+issue_app.add_typer(issue_comment_app, name="comment")
 
 logs_app = typer.Typer(name="logs", help="Application Insights / Log Analytics queries")
 app.add_typer(logs_app, name="logs")
@@ -212,6 +218,183 @@ def pr_comment(
     else:
         session, pr = _resolve_ado_pr(pat, remote, source_branch, target)
         pr_build.comment_with_screenshots(session, remote, pr["pullRequestId"], message, screenshot)
+
+
+@issue_app.command("create")
+def issue_create(
+    title: str = typer.Option(..., "--title", help="Issue / work item title"),
+    description: str | None = typer.Option(None, "--description", help="Issue / work item description body"),
+    type_: str = typer.Option("Bug", "--type", help="Work item type, e.g. Bug, Task, User Story (Azure DevOps only)"),
+    board: str | None = typer.Option(
+        None,
+        "--board",
+        help="Azure Boards team to file the work item against — sets its Area Path so the item shows up on that "
+        r"team's board (Azure DevOps only; parameter overrides \[tool.bdt.ado].board in pyproject.toml)",
+    ),
+    label: list[str] = typer.Option([], "--label", help="Label to apply (GitHub only, repeatable)"),
+    tag: list[str] = typer.Option([], "--tag", help="Tag to apply (Azure DevOps only, repeatable)"),
+    screenshot: list[str] = typer.Option(
+        [], "--screenshot", help="Path to an image to attach to the issue / work item (repeatable)"
+    ),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
+    args: list[str] = typer.Argument(None, help="Extra args passed through to `gh issue create` (GitHub only)"),
+) -> None:
+    """Create a new issue / work item (Azure DevOps or GitHub, auto-detected)."""
+    for path in screenshot:
+        if not Path(path).is_file():
+            raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
+
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh_issue.create(require_gh(), remote.owner, remote.repo, title, description, label, screenshot, args or [])
+    else:
+        session = requests.Session()
+        session.headers.update(auth_header(pat))
+        resolved_board = ado_issue.resolve_board(board)
+        ado_issue.create(session, remote, type_, title, description, resolved_board, tag, screenshot)
+
+
+@issue_app.command("update")
+def issue_update(
+    number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
+    title: str | None = typer.Option(None, "--title", help="New title"),
+    description: str | None = typer.Option(None, "--description", help="New description body (replaces the existing one)"),
+    board: str | None = typer.Option(
+        None,
+        "--board",
+        help="Move the work item to this Azure Boards team's Area Path (Azure DevOps only). Unlike `issue create`, "
+        r"this is only applied when explicitly given here — it does not fall back to \[tool.bdt.ado].board, "
+        "so an unrelated field update can't silently move the item onto a different board.",
+    ),
+    state: str | None = typer.Option(None, "--state", help="New work item state, e.g. Active, Resolved, Closed (Azure DevOps only)"),
+    tag: list[str] | None = typer.Option(None, "--tag", help="Replaces all tags (Azure DevOps only, repeatable); omit to leave unchanged"),
+    label: list[str] | None = typer.Option(None, "--label", help="Label to add (GitHub only, repeatable)"),
+    remove_label: list[str] | None = typer.Option(None, "--remove-label", help="Label to remove (GitHub only, repeatable)"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
+) -> None:
+    """Update an issue / work item's fields (Azure DevOps or GitHub, auto-detected)."""
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh_issue.update(require_gh(), number, title, description, label, remove_label)
+    else:
+        session = requests.Session()
+        session.headers.update(auth_header(pat))
+        ado_issue.update(session, remote, number, title, description, board, tag, state)
+
+
+@issue_app.command("delete")
+def issue_delete(
+    number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
+    yes: bool = typer.Option(False, "--yes", help="Confirm deletion without prompting"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
+) -> None:
+    """Delete an issue / work item (Azure DevOps or GitHub, auto-detected).
+
+    Azure DevOps soft-deletes to the project's Recycle Bin (restorable).
+    GitHub deletion is permanent — there's no recycle bin for issues.
+    """
+    if not yes:
+        raise typer.BadParameter("Pass --yes to confirm deletion.", param_hint="--yes")
+
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh_issue.delete(require_gh(), number)
+    else:
+        session = requests.Session()
+        session.headers.update(auth_header(pat))
+        ado_issue.delete(session, remote, number)
+
+
+@issue_comment_app.command("add")
+def issue_comment_add(
+    number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
+    message: str | None = typer.Option(None, "--message", help="Comment text"),
+    screenshot: list[str] = typer.Option(
+        [], "--screenshot", help="Path to an image to embed in the comment (repeatable)"
+    ),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
+) -> None:
+    """Post a comment on an issue / work item (Azure DevOps or GitHub, auto-detected)."""
+    for path in screenshot:
+        if not Path(path).is_file():
+            raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
+    if not message and not screenshot:
+        raise typer.BadParameter("Provide at least one of --message, --screenshot")
+
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh_issue.comment(require_gh(), remote.owner, remote.repo, number, message, screenshot)
+    else:
+        session = requests.Session()
+        session.headers.update(auth_header(pat))
+        ado_issue.comment_with_screenshots(session, remote, number, message, screenshot)
+
+
+@issue_comment_app.command("update")
+def issue_comment_update(
+    number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
+    comment_id: int = typer.Argument(..., help="Comment ID, as printed by `issue comment add`"),
+    message: str = typer.Option(..., "--message", help="New comment text"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
+) -> None:
+    """Edit an existing comment on an issue / work item (Azure DevOps or GitHub, auto-detected)."""
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh_issue.update_comment(require_gh(), remote.owner, remote.repo, str(comment_id), message)
+    else:
+        session = requests.Session()
+        session.headers.update(auth_header(pat))
+        ado_issue.update_comment(session, remote, number, comment_id, message)
+
+
+@issue_comment_app.command("delete")
+def issue_comment_delete(
+    number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
+    comment_id: int = typer.Argument(..., help="Comment ID, as printed by `issue comment add`"),
+    yes: bool = typer.Option(False, "--yes", help="Confirm deletion without prompting"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
+) -> None:
+    """Delete a comment on an issue / work item (Azure DevOps or GitHub, auto-detected)."""
+    if not yes:
+        raise typer.BadParameter("Pass --yes to confirm deletion.", param_hint="--yes")
+
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh_issue.delete_comment(require_gh(), remote.owner, remote.repo, str(comment_id))
+    else:
+        session = requests.Session()
+        session.headers.update(auth_header(pat))
+        ado_issue.delete_comment(session, remote, number, comment_id)
 
 
 @app.command()
