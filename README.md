@@ -1,9 +1,10 @@
 # bmsdna-devtools
 
 Shared developer tooling for BMS projects: PR build/check status, PR
-creation, git worktrees, a commit-and-push helper with pre-flight checks,
-and Azure log queries. `bdt pr *` auto-detects whether the current repo's
-`origin` remote is Azure DevOps or GitHub and uses `az`/`gh` accordingly.
+creation, issue/work item creation and comments, git worktrees, a
+commit-and-push helper with pre-flight checks, and Azure log queries.
+`bdt pr *` and `bdt issue *` auto-detect whether the current repo's `origin`
+remote is Azure DevOps or GitHub and use `az`/`gh` accordingly.
 Consolidates near-duplicate scripts that used to be copy-pasted across
 OneSales, ccmt2, and MDMApp into one versioned package with a `bdt` CLI.
 
@@ -72,6 +73,44 @@ or a GitHub branch protection rule requiring status checks), a successful
 create prints a reminder to run `bdt pr status` afterward to check whether
 the CI build passes. This is a best-effort check — failures reading policy
 config (auth, permissions) fail open and simply skip the reminder.
+
+## `bdt issue create` / `bdt issue comment`
+
+```bash
+bdt issue create --title "Nightly job fails" --description "..." --type Bug --screenshot before.png
+bdt issue comment 1234 --message "Repro'd, see attached" --screenshot repro.png
+```
+
+Creates/comments on an issue (GitHub) or work item (Azure DevOps),
+auto-detected from `origin` like `bdt pr *`.
+
+**Azure DevOps**: `--type` selects the work item type (`Bug`, `Task`,
+`User Story`, ... — whatever the project's process defines; default `Bug`).
+`--tag` adds a tag (repeatable). `--screenshot` uploads each image as a work
+item attachment (visible in the Attachments tab) and posts a comment
+embedding them inline with Markdown — the Description field defaults to
+HTML via the REST API, where a raw `![]()` would just show as literal text,
+but the work item Discussion/Comments control has always rendered Markdown.
+`bdt issue comment <id>` takes the numeric work item ID.
+
+`--board <team>` sets the new work item's Area Path to that Azure Boards
+team's default, so it shows up on that team's board — a CLI flag beats
+`[tool.bdt.ado].board` in `pyproject.toml`, which beats filing under the
+project's root area:
+
+```toml
+[tool.bdt.ado]
+board = "My Team"
+```
+
+**GitHub**: a thin wrapper around `gh issue create` / `gh issue comment`.
+`--label` adds a label (repeatable, must already exist in the repo).
+`--screenshot` pushes images to a `pr-assets` branch (same trick `bdt pr
+create --screenshot` uses, since GitHub has no API for uploading an image
+into an issue) and appends them to the issue body / comment as Markdown.
+`bdt issue comment <number>` takes the issue number. Extra arguments to
+`bdt issue create` pass through to `gh issue create`, e.g.
+`bdt issue create --title "..." -- --assignee @me`.
 
 ## `bdt worktree`
 
