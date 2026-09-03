@@ -59,9 +59,7 @@ def create(
     if screenshot_paths:
         images = _screenshot_images(owner, repo, f"issue-{number}", screenshot_paths)
         new_body = build_screenshots_section(body, images)
-        r = subprocess.run([gh, "issue", "edit", number, "--body", new_body], capture_output=True, encoding="utf-8")
-        if r.returncode != 0:
-            sys.exit((r.stderr or r.stdout).strip() or "`gh issue edit` failed")
+        _run_gh(gh, ["issue", "edit", number, "--body", new_body])
         print(f"Attached {len(screenshot_paths)} screenshot(s) to issue #{number}")
 
 
@@ -69,7 +67,5 @@ def comment(gh: str, owner: str, repo: str, number: int, message: str | None, sc
     """Post a comment, with a message and/or screenshots, on a GitHub issue."""
     images = _screenshot_images(owner, repo, f"issue-{number}", screenshot_paths) if screenshot_paths else []
     content = build_screenshots_section(message, images).strip() if images else (message or "")
-    r = subprocess.run([gh, "issue", "comment", str(number), "--body", content], capture_output=True, encoding="utf-8")
-    if r.returncode != 0:
-        sys.exit((r.stderr or r.stdout).strip() or "`gh issue comment` failed")
+    _run_gh(gh, ["issue", "comment", str(number), "--body", content])
     print(f"Added comment ({len(screenshot_paths)} screenshot(s)) to issue #{number}")
