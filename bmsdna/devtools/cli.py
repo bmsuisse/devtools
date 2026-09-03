@@ -87,6 +87,9 @@ def pr_create(
         az = require_az()
         cmd = [
             az, "repos", "pr", "create",
+            "--organization", f"https://dev.azure.com/{remote.org}",
+            "--project", remote.project,
+            "--repository", remote.repo,
             "--target-branch", target,
             "--source-branch", source_branch,
             "--auto-complete", "false",
