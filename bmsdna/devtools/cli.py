@@ -51,6 +51,7 @@ def main(
 ) -> None:
     pass
 
+
 pr_app = typer.Typer(name="pr", help="Pull request commands (Azure DevOps or GitHub, auto-detected from the git remote)")
 app.add_typer(pr_app, name="pr")
 
