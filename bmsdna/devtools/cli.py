@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from collections.abc import Callable
+from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
 import requests
@@ -24,7 +25,31 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
     sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
 
-app = typer.Typer(name="bdt", help="Shared BMS developer tooling: PRs/builds (Azure DevOps or GitHub), worktrees, commits, logs")
+__version__ = _pkg_version("bmsdna-devtools")
+
+app = typer.Typer(
+    name="bdt",
+    help=f"Shared BMS developer tooling: PRs/builds (Azure DevOps or GitHub), worktrees, commits, logs (v{__version__})",
+)
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        print(f"bdt {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def main(
+    version: bool = typer.Option(
+        None,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show the bdt version and exit.",
+    ),
+) -> None:
+    pass
 
 pr_app = typer.Typer(name="pr", help="Pull request commands (Azure DevOps or GitHub, auto-detected from the git remote)")
 app.add_typer(pr_app, name="pr")
