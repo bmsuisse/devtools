@@ -8,8 +8,9 @@ This lets a repo define its webapp/resource-group/slot combinations once
 from __future__ import annotations
 
 import sys
-import tomllib
 from pathlib import Path
+
+from .bdt_config import load_bdt_table
 
 REQUIRED_KEYS = ("webapp", "resource_group")
 
@@ -27,22 +28,8 @@ slot = "test"
 """
 
 
-def _find_pyproject(start: Path) -> Path | None:
-    for directory in (start, *start.parents):
-        candidate = directory / "pyproject.toml"
-        if candidate.is_file():
-            return candidate
-    return None
-
-
 def load_envs(start: Path | None = None) -> dict[str, dict[str, str]]:
-    path = _find_pyproject(start or Path.cwd())
-    if path is None:
-        return {}
-    with path.open("rb") as f:
-        data = tomllib.load(f)
-    envs = data.get("tool", {}).get("bdt", {}).get("envs", {})
-    return envs if isinstance(envs, dict) else {}
+    return load_bdt_table("envs", start)
 
 
 def resolve_env(name: str, start: Path | None = None) -> dict[str, str]:
