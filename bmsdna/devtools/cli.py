@@ -14,7 +14,7 @@ from . import ado_issue, app_service_logs, commit as commit_mod
 from . import env_config
 from . import gh_issue, gh_pr
 from . import logs as logs_mod
-from . import pr_build, worktree as worktree_mod
+from . import pr_build, pr_labels, worktree as worktree_mod
 from .ado_auth import auth_header
 from .cli_tools import require_az, require_gh
 from .gitrepo import AdoRemote, GitHubRemote, current_branch, current_remote
@@ -95,7 +95,9 @@ def pr_create(
         [],
         "--label",
         help="Label to apply to the PR (repeatable). On GitHub the label must already exist on the repo "
-        "(`gh label create`); Azure DevOps PR labels are freeform and created on the fly.",
+        "(`gh label create`); Azure DevOps PR labels are freeform and created on the fly. "
+        r"[tool.bdt.pr.required_labels] in pyproject.toml can require at least one label from each "
+        "named group before the PR is created.",
     ),
     screenshot: list[str] = typer.Option(
         [], "--screenshot", help="Path to an image to attach to the PR description (repeatable)"
@@ -112,6 +114,10 @@ def pr_create(
     for path in screenshot:
         if not Path(path).is_file():
             raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
+
+    missing_groups = pr_labels.missing_label_groups(pr_labels.required_label_groups(), label)
+    if missing_groups:
+        raise typer.BadParameter(pr_labels.format_missing_groups_error(missing_groups), param_hint="--label")
 
     remote = current_remote()
     source_branch = current_branch()

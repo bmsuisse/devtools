@@ -90,3 +90,41 @@ def test_pr_create_passes_labels_and_prints_web_link_for_github(monkeypatch) -> 
     assert captured_cmd.count("--label") == 1
     assert captured_cmd[captured_cmd.index("--label") + 1] == "bug"
     assert "https://github.com/owner/repo/pull/7" in result.output
+
+
+def test_pr_create_fails_before_touching_gh_az_when_required_label_group_missing(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.pr_labels.required_label_groups",
+        lambda: {"risk": ["breaking", "non-breaking"]},
+    )
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("should not be reached — the missing-label check must run first")
+
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", fail_if_called)
+
+    result = runner.invoke(app, ["pr", "create", "--target", "main", "--label", "bug"])
+
+    assert result.exit_code != 0
+    assert "risk" in result.output
+    assert "breaking" in result.output
+
+
+def test_pr_create_proceeds_when_required_label_group_satisfied(monkeypatch) -> None:
+    remote = GitHubRemote("owner", "repo")
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.pr_labels.required_label_groups",
+        lambda: {"risk": ["breaking", "non-breaking"]},
+    )
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
+    monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feature-x")
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.has_build_policy", lambda gh, target: False)
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.subprocess.run",
+        lambda cmd, **kwargs: MagicMock(returncode=0, stdout="https://github.com/owner/repo/pull/7\n", stderr=""),
+    )
+
+    result = runner.invoke(app, ["pr", "create", "--target", "main", "--label", "non-breaking"])
+
+    assert result.exit_code == 0, result.output
