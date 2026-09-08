@@ -233,3 +233,29 @@ slot = "test"
 bdt logs fetch --env prod
 bdt logs fetch --env prod --out logs/ --keep-archive
 ```
+
+## Releasing
+
+Bump `version` in `pyproject.toml` as part of your PR, same as any other
+change. Once that PR merges to `main` and the `Python Test` workflow passes
+for that commit, `.github/workflows/auto-release.yml` automatically tags it
+`vX.Y.Z`, cuts a GitHub Release (skipping if that version was already
+released, e.g. a merge that didn't touch the version), and dispatches
+`python-publish.yml` to publish it to PyPI — no manual release step, and no
+extra secret to configure. Two non-obvious GitHub Actions quirks shaped
+this (see the comments at the top of `auto-release.yml` for the full
+reasoning, since both were hit and confirmed the hard way):
+
+- A release created with the default `GITHUB_TOKEN` does **not** trigger
+  other workflows' `release: published` listeners (an anti-recursion
+  safeguard) — `workflow_dispatch` is the documented exception, so
+  `auto-release.yml` dispatches `python-publish.yml` directly (`gh workflow
+  run`) instead of relying on the release to cascade into it.
+- `python-publish.yml` deliberately stays a plain, directly-triggered
+  top-level workflow rather than something `auto-release.yml` calls via
+  `workflow_call`: PyPI's OIDC trusted publishing does not support
+  reusable/called workflows and silently rejects the token in that shape.
+
+`workflow_dispatch` (or an actual GitHub UI release) on `python-publish.yml`
+still works as a manual fallback if you ever need to re-publish a version
+without going through `auto-release.yml`.
