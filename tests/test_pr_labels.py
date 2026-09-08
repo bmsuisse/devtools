@@ -38,6 +38,12 @@ def test_missing_label_groups_reports_unsatisfied_group() -> None:
     assert missing_label_groups(groups, ["feature"]) == {"risk": ["breaking", "non-breaking"]}
 
 
+def test_missing_label_groups_matches_case_insensitively() -> None:
+    groups = {"risk": ["breaking", "non-breaking"]}
+    assert missing_label_groups(groups, ["Breaking"]) == {}
+    assert missing_label_groups(groups, ["BREAKING"]) == {}
+
+
 def test_missing_label_groups_reports_all_when_no_labels_given() -> None:
     groups = {"type": ["bug", "feature"], "risk": ["breaking", "non-breaking"]}
     assert missing_label_groups(groups, []) == groups

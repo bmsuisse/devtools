@@ -67,6 +67,8 @@ def test_pr_create_passes_labels_and_prints_web_link_for_ado(monkeypatch) -> Non
     labels_idx = captured_cmd.index("--labels")
     assert captured_cmd[labels_idx + 1 : labels_idx + 3] == ["bug", "urgent"]
     assert "https://dev.azure.com/bmeurope/BMS%20-%20CCMT2/_git/BMS%20-%20CCMT2/pullrequest/456" in result.output
+    assert "PR #456: feat: widgets" in result.output
+    assert '"pullRequestId"' not in result.output  # the raw `az` JSON blob must not be dumped on success
 
 
 def test_pr_create_passes_labels_and_prints_web_link_for_github(monkeypatch) -> None:

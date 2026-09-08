@@ -28,9 +28,14 @@ def required_label_groups(start: Path | None = None) -> dict[str, list[str]]:
 
 
 def missing_label_groups(groups: dict[str, list[str]], labels: list[str]) -> dict[str, list[str]]:
-    """The subset of `groups` for which none of `labels` is a member."""
-    given = set(labels)
-    return {name: choices for name, choices in groups.items() if given.isdisjoint(choices)}
+    """The subset of `groups` for which none of `labels` is a member.
+
+    Matched case-insensitively — this is a local config check independent of
+    whatever casing rules GitHub/Azure DevOps apply to the label text that
+    actually gets sent through unchanged.
+    """
+    given = {label.lower() for label in labels}
+    return {name: choices for name, choices in groups.items() if given.isdisjoint(choice.lower() for choice in choices)}
 
 
 def format_missing_groups_error(missing: dict[str, list[str]]) -> str:

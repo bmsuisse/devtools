@@ -146,15 +146,26 @@ def pr_create(
         ]
         r = subprocess.run(cmd, capture_output=True, encoding="utf-8")
         returncode = r.returncode
-        if isinstance(r.stdout, str) and r.stdout.strip():
-            print(r.stdout.rstrip())
         if isinstance(r.stderr, str) and r.stderr.strip():
             print(r.stderr.strip(), file=sys.stderr)
-        if returncode == 0:
+
+        pr_json = None
+        if returncode == 0 and isinstance(r.stdout, str):
             try:
-                pr_url = pr_build.pr_web_url(remote, json.loads(r.stdout)["pullRequestId"])
-            except (json.JSONDecodeError, KeyError, TypeError):
+                pr_json = json.loads(r.stdout)
+            except json.JSONDecodeError:
+                pr_json = None
+
+        if pr_json is not None:
+            # Concise summary instead of the raw `az` JSON blob — the web
+            # link printed below is the part a human actually needs.
+            print(f"PR #{pr_json.get('pullRequestId', '?')}: {pr_json.get('title', '?')}")
+            try:
+                pr_url = pr_build.pr_web_url(remote, pr_json["pullRequestId"])
+            except (KeyError, TypeError):
                 pr_url = None
+        elif isinstance(r.stdout, str) and r.stdout.strip():
+            print(r.stdout.rstrip())
         session = requests.Session()
         session.headers.update(auth_header(pat))
         build_policy = pr_build.has_build_policy(session, remote, target)
