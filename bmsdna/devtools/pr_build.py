@@ -30,6 +30,13 @@ def _base_url(remote: AdoRemote) -> str:
     return f"https://dev.azure.com/{remote.org}/{quote(remote.project, safe='')}"
 
 
+def pr_web_url(remote: AdoRemote, pr_id: int) -> str:
+    """The browsable web page for a PR, as opposed to its REST API URL (which is all the
+    `az repos pr create` JSON response otherwise gives you).
+    """
+    return f"{_base_url(remote)}/_git/{quote(remote.repo, safe='')}/pullrequest/{pr_id}"
+
+
 # PolicyType.id for the built-in "Build" policy (branch policy requiring a
 # build to pass) — same GUID across every ADO organization.
 BUILD_POLICY_TYPE_ID = "0609b952-1397-4640-95ec-e00a01b2c241"

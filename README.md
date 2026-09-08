@@ -68,6 +68,27 @@ title/body from commit info so it never blocks on an interactive prompt).
 Extra arguments pass through either way, e.g.
 `bdt pr create --target main -- --title "..."`.
 
+`--label` (repeatable) applies labels to the PR on either host: on GitHub
+these map to `gh pr create --label`, so the label must already exist on the
+repo (`gh label create`); on Azure DevOps they map to `az repos pr create
+--labels`, which are freeform and get created on the fly. A successful
+create prints the PR's web/GUI link (not just the REST API URL Azure DevOps'
+`az` output otherwise gives you).
+
+`[tool.bdt.pr.required_labels]` in pyproject.toml can require at least one
+label from each named group before the PR is created — checked locally
+(no `gh`/`az` call happens if a group isn't satisfied):
+
+```toml
+[tool.bdt.pr.required_labels]
+type = ["bug", "feature", "chore"]
+risk = ["breaking", "non-breaking"]
+```
+
+With the above, `bdt pr create --label feature --label breaking` passes,
+but `bdt pr create --label feature` fails with a message naming the unmet
+group (`risk`) and its allowed choices.
+
 If `--target` has a build policy configured (an Azure DevOps Build policy,
 or a GitHub branch protection rule requiring status checks), a successful
 create prints a reminder to run `bdt pr status` afterward to check whether
