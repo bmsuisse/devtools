@@ -6,12 +6,13 @@ that happens to point at a *different* ADO project than the current repo's
 own silently makes `az` look for the PR's repository in the wrong project.
 """
 
+import json
 from unittest.mock import MagicMock
 
 from typer.testing import CliRunner
 
 from bmsdna.devtools.cli import app
-from bmsdna.devtools.gitrepo import AdoRemote
+from bmsdna.devtools.gitrepo import AdoRemote, GitHubRemote
 
 runner = CliRunner()
 
@@ -41,3 +42,51 @@ def test_pr_create_passes_organization_project_repository_to_az(monkeypatch) -> 
     assert captured_cmd[captured_cmd.index("--project") + 1] == "BMS - CCMT2"
     assert "--repository" in captured_cmd
     assert captured_cmd[captured_cmd.index("--repository") + 1] == "BMS - CCMT2"
+
+
+def test_pr_create_passes_labels_and_prints_web_link_for_ado(monkeypatch) -> None:
+    remote = AdoRemote("bmeurope", "BMS - CCMT2", "BMS - CCMT2")
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
+    monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feature-x")
+    monkeypatch.setattr("bmsdna.devtools.cli.require_az", lambda: "az")
+    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.pr_build.has_build_policy", lambda session, remote, target: False)
+
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout=json.dumps({"pullRequestId": 456, "title": "feat: widgets"}), stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.cli.subprocess.run", fake_run)
+
+    result = runner.invoke(app, ["pr", "create", "--target", "test", "--label", "bug", "--label", "urgent"])
+
+    assert result.exit_code == 0, result.output
+    assert "--labels" in captured_cmd
+    labels_idx = captured_cmd.index("--labels")
+    assert captured_cmd[labels_idx + 1 : labels_idx + 3] == ["bug", "urgent"]
+    assert "https://dev.azure.com/bmeurope/BMS%20-%20CCMT2/_git/BMS%20-%20CCMT2/pullrequest/456" in result.output
+
+
+def test_pr_create_passes_labels_and_prints_web_link_for_github(monkeypatch) -> None:
+    remote = GitHubRemote("owner", "repo")
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
+    monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feature-x")
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.has_build_policy", lambda gh, target: False)
+
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/pull/7\n", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    result = runner.invoke(app, ["pr", "create", "--target", "main", "--label", "bug"])
+
+    assert result.exit_code == 0, result.output
+    assert captured_cmd.count("--label") == 1
+    assert captured_cmd[captured_cmd.index("--label") + 1] == "bug"
+    assert "https://github.com/owner/repo/pull/7" in result.output

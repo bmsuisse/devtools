@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from collections.abc import Callable
@@ -90,6 +91,12 @@ def _attach_screenshots(attach: Callable[[], None]) -> None:
 def pr_create(
     target: str = typer.Option("main", "--target", help="Target branch (e.g. main, test)"),
     draft: bool = typer.Option(False, "--draft", help="Create the PR as a draft (not ready for review)"),
+    label: list[str] = typer.Option(
+        [],
+        "--label",
+        help="Label to apply to the PR (repeatable). On GitHub the label must already exist on the repo "
+        "(`gh label create`); Azure DevOps PR labels are freeform and created on the fly.",
+    ),
     screenshot: list[str] = typer.Option(
         [], "--screenshot", help="Path to an image to attach to the PR description (repeatable)"
     ),
@@ -108,9 +115,10 @@ def pr_create(
 
     remote = current_remote()
     source_branch = current_branch()
+    pr_url: str | None = None
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
-        returncode = gh_pr.create(gh, target, args or [], draft=draft)
+        returncode, pr_url = gh_pr.create(gh, target, args or [], draft=draft, labels=label)
         build_policy = gh_pr.has_build_policy(gh, target)
         if returncode == 0 and screenshot:
             _attach_screenshots(lambda: gh_pr.add_screenshots(gh, remote.owner, remote.repo, source_branch, screenshot))
@@ -125,10 +133,22 @@ def pr_create(
             "--target-branch", target,
             "--source-branch", source_branch,
             "--auto-complete", "false",
+            "--output", "json",
             *(["--draft", "true"] if draft else []),
+            *(["--labels", *label] if label else []),
             *(args or []),
         ]
-        returncode = subprocess.run(cmd).returncode
+        r = subprocess.run(cmd, capture_output=True, encoding="utf-8")
+        returncode = r.returncode
+        if isinstance(r.stdout, str) and r.stdout.strip():
+            print(r.stdout.rstrip())
+        if isinstance(r.stderr, str) and r.stderr.strip():
+            print(r.stderr.strip(), file=sys.stderr)
+        if returncode == 0:
+            try:
+                pr_url = pr_build.pr_web_url(remote, json.loads(r.stdout)["pullRequestId"])
+            except (json.JSONDecodeError, KeyError, TypeError):
+                pr_url = None
         session = requests.Session()
         session.headers.update(auth_header(pat))
         build_policy = pr_build.has_build_policy(session, remote, target)
@@ -139,6 +159,9 @@ def pr_create(
 
             _attach_screenshots(_add)
         publish_hint = "`az repos pr update --id <PR-ID> --draft false`"
+
+    if returncode == 0 and pr_url:
+        print(f"\n{pr_url}")
 
     if returncode == 0 and draft:
         print(f"\nCreated as a draft PR. Run `bdt pr publish` (or {publish_hint}) to mark it ready for review.")

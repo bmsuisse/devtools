@@ -140,15 +140,32 @@ def run(gh: str, wait: bool) -> None:
         return
 
 
-def create(gh: str, target: str, extra_args: list[str], draft: bool = False) -> int:
+def create(gh: str, target: str, extra_args: list[str], draft: bool = False, labels: list[str] | None = None) -> tuple[int, str | None]:
     """Create a GitHub PR from the current branch into `target`.
 
     --fill autofills title/body from commit info so this never blocks on an
     interactive prompt; pass --title/--body in extra_args to override (gh
     lets explicit values take precedence over --fill).
+
+    `-l/--label` labels must already exist on the repo (`gh label create`) —
+    unlike Azure DevOps PR labels, GitHub rejects a label name it doesn't
+    already know about.
+
+    Returns (returncode, web_url) — on success `gh pr create` prints the
+    PR's web URL as its only stdout line, which is what a human needs to
+    open it; on failure the url is `None` and the CLI's stderr is
+    surfaced to ours.
     """
-    cmd = [gh, "pr", "create", "--base", target, "--fill", *(["--draft"] if draft else []), *extra_args]
-    return subprocess.run(cmd).returncode
+    cmd = [gh, "pr", "create", "--base", target, "--fill", *(["--draft"] if draft else [])]
+    for label in labels or []:
+        cmd += ["--label", label]
+    cmd += extra_args
+    r = subprocess.run(cmd, capture_output=True, encoding="utf-8")
+    if r.stderr:
+        print(r.stderr.strip(), file=sys.stderr)
+    if r.returncode != 0:
+        return r.returncode, None
+    return r.returncode, r.stdout.strip() or None
 
 
 def publish(gh: str) -> None:

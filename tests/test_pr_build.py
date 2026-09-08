@@ -1,6 +1,7 @@
 import pytest
 
-from bmsdna.devtools.pr_build import merge_conflict_message, policy_configs_include_branch
+from bmsdna.devtools.gitrepo import AdoRemote
+from bmsdna.devtools.pr_build import merge_conflict_message, policy_configs_include_branch, pr_web_url
 
 REPO_ID = "0cd3a822-389e-416e-a4fa-b73f988c2930"
 
@@ -95,3 +96,8 @@ def test_policy_configs_include_branch_matches_default_branch_scope() -> None:
     }
     assert policy_configs_include_branch([default_branch_policy], REPO_ID, "main", "refs/heads/main") is True
     assert policy_configs_include_branch([default_branch_policy], REPO_ID, "test", "refs/heads/main") is False
+
+
+def test_pr_web_url_is_the_browsable_page_not_the_rest_api_url() -> None:
+    remote = AdoRemote("bmeurope", "BMS - CCMT2", "BMS - CCMT2")
+    assert pr_web_url(remote, 123) == "https://dev.azure.com/bmeurope/BMS%20-%20CCMT2/_git/BMS%20-%20CCMT2/pullrequest/123"

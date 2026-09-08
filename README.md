@@ -68,6 +68,13 @@ title/body from commit info so it never blocks on an interactive prompt).
 Extra arguments pass through either way, e.g.
 `bdt pr create --target main -- --title "..."`.
 
+`--label` (repeatable) applies labels to the PR on either host: on GitHub
+these map to `gh pr create --label`, so the label must already exist on the
+repo (`gh label create`); on Azure DevOps they map to `az repos pr create
+--labels`, which are freeform and get created on the fly. A successful
+create prints the PR's web/GUI link (not just the REST API URL Azure DevOps'
+`az` output otherwise gives you).
+
 If `--target` has a build policy configured (an Azure DevOps Build policy,
 or a GitHub branch protection rule requiring status checks), a successful
 create prints a reminder to run `bdt pr status` afterward to check whether

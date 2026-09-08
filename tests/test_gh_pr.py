@@ -1,6 +1,8 @@
+from unittest.mock import MagicMock
+
 import pytest
 
-from bmsdna.devtools.gh_pr import check_bucket, check_label, merge_conflict_message, protection_requires_status_checks
+from bmsdna.devtools.gh_pr import check_bucket, check_label, create, merge_conflict_message, protection_requires_status_checks
 
 # Real statusCheckRollup entries captured from `gh pr view 13902 -R cli/cli --json statusCheckRollup`.
 COMPLETED_SUCCESS_CHECK_RUN = {
@@ -70,3 +72,33 @@ def test_protection_requires_status_checks_true_when_configured() -> None:
 @pytest.mark.parametrize("protection", [{}, {"required_status_checks": None}])
 def test_protection_requires_status_checks_false_when_absent(protection: dict) -> None:
     assert protection_requires_status_checks(protection) is False
+
+
+def test_create_passes_repeatable_label_flags(monkeypatch) -> None:
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/pull/7\n", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    returncode, url = create("gh", "main", [], labels=["bug", "urgent"])
+
+    assert returncode == 0
+    assert url == "https://github.com/owner/repo/pull/7"
+    assert captured_cmd.count("--label") == 2
+    assert captured_cmd[captured_cmd.index("--label") + 1] == "bug"
+
+
+def test_create_returns_none_url_on_failure(monkeypatch, capsys) -> None:
+    def fake_run(cmd, **kwargs):
+        return MagicMock(returncode=1, stdout="", stderr="label 'nope' not found")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    returncode, url = create("gh", "main", [], labels=["nope"])
+
+    assert returncode == 1
+    assert url is None
+    assert "not found" in capsys.readouterr().err
