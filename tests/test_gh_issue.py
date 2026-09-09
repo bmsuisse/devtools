@@ -25,12 +25,18 @@ def test_parse_comment_id_absent() -> None:
 
 
 def test_build_search_query_keywords_only() -> None:
-    assert build_search_query(["auth", "timeout"], None) == "auth timeout"
+    assert build_search_query(["auth", "timeout"], None) == "auth timeout sort:updated-desc"
 
 
 def test_build_search_query_adds_updated_qualifier() -> None:
-    assert build_search_query(["auth"], "2026-08-10") == "auth updated:>=2026-08-10"
+    assert build_search_query(["auth"], "2026-08-10") == "auth sort:updated-desc updated:>=2026-08-10"
 
 
 def test_build_search_query_no_keywords_still_scopes_by_date() -> None:
-    assert build_search_query([], "2026-08-10") == "updated:>=2026-08-10"
+    assert build_search_query([], "2026-08-10") == "sort:updated-desc updated:>=2026-08-10"
+
+
+def test_build_search_query_always_sorts_by_updated_desc() -> None:
+    # search()'s "most recently updated first" ordering depends on this — GitHub's
+    # default --search order is text relevance, not recency.
+    assert "sort:updated-desc" in build_search_query(["auth"], None)

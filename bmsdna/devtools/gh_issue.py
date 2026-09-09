@@ -85,9 +85,10 @@ def create(
 def build_search_query(keywords: list[str], since: str | None) -> str:
     """The `gh issue list --search` query string: keywords ANDed together (GitHub search's
     implicit default), optionally scoped to issues updated on/after `since` (an ISO
-    'YYYY-MM-DD' date) via the `updated:` qualifier.
+    'YYYY-MM-DD' date) via the `updated:` qualifier. Always sorted `updated:desc` — GitHub's
+    default search order is text-relevance, not recency, which `search()`'s ordering relies on.
     """
-    parts = list(keywords)
+    parts = [*keywords, "sort:updated-desc"]
     if since:
         parts.append(f"updated:>={since}")
     return " ".join(parts)
