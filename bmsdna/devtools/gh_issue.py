@@ -18,6 +18,7 @@ hosts).
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -79,6 +80,35 @@ def create(
         new_body = build_screenshots_section(body, images)
         _run_gh(gh, ["issue", "edit", number, "--body", new_body])
         print(f"Attached {len(screenshot_paths)} screenshot(s) to issue #{number}")
+
+
+def build_search_query(keywords: list[str], since: str | None) -> str:
+    """The `gh issue list --search` query string: keywords ANDed together (GitHub search's
+    implicit default), optionally scoped to issues updated on/after `since` (an ISO
+    'YYYY-MM-DD' date) via the `updated:` qualifier. Always sorted `updated:desc` — GitHub's
+    default search order is text-relevance, not recency, which `search()`'s ordering relies on.
+    `keywords` may be empty, to list issues without a text filter.
+    """
+    parts = [*keywords, "sort:updated-desc"]
+    if since:
+        parts.append(f"updated:>={since}")
+    return " ".join(parts)
+
+
+def search(gh: str, keywords: list[str], since: str | None, limit: int, state: str = "open") -> list[dict]:
+    """Search (or, with no keywords, just list) issues by state, most recently updated first.
+
+    `state` is `gh issue list`'s own `open|closed|all` flag, not a search qualifier.
+    """
+    query = build_search_query(keywords, since)
+    out = _run_gh(gh, ["issue", "list", "--search", query, "--state", state, "--limit", str(limit), "--json", "number,title,url,state"])
+    items = json.loads(out) if out else []
+    for item in items:
+        print(f"#{item['number']} [{item['state']}] {item['title']}")
+        print(item["url"])
+    if not items:
+        print("No matching issues found.")
+    return items
 
 
 def update(
