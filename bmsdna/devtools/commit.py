@@ -55,23 +55,24 @@ def _pre_commit_hook_installed(cwd: str | None) -> bool:
     return os.path.isfile(hook_path) and os.access(hook_path, os.X_OK)
 
 
-def _maybe_run_prek(cwd: str | None, files: list[str]) -> str | None:
-    """A `prek.toml` without an installed `pre-commit` git hook means checks
-    the repo expects to run on every commit silently never run (nobody did
-    `prek install`). As a stand-in, run `prek` directly against the files
-    being committed here instead. Returns prek's failure output, or None if
-    there was nothing to do or it passed."""
+def _maybe_install_prek_hook(cwd: str | None) -> tuple[bool, str | None]:
+    """A `prek.toml` without an installed `pre-commit` git hook means the
+    checks it configures silently never run (nobody did `prek install`).
+    Install the hook here so this and future commits go through git's normal
+    hook mechanism, instead of running the checks out-of-band ourselves.
+    Returns (installed, error): `installed` is True if we just installed the
+    hook; `error` holds `prek install`'s failure output, if any."""
     root = cwd or "."
     if _pre_commit_hook_installed(cwd):
-        return None
+        return False, None
     if not os.path.isfile(os.path.join(root, "prek.toml")):
-        return None
-    if not files or shutil.which("prek") is None:
-        return None
-    r = _run(["prek", "run", "--files", *files], cwd=cwd)
+        return False, None
+    if shutil.which("prek") is None:
+        return False, None
+    r = _run(["prek", "install"], cwd=cwd)
     if r.returncode != 0:
-        return (r.stdout + r.stderr).strip()
-    return None
+        return False, (r.stdout + r.stderr).strip()
+    return True, None
 
 
 def _present_or_staged_deletion(path: str, subrepos: list[str]) -> bool:
@@ -183,14 +184,16 @@ def commit_and_push(
         print(f"  {'✓' if ok else '✗'} {label}", file=sys.stdout if ok else sys.stderr)
         return ok
 
-    def maybe_run_prek(cwd: str | None, label: str, repo_files: list[str]) -> None:
+    def maybe_run_prek(cwd: str | None, label: str) -> None:
         if no_verify:
             return
-        failure = _maybe_run_prek(cwd, repo_files)
+        installed, failure = _maybe_install_prek_hook(cwd)
         if failure is not None:
-            warning = f"prek checks failed in {label} (no pre-commit hook was installed there, so prek was run directly as a stand-in): {failure}"
+            warning = f"prek.toml found in {label} but installing its pre-commit hook failed: {failure}"
             warnings.append(warning)
             print(f"  ⚠ {warning}", file=sys.stderr, flush=True)
+        elif installed:
+            print(f"  ✓ installed missing prek pre-commit hook in {label}", flush=True)
 
     missing = [f for f in files if not _present_or_staged_deletion(f, subrepos)]
     if not check(not missing, "files exist (or are a staged deletion)"):
@@ -228,7 +231,7 @@ def commit_and_push(
         if not subrepo_files:
             continue
 
-        maybe_run_prek(subrepo, f"{subrepo} subrepo", subrepo_files)
+        maybe_run_prek(subrepo, f"{subrepo} subrepo")
         ok, failure = _commit_with_retry(message, subrepo_files, cwd=subrepo, no_verify=no_verify)
         if failure is not None:
             return CommitResult(
@@ -251,7 +254,7 @@ def commit_and_push(
         if ok:
             main_files.append(subrepo)
 
-    maybe_run_prek(None, "repo", main_files)
+    maybe_run_prek(None, "repo")
     ok, failure = _commit_with_retry(message, main_files, cwd=None, no_verify=no_verify)
     if failure is not None:
         return CommitResult(

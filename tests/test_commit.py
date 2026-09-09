@@ -144,9 +144,9 @@ def test_commit_and_push_warns_on_no_verify(tmp_path, monkeypatch):
     assert any("--no-verify" in w for w in result.warnings)
 
 
-def test_commit_and_push_no_verify_skips_prek_fallback(tmp_path, monkeypatch):
+def test_commit_and_push_no_verify_skips_prek_hook_install(tmp_path, monkeypatch):
     """Even if a prek.toml is sitting there with no hook installed, --no-verify
-    means skip all verification -- prek must not be invoked either."""
+    means skip all verification -- the hook must not get installed either."""
     init_repo(tmp_path)
     (tmp_path / "a.txt").write_text("hello")
     (tmp_path / "prek.toml").write_text("")
@@ -162,12 +162,14 @@ def test_commit_and_push_no_verify_skips_prek_fallback(tmp_path, monkeypatch):
 
     assert result.committed is True
     assert not any("prek" in w for w in result.warnings)
+    assert not (tmp_path / ".git" / "hooks" / "pre-commit").exists()
 
 
 @pytest.mark.skipif(shutil.which("prek") is None, reason="prek is not installed")
-def test_commit_and_push_runs_prek_when_hook_missing(tmp_path, monkeypatch):
+def test_commit_and_push_installs_prek_hook_when_missing(tmp_path, monkeypatch):
     """A prek.toml with no pre-commit hook installed means `git commit` alone
-    would silently skip the checks it configures -- so run prek directly."""
+    would silently skip the checks it configures -- install the hook so git's
+    normal mechanism picks it up, the regular way."""
     init_repo(tmp_path)
     (tmp_path / "a.txt").write_text("hello")
     (tmp_path / "prek.toml").write_text(
@@ -182,4 +184,8 @@ def test_commit_and_push_runs_prek_when_hook_missing(tmp_path, monkeypatch):
         require_feature_branch=False,
     )
 
-    assert any("prek" in w for w in result.warnings)
+    assert (tmp_path / ".git" / "hooks" / "pre-commit").exists()
+    # The now-installed hook runs via git's normal commit flow and fails,
+    # same as any other pre-commit hook failure -- not a `warnings` entry.
+    assert result.committed is False
+    assert result.error
