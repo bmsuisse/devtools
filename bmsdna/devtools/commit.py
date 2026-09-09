@@ -63,9 +63,9 @@ def _maybe_install_prek_hook(cwd: str | None) -> tuple[bool, str | None]:
     Returns (installed, error): `installed` is True if we just installed the
     hook; `error` holds `prek install`'s failure output, if any."""
     root = cwd or "."
-    if _pre_commit_hook_installed(cwd):
-        return False, None
     if not os.path.isfile(os.path.join(root, "prek.toml")):
+        return False, None
+    if _pre_commit_hook_installed(cwd):
         return False, None
     if shutil.which("prek") is None:
         return False, None
