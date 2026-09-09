@@ -529,7 +529,7 @@ def commit(
     message: str,
     files: list[str],
     json_output: bool = typer.Option(False, "--json", help="Structured JSON output for AI-agent callers"),
-    no_verify: bool = typer.Option(False, "--no-verify", help="Skip pre-commit hooks"),
+    no_verify: bool = typer.Option(False, "--no-verify", help="Skip pre-commit hooks (not intended for regular use; prints a warning)"),
     subrepo: list[str] = typer.Option([], "--subrepo", help="Submodule directory name to split matching files into (repeatable)"),
     skip_message_check: bool = typer.Option(False, "--skip-message-check", help="Don't require a conventional-commit-style message"),
     allow_main: bool = typer.Option(False, "--allow-main", help="Allow committing directly on main/master"),
