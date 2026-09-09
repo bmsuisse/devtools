@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -40,6 +41,39 @@ def _staged_deletion(path: str, cwd: str | None = None) -> bool:
     return r.returncode == 0 and path in r.stdout.splitlines()
 
 
+def _git_dir(cwd: str | None) -> str:
+    """Absolute path to the repo's git dir (handles worktrees/submodules,
+    where it isn't simply `<cwd>/.git`)."""
+    root = cwd or "."
+    r = _run(["git", "rev-parse", "--git-dir"], cwd=cwd)
+    git_dir = r.stdout.strip() if r.returncode == 0 else ".git"
+    return git_dir if os.path.isabs(git_dir) else os.path.join(root, git_dir)
+
+
+def _pre_commit_hook_installed(cwd: str | None) -> bool:
+    hook_path = os.path.join(_git_dir(cwd), "hooks", "pre-commit")
+    return os.path.isfile(hook_path) and os.access(hook_path, os.X_OK)
+
+
+def _maybe_run_prek(cwd: str | None, files: list[str]) -> str | None:
+    """A `prek.toml` without an installed `pre-commit` git hook means checks
+    the repo expects to run on every commit silently never run (nobody did
+    `prek install`). As a stand-in, run `prek` directly against the files
+    being committed here instead. Returns prek's failure output, or None if
+    there was nothing to do or it passed."""
+    root = cwd or "."
+    if _pre_commit_hook_installed(cwd):
+        return None
+    if not os.path.isfile(os.path.join(root, "prek.toml")):
+        return None
+    if not files or shutil.which("prek") is None:
+        return None
+    r = _run(["prek", "run", "--files", *files], cwd=cwd)
+    if r.returncode != 0:
+        return (r.stdout + r.stderr).strip()
+    return None
+
+
 def _present_or_staged_deletion(path: str, subrepos: list[str]) -> bool:
     if os.path.exists(path):
         return True
@@ -60,6 +94,7 @@ class CommitResult:
     commit_sha: str | None = None
     error: str | None = None
     hint: str | None = None
+    warnings: list[str] = field(default_factory=list)
     extra: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
@@ -72,6 +107,7 @@ class CommitResult:
             "commit_sha": self.commit_sha,
             "error": self.error,
             "hint": self.hint,
+            "warnings": self.warnings,
         }
         d.update(self.extra)
         return d
@@ -134,11 +170,27 @@ def commit_and_push(
     # os.path.exists and git accept either separator fine on Windows).
     files = [f.replace("\\", "/") for f in files]
     subrepos = subrepos or []
+    warnings: list[str] = []
+
+    if no_verify:
+        warning = "--no-verify skips pre-commit hooks — this is not the intended way to commit; use only when you know the hooks are getting in the way for a good reason."
+        warnings.append(warning)
+        print(f"  ⚠ {warning}", file=sys.stderr, flush=True)
+
     print("pre-flight checks:", flush=True)
 
     def check(ok: bool, label: str) -> bool:
         print(f"  {'✓' if ok else '✗'} {label}", file=sys.stdout if ok else sys.stderr)
         return ok
+
+    def maybe_run_prek(cwd: str | None, label: str, repo_files: list[str]) -> None:
+        if no_verify:
+            return
+        failure = _maybe_run_prek(cwd, repo_files)
+        if failure is not None:
+            warning = f"prek checks failed in {label} (no pre-commit hook was installed there, so prek was run directly as a stand-in): {failure}"
+            warnings.append(warning)
+            print(f"  ⚠ {warning}", file=sys.stderr, flush=True)
 
     missing = [f for f in files if not _present_or_staged_deletion(f, subrepos)]
     if not check(not missing, "files exist (or are a staged deletion)"):
@@ -146,6 +198,7 @@ def commit_and_push(
             False, False, False, message, files,
             error=f"File not found: {missing[0]} — did you typo the path? Run `git status` to see changed files",
             hint=f"Run `git status` to see what files are actually changed. Missing: {missing}",
+            warnings=warnings,
         )
 
     msg_ok = not require_message_quality or (len(message) >= 20 and ":" in message)
@@ -154,6 +207,7 @@ def commit_and_push(
             False, False, False, message, files,
             error=f"Commit message too short or missing type prefix (e.g. 'feat(x): ...') — got: {message!r}",
             hint="Use conventional commits format: 'feat(scope): description' or 'fix: description'",
+            warnings=warnings,
         )
 
     current_branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
@@ -163,6 +217,7 @@ def commit_and_push(
             False, False, False, message, files,
             error=f"Direct push to {current_branch} blocked — create a feature branch first",
             hint="Run `git checkout -b feat/my-branch` to create a feature branch first.",
+            warnings=warnings,
         )
 
     main_files = list(files)
@@ -173,12 +228,14 @@ def commit_and_push(
         if not subrepo_files:
             continue
 
+        maybe_run_prek(subrepo, f"{subrepo} subrepo", subrepo_files)
         ok, failure = _commit_with_retry(message, subrepo_files, cwd=subrepo, no_verify=no_verify)
         if failure is not None:
             return CommitResult(
                 False, False, False, message, subrepo_files,
                 error=(failure.stdout + failure.stderr).strip(),
                 hint="Pre-commit hook may have failed in the subrepo. Check the error output above.",
+                warnings=warnings,
             )
         if ok and not _in_sandbox():
             pr = _run(["git", "push"], cwd=subrepo)
@@ -188,23 +245,26 @@ def commit_and_push(
                     commit_sha=_sha(cwd=subrepo),
                     error=(pr.stdout + pr.stderr).strip(),
                     hint=f"Push failed. Try `git pull --rebase` in the {subrepo} submodule.",
+                    warnings=warnings,
                 )
             print(f"  ✓ {subrepo} subrepo pushed", flush=True)
         if ok:
             main_files.append(subrepo)
 
+    maybe_run_prek(None, "repo", main_files)
     ok, failure = _commit_with_retry(message, main_files, cwd=None, no_verify=no_verify)
     if failure is not None:
         return CommitResult(
             False, False, False, message, files,
             error=(failure.stdout + failure.stderr).strip(),
             hint="Pre-commit hook may have reformatted files and failed. Check output.",
+            warnings=warnings,
         )
     committed = ok
     print("  ✓ committed", flush=True)
 
     if _in_sandbox():
-        return CommitResult(True, committed, False, message, files, commit_sha=_sha())
+        return CommitResult(True, committed, False, message, files, commit_sha=_sha(), warnings=warnings)
 
     pr = _run(["git", "push"])
     if pr.returncode != 0:
@@ -213,10 +273,11 @@ def commit_and_push(
             commit_sha=_sha(),
             error=(pr.stdout + pr.stderr).strip(),
             hint="Push rejected. Run `git pull --rebase`, resolve conflicts, then retry.",
+            warnings=warnings,
         )
 
     print("  ✓ pushed", flush=True)
-    return CommitResult(True, committed, True, message, files, commit_sha=_sha())
+    return CommitResult(True, committed, True, message, files, commit_sha=_sha(), warnings=warnings)
 
 
 def emit(result: CommitResult, *, use_json: bool) -> None:

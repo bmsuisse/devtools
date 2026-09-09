@@ -1,4 +1,7 @@
+import shutil
 import subprocess
+
+import pytest
 
 from bmsdna.devtools.commit import commit_and_push
 
@@ -122,3 +125,61 @@ def test_commit_and_push_allows_staged_deletion_in_subrepo(tmp_path, monkeypatch
     )
 
     assert result.error != "File not found: database/schema.sql — did you typo the path? Run `git status` to see changed files"
+
+
+def test_commit_and_push_warns_on_no_verify(tmp_path, monkeypatch):
+    init_repo(tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+    monkeypatch.chdir(tmp_path)
+
+    result = commit_and_push(
+        "feat(x): add a.txt",
+        ["a.txt"],
+        no_verify=True,
+        require_message_quality=False,
+        require_feature_branch=False,
+    )
+
+    assert result.committed is True
+    assert any("--no-verify" in w for w in result.warnings)
+
+
+def test_commit_and_push_no_verify_skips_prek_fallback(tmp_path, monkeypatch):
+    """Even if a prek.toml is sitting there with no hook installed, --no-verify
+    means skip all verification -- prek must not be invoked either."""
+    init_repo(tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+    (tmp_path / "prek.toml").write_text("")
+    monkeypatch.chdir(tmp_path)
+
+    result = commit_and_push(
+        "feat(x): add a.txt",
+        ["a.txt", "prek.toml"],
+        no_verify=True,
+        require_message_quality=False,
+        require_feature_branch=False,
+    )
+
+    assert result.committed is True
+    assert not any("prek" in w for w in result.warnings)
+
+
+@pytest.mark.skipif(shutil.which("prek") is None, reason="prek is not installed")
+def test_commit_and_push_runs_prek_when_hook_missing(tmp_path, monkeypatch):
+    """A prek.toml with no pre-commit hook installed means `git commit` alone
+    would silently skip the checks it configures -- so run prek directly."""
+    init_repo(tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+    (tmp_path / "prek.toml").write_text(
+        '[[repos]]\nrepo = "local"\nhooks = [{ id = "always-fail", name = "always-fail", entry = "false", language = "system" }]\n'
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = commit_and_push(
+        "feat(x): add a.txt",
+        ["a.txt", "prek.toml"],
+        require_message_quality=False,
+        require_feature_branch=False,
+    )
+
+    assert any("prek" in w for w in result.warnings)
