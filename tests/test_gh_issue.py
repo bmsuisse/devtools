@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from bmsdna.devtools.gh_issue import build_search_query, parse_comment_id, parse_issue_number, search
+from bmsdna.devtools.gh_issue import build_search_query, parse_comment_id, parse_issue_number, search, update
 
 
 @pytest.mark.parametrize(
@@ -70,3 +70,43 @@ def test_search_passes_through_requested_state(monkeypatch) -> None:
     search("gh", ["auth"], None, 10, state="all")
 
     assert captured_cmd[captured_cmd.index("--state") + 1] == "all"
+
+
+def _run_update_capturing_commands(monkeypatch, **update_kwargs) -> list[list[str]]:
+    captured_cmds: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmds.append(cmd)
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
+    update("gh", 42, **update_kwargs)
+    return captured_cmds
+
+
+@pytest.mark.parametrize("state", ["Closed", "Done", "completed"])
+def test_update_closes_as_completed_for_done_states(monkeypatch, state: str) -> None:
+    cmds = _run_update_capturing_commands(monkeypatch, state=state)
+    assert cmds == [["gh", "issue", "close", "42", "--reason", "completed"]]
+
+
+@pytest.mark.parametrize("state", ["Removed", "Not Planned", "wontfix"])
+def test_update_closes_as_not_planned_for_removed_states(monkeypatch, state: str) -> None:
+    cmds = _run_update_capturing_commands(monkeypatch, state=state)
+    assert cmds == [["gh", "issue", "close", "42", "--reason", "not planned"]]
+
+
+def test_update_reopens_for_open_state(monkeypatch) -> None:
+    cmds = _run_update_capturing_commands(monkeypatch, state="Open")
+    assert cmds == [["gh", "issue", "reopen", "42"]]
+
+
+def test_update_comments_exact_state_when_unsupported(monkeypatch) -> None:
+    cmds = _run_update_capturing_commands(monkeypatch, state="Active")
+    assert cmds == [["gh", "issue", "comment", "42", "--body", "Requested state change to 'Active', which isn't a valid GitHub issue state — left unchanged."]]
+
+
+def test_update_errors_with_nothing_to_do(monkeypatch) -> None:
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", MagicMock())
+    with pytest.raises(SystemExit):
+        update("gh", 42)

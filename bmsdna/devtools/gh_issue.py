@@ -111,6 +111,39 @@ def search(gh: str, keywords: list[str], since: str | None, limit: int, state: s
     return items
 
 
+_DONE_STATE_NAMES = ("closed", "done", "completed")
+_REMOVED_STATE_NAMES = ("removed", "not planned", "not_planned", "wontfix", "won't fix")
+_OPEN_STATE_NAMES = ("open", "reopened", "reopen")
+
+
+def _set_state(gh: str, number: int, state: str) -> None:
+    """GitHub issues only have two states (open/closed) plus, when closed, a `state_reason` of
+    'completed' or 'not planned' — no per-process-template state names like Azure DevOps. Map the
+    common terminal-state spellings onto that: 'Closed'/'Done'/'Completed' close as completed
+    (GitHub's "done" concept); 'Removed'/'Not Planned'/'Wontfix' close as not planned; 'Open'/
+    'Reopened' reopens. Anything else has no GitHub equivalent — leave the issue's state
+    unchanged and comment with the exact state that was requested, so it isn't silently dropped.
+    """
+    normalized = state.strip().lower()
+    if normalized in _DONE_STATE_NAMES:
+        _run_gh(gh, ["issue", "close", str(number), "--reason", "completed"])
+    elif normalized in _REMOVED_STATE_NAMES:
+        _run_gh(gh, ["issue", "close", str(number), "--reason", "not planned"])
+    elif normalized in _OPEN_STATE_NAMES:
+        _run_gh(gh, ["issue", "reopen", str(number)])
+    else:
+        _run_gh(
+            gh,
+            [
+                "issue",
+                "comment",
+                str(number),
+                "--body",
+                f"Requested state change to '{state}', which isn't a valid GitHub issue state — left unchanged.",
+            ],
+        )
+
+
 def update(
     gh: str,
     number: int,
@@ -118,6 +151,7 @@ def update(
     body: str | None = None,
     add_labels: list[str] | None = None,
     remove_labels: list[str] | None = None,
+    state: str | None = None,
 ) -> None:
     args = ["issue", "edit", str(number)]
     if title is not None:
@@ -128,10 +162,13 @@ def update(
         args += ["--add-label", label]
     for label in remove_labels or []:
         args += ["--remove-label", label]
-    if len(args) == 3:
-        sys.exit("Nothing to update — provide at least one of --title, --description, --label, --remove-label.")
+    if len(args) == 3 and state is None:
+        sys.exit("Nothing to update — provide at least one of --title, --description, --label, --remove-label, --state.")
 
-    _run_gh(gh, args)
+    if len(args) > 3:
+        _run_gh(gh, args)
+    if state is not None:
+        _set_state(gh, number, state)
     print(f"Updated issue #{number}")
 
 

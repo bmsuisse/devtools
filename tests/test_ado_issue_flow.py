@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from bmsdna.devtools.ado_issue import (
     comment_with_screenshots,
     create,
@@ -212,6 +214,27 @@ def test_search_runs_wiql_then_batch_fetches_matched_fields() -> None:
     assert results == [{"id": 42, "fields": {"System.Title": "Auth timeout bug", "System.State": "Active"}}]
 
 
+def test_search_preserves_wiql_order_when_batch_fetch_returns_a_different_order() -> None:
+    # The batch "list work items by id" endpoint doesn't guarantee it echoes ids back in the
+    # order they were requested — WIQL's ORDER BY [System.ChangedDate] DESC must still win.
+    session = make_session(
+        get_map={
+            "/_apis/wit/workitems": {
+                "value": [
+                    {"id": 50, "fields": {"System.Title": "Oldest match", "System.State": "Active"}},
+                    {"id": 102, "fields": {"System.Title": "Newest match", "System.State": "Active"}},
+                    {"id": 99, "fields": {"System.Title": "Middle match", "System.State": "Active"}},
+                ]
+            }
+        },
+        wiql_ids=[102, 99, 50],
+    )
+
+    results = search(session, REMOTE, ["auth"])
+
+    assert [item["id"] for item in results] == [102, 99, 50]
+
+
 def test_search_skips_batch_fetch_when_no_matches() -> None:
     session = make_session(wiql_ids=[])
 
@@ -246,3 +269,70 @@ def test_search_without_board_does_not_look_up_area_path() -> None:
     search(session, REMOTE, ["auth"])
 
     session.get.assert_not_called()  # no --board given, so no team field values lookup at all
+
+
+def test_update_with_valid_state_includes_it_in_the_patch() -> None:
+    session = make_session(
+        get_map={
+            "/_apis/wit/workitems/42": {"fields": {"System.WorkItemType": "Bug"}},
+            "/_apis/wit/workitemtypes/Bug/states": {"value": [{"name": "New"}, {"name": "Active"}, {"name": "Closed"}]},
+        }
+    )
+
+    update(session, REMOTE, 42, state="Closed")
+
+    ops = session.patch.call_args.kwargs["json"]
+    assert {"op": "add", "path": "/fields/System.State", "value": "Closed"} in ops
+
+
+def test_update_state_uses_canonical_casing_from_valid_states() -> None:
+    session = make_session(
+        get_map={
+            "/_apis/wit/workitems/42": {"fields": {"System.WorkItemType": "Bug"}},
+            "/_apis/wit/workitemtypes/Bug/states": {"value": [{"name": "New"}, {"name": "Closed"}]},
+        }
+    )
+
+    update(session, REMOTE, 42, state="closed")  # lowercase — doesn't match ADO's 'Closed' exactly
+
+    ops = session.patch.call_args.kwargs["json"]
+    assert {"op": "add", "path": "/fields/System.State", "value": "Closed"} in ops
+
+
+def test_update_with_invalid_state_comments_instead_of_failing() -> None:
+    session = make_session(
+        get_map={
+            "/_apis/wit/workitems/42": {"fields": {"System.WorkItemType": "Bug"}},
+            "/_apis/wit/workitemtypes/Bug/states": {"value": [{"name": "New"}, {"name": "Active"}, {"name": "Closed"}]},
+        }
+    )
+
+    result = update(session, REMOTE, 42, state="Done")
+
+    assert result is None
+    session.patch.assert_not_called()
+    comment_url, comment_kwargs = session.post.call_args.args[0], session.post.call_args.kwargs
+    assert comment_url == "https://dev.azure.com/myorg/MyProj/_apis/wit/workItems/42/comments"
+    assert "'Done'" in comment_kwargs["json"]["text"]
+    assert "Bug" in comment_kwargs["json"]["text"]
+
+
+def test_update_with_invalid_state_still_patches_other_given_fields() -> None:
+    session = make_session(
+        get_map={
+            "/_apis/wit/workitems/42": {"fields": {"System.WorkItemType": "Bug"}},
+            "/_apis/wit/workitemtypes/Bug/states": {"value": [{"name": "New"}]},
+        }
+    )
+
+    update(session, REMOTE, 42, title="New title", state="Done")
+
+    ops = session.patch.call_args.kwargs["json"]
+    assert ops == [{"op": "add", "path": "/fields/System.Title", "value": "New title"}]
+
+
+def test_update_with_nothing_given_still_errors() -> None:
+    session = make_session()
+
+    with pytest.raises(SystemExit):
+        update(session, REMOTE, 42)

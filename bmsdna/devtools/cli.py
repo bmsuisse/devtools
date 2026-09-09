@@ -378,7 +378,14 @@ def issue_update(
         r"this is only applied when explicitly given here — it does not fall back to \[tool.bdt.ado].board, "
         "so an unrelated field update can't silently move the item onto a different board.",
     ),
-    state: str | None = typer.Option(None, "--state", help="New work item state, e.g. Active, Resolved, Closed (Azure DevOps only)"),
+    state: str | None = typer.Option(
+        None,
+        "--state",
+        help="New state. Both backends understand 'Open', 'Closed'/'Done' (closes as completed), and "
+        "'Removed'/'Not Planned' (closes as not planned); other values (e.g. Active, Resolved) only "
+        "apply where that exact state name exists for the work item's type — elsewhere the state is "
+        "left unchanged and a comment records what was requested.",
+    ),
     tag: list[str] | None = typer.Option(None, "--tag", help="Replaces all tags (Azure DevOps only, repeatable); omit to leave unchanged"),
     label: list[str] | None = typer.Option(None, "--label", help="Label to add (GitHub only, repeatable)"),
     remove_label: list[str] | None = typer.Option(None, "--remove-label", help="Label to remove (GitHub only, repeatable)"),
@@ -392,7 +399,7 @@ def issue_update(
     """Update an issue / work item's fields (Azure DevOps or GitHub, auto-detected)."""
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_issue.update(require_gh(), number, title, description, label, remove_label)
+        gh_issue.update(require_gh(), number, title, description, label, remove_label, state)
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
