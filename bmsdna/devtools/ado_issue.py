@@ -350,7 +350,10 @@ def run_wiql(session: requests.Session, remote: AdoRemote, wiql: str, top: int) 
 
 
 def get_work_items(session: requests.Session, remote: AdoRemote, ids: list[int]) -> list[dict]:
-    """Batch-fetch Title/State for a set of work item ids. WIQL only returns ids, not field values."""
+    """Batch-fetch Title/State for a set of work item ids, in the given `ids` order — WIQL only
+    returns ids (not field values), and this batch endpoint doesn't guarantee it echoes them back
+    in the order they were requested, so the caller's WIQL `ORDER BY` isn't preserved otherwise.
+    """
     if not ids:
         return []
     r = session.get(
@@ -358,7 +361,8 @@ def get_work_items(session: requests.Session, remote: AdoRemote, ids: list[int])
         params={"ids": ",".join(map(str, ids)), "fields": "System.Title,System.State", "api-version": "7.1"},
     )
     r.raise_for_status()
-    return r.json()["value"]
+    by_id = {item["id"]: item for item in r.json()["value"]}
+    return [by_id[i] for i in ids if i in by_id]
 
 
 def search(
@@ -436,7 +440,14 @@ def update(
     if state is not None:
         work_item_type = get_work_item_type(session, remote, work_item_id)
         valid_states = get_valid_states(session, remote, work_item_type)
-        if not any(state.lower() == s.lower() for s in valid_states):
+        # Azure DevOps state values are case-sensitive, so a case-insensitive match ('closed' for
+        # a project whose actual state is 'Closed') must still PATCH the canonical casing, not the
+        # caller's — otherwise the update fails (or silently sets a technically-invalid value)
+        # despite the validation above having found a match.
+        canonical_state = next((s for s in valid_states if state.lower() == s.lower()), None)
+        if canonical_state is not None:
+            applied_state = canonical_state
+        else:
             add_comment(
                 session,
                 remote,
