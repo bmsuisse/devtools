@@ -264,6 +264,68 @@ def html_url(work_item: dict) -> str | None:
     return work_item.get("_links", {}).get("html", {}).get("href")
 
 
+def edit_url(remote: AdoRemote, work_item_id: int) -> str:
+    return f"{_base_url(remote)}/_workitems/edit/{work_item_id}"
+
+
+def _escape_wiql_string(value: str) -> str:
+    return value.replace("'", "''")
+
+
+def build_search_wiql(keywords: list[str], since: str | None = None) -> str:
+    """WIQL for work items whose Title or Description contains every given keyword (ANDed),
+    optionally restricted to items changed on/after `since` (an ISO 'YYYY-MM-DD' date),
+    most recently changed first.
+
+    `since` is rendered as a UTC ISO 8601 literal (`'YYYY-MM-DDT00:00:00Z'`) — the one
+    DateTime format WIQL accepts regardless of the querying account's locale/date-pattern
+    preference (a bare `'YYYY-MM-DD'` is parsed using that locale's date pattern instead).
+    """
+    clauses = [
+        f"([System.Title] Contains Words '{_escape_wiql_string(k)}' OR [System.Description] Contains Words '{_escape_wiql_string(k)}')"
+        for k in keywords
+    ]
+    if since:
+        clauses.append(f"[System.ChangedDate] >= '{since}T00:00:00Z'")
+    where = " AND ".join(["[System.TeamProject] = @project", *clauses])
+    return f"SELECT [System.Id] FROM WorkItems WHERE {where} ORDER BY [System.ChangedDate] DESC"
+
+
+def run_wiql(session: requests.Session, remote: AdoRemote, wiql: str, top: int) -> list[int]:
+    r = session.post(
+        f"{_base_url(remote)}/_apis/wit/wiql",
+        params={"api-version": "7.1", "$top": top},
+        json={"query": wiql},
+    )
+    r.raise_for_status()
+    return [wi["id"] for wi in r.json()["workItems"]]
+
+
+def get_work_items(session: requests.Session, remote: AdoRemote, ids: list[int]) -> list[dict]:
+    """Batch-fetch Title/State for a set of work item ids. WIQL only returns ids, not field values."""
+    if not ids:
+        return []
+    r = session.get(
+        f"{_base_url(remote)}/_apis/wit/workitems",
+        params={"ids": ",".join(map(str, ids)), "fields": "System.Title,System.State", "api-version": "7.1"},
+    )
+    r.raise_for_status()
+    return r.json()["value"]
+
+
+def search(session: requests.Session, remote: AdoRemote, keywords: list[str], since: str | None = None, top: int = 10) -> list[dict]:
+    """Search work items by keywords (ANDed, matched against Title or Description), most recently changed first."""
+    ids = run_wiql(session, remote, build_search_wiql(keywords, since), top)
+    items = get_work_items(session, remote, ids)
+    for item in items:
+        fields = item["fields"]
+        print(f"#{item['id']} [{fields['System.State']}] {fields['System.Title']}")
+        print(edit_url(remote, item["id"]))
+    if not items:
+        print("No matching work items found.")
+    return items
+
+
 def create(
     session: requests.Session,
     remote: AdoRemote,

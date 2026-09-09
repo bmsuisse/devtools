@@ -1,6 +1,6 @@
 import pytest
 
-from bmsdna.devtools.gh_issue import parse_comment_id, parse_issue_number
+from bmsdna.devtools.gh_issue import build_search_query, parse_comment_id, parse_issue_number
 
 
 @pytest.mark.parametrize(
@@ -22,3 +22,15 @@ def test_parse_comment_id_present() -> None:
 
 def test_parse_comment_id_absent() -> None:
     assert parse_comment_id("https://github.com/owner/repo/issues/42") is None
+
+
+def test_build_search_query_keywords_only() -> None:
+    assert build_search_query(["auth", "timeout"], None) == "auth timeout"
+
+
+def test_build_search_query_adds_updated_qualifier() -> None:
+    assert build_search_query(["auth"], "2026-08-10") == "auth updated:>=2026-08-10"
+
+
+def test_build_search_query_no_keywords_still_scopes_by_date() -> None:
+    assert build_search_query([], "2026-08-10") == "updated:>=2026-08-10"

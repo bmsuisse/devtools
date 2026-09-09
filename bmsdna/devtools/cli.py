@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
@@ -323,6 +324,32 @@ def issue_create(
         session.headers.update(auth_header(pat))
         resolved_board = ado_issue.resolve_board(board)
         ado_issue.create(session, remote, type_, title, description, resolved_board, tag, screenshot)
+
+
+@issue_app.command("search")
+def issue_search(
+    keywords: list[str] = typer.Argument(..., help="Keywords to search for (ANDed together)"),
+    since_days: int = typer.Option(
+        30, "--since-days", help="Only include issues/work items updated within this many days (0 = no date filter)"
+    ),
+    limit: int = typer.Option(10, "--limit", help="Max results to return"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
+) -> None:
+    """Search issues / work items by keywords, defaulting to the last 30 days (Azure DevOps or GitHub, auto-detected)."""
+    since = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%Y-%m-%d") if since_days > 0 else None
+
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh_issue.search(require_gh(), keywords, since, limit)
+    else:
+        session = requests.Session()
+        session.headers.update(auth_header(pat))
+        ado_issue.search(session, remote, keywords, since, limit)
 
 
 @issue_app.command("update")

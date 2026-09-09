@@ -1,4 +1,13 @@
-from bmsdna.devtools.ado_issue import build_attach_ops, build_create_ops, build_update_ops, html_url, resolve_board
+from bmsdna.devtools.ado_issue import (
+    build_attach_ops,
+    build_create_ops,
+    build_search_wiql,
+    build_update_ops,
+    edit_url,
+    html_url,
+    resolve_board,
+)
+from bmsdna.devtools.gitrepo import AdoRemote
 
 
 def write_pyproject(tmp_path, body: str):
@@ -91,3 +100,31 @@ def test_html_url_present() -> None:
 
 def test_html_url_missing() -> None:
     assert html_url({}) is None
+
+
+def test_edit_url() -> None:
+    assert edit_url(AdoRemote(org="myorg", project="MyProj", repo="myrepo"), 42) == "https://dev.azure.com/myorg/MyProj/_workitems/edit/42"
+
+
+def test_build_search_wiql_keywords_only() -> None:
+    wiql = build_search_wiql(["auth"])
+    assert "[System.TeamProject] = @project" in wiql
+    assert "[System.Title] Contains Words 'auth'" in wiql
+    assert "[System.Description] Contains Words 'auth'" in wiql
+    assert "[System.ChangedDate] >=" not in wiql
+    assert wiql.endswith("ORDER BY [System.ChangedDate] DESC")
+
+
+def test_build_search_wiql_multiple_keywords_are_anded() -> None:
+    wiql = build_search_wiql(["auth", "timeout"])
+    assert wiql.count(" AND ") == 2  # TeamProject AND keyword1 AND keyword2
+
+
+def test_build_search_wiql_since_adds_changed_date_clause() -> None:
+    wiql = build_search_wiql(["auth"], since="2026-08-10")
+    assert "[System.ChangedDate] >= '2026-08-10T00:00:00Z'" in wiql
+
+
+def test_build_search_wiql_escapes_single_quotes() -> None:
+    wiql = build_search_wiql(["it's broken"])
+    assert "it''s broken" in wiql

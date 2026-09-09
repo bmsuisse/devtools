@@ -13,6 +13,7 @@ from bmsdna.devtools.ado_issue import (
     create,
     delete,
     delete_comment,
+    search,
     update,
     update_comment,
 )
@@ -34,7 +35,7 @@ class FakeResponse:
             raise RuntimeError(f"HTTP {self.status_code}")
 
 
-def make_session(get_map: dict[str, dict] | None = None) -> MagicMock:
+def make_session(get_map: dict[str, dict] | None = None, wiql_ids: list[int] | None = None) -> MagicMock:
     session = MagicMock()
     get_map = get_map or {}
 
@@ -45,6 +46,8 @@ def make_session(get_map: dict[str, dict] | None = None) -> MagicMock:
         raise AssertionError(f"unexpected GET {url}")
 
     def fake_post(url, params: dict | None = None, **kwargs):
+        if "/_apis/wit/wiql" in url:
+            return FakeResponse({"workItems": [{"id": i} for i in (wiql_ids or [])]})
         if "/_apis/wit/attachments" in url:
             assert params is not None
             name = params["fileName"]
@@ -187,3 +190,32 @@ def test_delete_comment_hits_comment_id_endpoint() -> None:
 
     url = session.delete.call_args.args[0]
     assert url == "https://dev.azure.com/myorg/MyProj/_apis/wit/workItems/42/comments/7"
+
+
+def test_search_runs_wiql_then_batch_fetches_matched_fields() -> None:
+    session = make_session(
+        get_map={"/_apis/wit/workitems": {"value": [{"id": 42, "fields": {"System.Title": "Auth timeout bug", "System.State": "Active"}}]}},
+        wiql_ids=[42],
+    )
+
+    results = search(session, REMOTE, ["auth", "timeout"])
+
+    wiql_url, wiql_kwargs = session.post.call_args_list[0].args[0], session.post.call_args_list[0].kwargs
+    assert wiql_url == "https://dev.azure.com/myorg/MyProj/_apis/wit/wiql"
+    assert "auth" in wiql_kwargs["json"]["query"]
+    assert "timeout" in wiql_kwargs["json"]["query"]
+
+    get_url, get_kwargs = session.get.call_args.args[0], session.get.call_args.kwargs
+    assert get_url == "https://dev.azure.com/myorg/MyProj/_apis/wit/workitems"
+    assert get_kwargs["params"]["ids"] == "42"
+
+    assert results == [{"id": 42, "fields": {"System.Title": "Auth timeout bug", "System.State": "Active"}}]
+
+
+def test_search_skips_batch_fetch_when_no_matches() -> None:
+    session = make_session(wiql_ids=[])
+
+    results = search(session, REMOTE, ["nonexistent-keyword"])
+
+    session.get.assert_not_called()
+    assert results == []

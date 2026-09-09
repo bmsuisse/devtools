@@ -18,6 +18,7 @@ hosts).
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -79,6 +80,30 @@ def create(
         new_body = build_screenshots_section(body, images)
         _run_gh(gh, ["issue", "edit", number, "--body", new_body])
         print(f"Attached {len(screenshot_paths)} screenshot(s) to issue #{number}")
+
+
+def build_search_query(keywords: list[str], since: str | None) -> str:
+    """The `gh issue list --search` query string: keywords ANDed together (GitHub search's
+    implicit default), optionally scoped to issues updated on/after `since` (an ISO
+    'YYYY-MM-DD' date) via the `updated:` qualifier.
+    """
+    parts = list(keywords)
+    if since:
+        parts.append(f"updated:>={since}")
+    return " ".join(parts)
+
+
+def search(gh: str, keywords: list[str], since: str | None, limit: int) -> list[dict]:
+    """Search issues (open and closed) by keywords, most recently updated first."""
+    query = build_search_query(keywords, since)
+    out = _run_gh(gh, ["issue", "list", "--search", query, "--state", "all", "--limit", str(limit), "--json", "number,title,url,state"])
+    items = json.loads(out) if out else []
+    for item in items:
+        print(f"#{item['number']} [{item['state']}] {item['title']}")
+        print(item["url"])
+    if not items:
+        print("No matching issues found.")
+    return items
 
 
 def update(
