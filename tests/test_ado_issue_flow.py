@@ -219,3 +219,30 @@ def test_search_skips_batch_fetch_when_no_matches() -> None:
 
     session.get.assert_not_called()
     assert results == []
+
+
+def test_search_with_board_resolves_area_path_and_scopes_wiql() -> None:
+    session = make_session(
+        get_map={
+            "teamsettings/teamfieldvalues": {"defaultValue": "MyProj\\Data Team"},
+            "/_apis/wit/workitems": {"value": []},
+        },
+        wiql_ids=[],
+    )
+
+    search(session, REMOTE, ["auth"], board="Data Team")
+
+    # Team field values lookup must happen before the WIQL query is built/run.
+    get_url = session.get.call_args_list[0].args[0]
+    assert "myorg/MyProj/Data%20Team/_apis/work/teamsettings/teamfieldvalues" in get_url
+
+    wiql_kwargs = session.post.call_args.kwargs
+    assert "[System.AreaPath] UNDER 'MyProj\\Data Team'" in wiql_kwargs["json"]["query"]
+
+
+def test_search_without_board_does_not_look_up_area_path() -> None:
+    session = make_session(wiql_ids=[])
+
+    search(session, REMOTE, ["auth"])
+
+    session.get.assert_not_called()  # no --board given, so no team field values lookup at all

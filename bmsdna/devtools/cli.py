@@ -328,9 +328,18 @@ def issue_create(
 
 @issue_app.command("search")
 def issue_search(
-    keywords: list[str] = typer.Argument(..., help="Keywords to search for (ANDed together)"),
+    keywords: list[str] = typer.Argument(
+        None, help="Keywords to search for (ANDed together); omit to just list issues/work items"
+    ),
     since_days: int = typer.Option(
         30, "--since-days", help="Only include issues/work items updated within this many days (0 = no date filter)"
+    ),
+    state: str = typer.Option("open", "--state", help="Filter by state: 'open', 'closed', or 'all'"),
+    board: str | None = typer.Option(
+        None,
+        "--board",
+        help="Scope the search to this Azure Boards team's Area Path subtree (Azure DevOps only; "
+        r"falls back to \[tool.bdt.ado].board in pyproject.toml, same as `issue create`)",
     ),
     limit: int = typer.Option(10, "--limit", help="Max results to return"),
     pat: str | None = typer.Option(
@@ -340,16 +349,21 @@ def issue_search(
         help="Azure DevOps PAT (else falls back to `az` login)",
     ),
 ) -> None:
-    """Search issues / work items by keywords, defaulting to the last 30 days (Azure DevOps or GitHub, auto-detected)."""
+    """Search (or, with no keywords, just list) issues / work items, defaulting to open issues
+    from the last 30 days (Azure DevOps or GitHub, auto-detected).
+    """
+    if state not in ("open", "closed", "all"):
+        raise typer.BadParameter("Must be one of: open, closed, all", param_hint="--state")
     since = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%Y-%m-%d") if since_days > 0 else None
 
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_issue.search(require_gh(), keywords, since, limit)
+        gh_issue.search(require_gh(), keywords or [], since, limit, state)
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
-        ado_issue.search(session, remote, keywords, since, limit)
+        resolved_board = ado_issue.resolve_board(board)
+        ado_issue.search(session, remote, keywords or [], since=since, board=resolved_board, top=limit, state=state)
 
 
 @issue_app.command("update")

@@ -107,7 +107,7 @@ def test_edit_url() -> None:
 
 
 def test_build_search_wiql_keywords_only() -> None:
-    wiql = build_search_wiql(["auth"])
+    wiql = build_search_wiql(["auth"], state="all")
     assert "[System.TeamProject] = @project" in wiql
     assert "[System.Title] Contains Words 'auth'" in wiql
     assert "[System.Description] Contains Words 'auth'" in wiql
@@ -115,8 +115,34 @@ def test_build_search_wiql_keywords_only() -> None:
     assert wiql.endswith("ORDER BY [System.ChangedDate] DESC")
 
 
+def test_build_search_wiql_no_keywords_lists_without_text_filter() -> None:
+    wiql = build_search_wiql([], state="all")
+    assert wiql == "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project ORDER BY [System.ChangedDate] DESC"
+
+
+def test_build_search_wiql_defaults_to_open_state() -> None:
+    # Covers all four built-in process templates' terminal state names (Agile/CMMI: 'Closed',
+    # Scrum/Basic: 'Done'; all: 'Removed') since search() doesn't know which one a project uses.
+    wiql = build_search_wiql(["auth"])
+    assert "[System.State] <> 'Closed'" in wiql
+    assert "[System.State] <> 'Done'" in wiql
+    assert "[System.State] <> 'Removed'" in wiql
+
+
+def test_build_search_wiql_closed_state() -> None:
+    wiql = build_search_wiql(["auth"], state="closed")
+    assert "[System.State] = 'Closed'" in wiql
+    assert "[System.State] = 'Done'" in wiql
+    assert "[System.State] = 'Removed'" in wiql
+    assert "<>" not in wiql
+
+
+def test_build_search_wiql_all_state_has_no_state_clause() -> None:
+    assert "System.State" not in build_search_wiql(["auth"], state="all")
+
+
 def test_build_search_wiql_multiple_keywords_are_anded() -> None:
-    wiql = build_search_wiql(["auth", "timeout"])
+    wiql = build_search_wiql(["auth", "timeout"], state="all")
     assert wiql.count(" AND ") == 2  # TeamProject AND keyword1 AND keyword2
 
 
@@ -128,3 +154,12 @@ def test_build_search_wiql_since_adds_changed_date_clause() -> None:
 def test_build_search_wiql_escapes_single_quotes() -> None:
     wiql = build_search_wiql(["it's broken"])
     assert "it''s broken" in wiql
+
+
+def test_build_search_wiql_area_path_scopes_to_board() -> None:
+    wiql = build_search_wiql(["auth"], area_path="MyProj\\Data Team")
+    assert "[System.AreaPath] UNDER 'MyProj\\Data Team'" in wiql
+
+
+def test_build_search_wiql_no_area_path_by_default() -> None:
+    assert "AreaPath" not in build_search_wiql(["auth"])

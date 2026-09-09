@@ -272,14 +272,33 @@ def _escape_wiql_string(value: str) -> str:
     return value.replace("'", "''")
 
 
-def build_search_wiql(keywords: list[str], since: str | None = None) -> str:
+# The Completed/Removed-category state names across Azure DevOps's built-in process templates:
+# Agile and CMMI use 'Closed' for Completed, Scrum and Basic use 'Done'; all four use 'Removed'.
+# There's no single field/value that means "terminal" independent of process template, so this
+# union is the closest thing to a default that works out of the box on any of them.
+_TERMINAL_STATES = ("Closed", "Done", "Removed")
+
+
+def build_search_wiql(
+    keywords: list[str],
+    since: str | None = None,
+    area_path: str | None = None,
+    state: str = "open",
+) -> str:
     """WIQL for work items whose Title or Description contains every given keyword (ANDed),
-    optionally restricted to items changed on/after `since` (an ISO 'YYYY-MM-DD' date),
-    most recently changed first.
+    optionally restricted to items changed on/after `since` (an ISO 'YYYY-MM-DD' date) and/or
+    scoped to a board's Area Path subtree, most recently changed first. `keywords` may be empty,
+    to list work items without a text filter.
 
     `since` is rendered as a UTC ISO 8601 literal (`'YYYY-MM-DDT00:00:00Z'`) — the one
     DateTime format WIQL accepts regardless of the querying account's locale/date-pattern
     preference (a bare `'YYYY-MM-DD'` is parsed using that locale's date pattern instead).
+
+    `state` is `"open"` (default, excludes `_TERMINAL_STATES`), `"closed"` (only those), or
+    `"all"` (no state filter). Azure DevOps state names are process-template-specific — Agile and
+    CMMI use 'Closed' for their Completed-category state, Scrum and Basic use 'Done' — so
+    `_TERMINAL_STATES` is the union across the built-in templates, not a per-project source of
+    truth (a custom process with its own state names won't be filtered correctly).
     """
     clauses = [
         f"([System.Title] Contains Words '{_escape_wiql_string(k)}' OR [System.Description] Contains Words '{_escape_wiql_string(k)}')"
@@ -287,6 +306,12 @@ def build_search_wiql(keywords: list[str], since: str | None = None) -> str:
     ]
     if since:
         clauses.append(f"[System.ChangedDate] >= '{since}T00:00:00Z'")
+    if area_path:
+        clauses.append(f"[System.AreaPath] UNDER '{_escape_wiql_string(area_path)}'")
+    if state == "open":
+        clauses.append(" AND ".join(f"[System.State] <> '{s}'" for s in _TERMINAL_STATES))
+    elif state == "closed":
+        clauses.append("(" + " OR ".join(f"[System.State] = '{s}'" for s in _TERMINAL_STATES) + ")")
     where = " AND ".join(["[System.TeamProject] = @project", *clauses])
     return f"SELECT [System.Id] FROM WorkItems WHERE {where} ORDER BY [System.ChangedDate] DESC"
 
@@ -313,9 +338,22 @@ def get_work_items(session: requests.Session, remote: AdoRemote, ids: list[int])
     return r.json()["value"]
 
 
-def search(session: requests.Session, remote: AdoRemote, keywords: list[str], since: str | None = None, top: int = 10) -> list[dict]:
-    """Search work items by keywords (ANDed, matched against Title or Description), most recently changed first."""
-    ids = run_wiql(session, remote, build_search_wiql(keywords, since), top)
+def search(
+    session: requests.Session,
+    remote: AdoRemote,
+    keywords: list[str],
+    since: str | None = None,
+    board: str | None = None,
+    top: int = 10,
+    state: str = "open",
+) -> list[dict]:
+    """Search (or, with no keywords, just list) work items by keywords (ANDed, matched against
+    Title or Description) and state, most recently changed first. `board` is an Azure Boards team
+    name (like `create`'s `--board`) — resolved to its Area Path so results are scoped to that
+    team's subtree instead of the whole project.
+    """
+    area_path = get_team_area_path(session, remote, board) if board else None
+    ids = run_wiql(session, remote, build_search_wiql(keywords, since, area_path, state), top)
     items = get_work_items(session, remote, ids)
     for item in items:
         fields = item["fields"]

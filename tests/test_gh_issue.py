@@ -1,6 +1,8 @@
+from unittest.mock import MagicMock
+
 import pytest
 
-from bmsdna.devtools.gh_issue import build_search_query, parse_comment_id, parse_issue_number
+from bmsdna.devtools.gh_issue import build_search_query, parse_comment_id, parse_issue_number, search
 
 
 @pytest.mark.parametrize(
@@ -40,3 +42,31 @@ def test_build_search_query_always_sorts_by_updated_desc() -> None:
     # search()'s "most recently updated first" ordering depends on this — GitHub's
     # default --search order is text relevance, not recency.
     assert "sort:updated-desc" in build_search_query(["auth"], None)
+
+
+def test_search_defaults_to_open_state(monkeypatch) -> None:
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout="[]", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
+
+    search("gh", [], None, 10)
+
+    assert captured_cmd[captured_cmd.index("--state") + 1] == "open"
+
+
+def test_search_passes_through_requested_state(monkeypatch) -> None:
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout="[]", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
+
+    search("gh", ["auth"], None, 10, state="all")
+
+    assert captured_cmd[captured_cmd.index("--state") + 1] == "all"
