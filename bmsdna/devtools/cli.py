@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
@@ -327,6 +328,46 @@ def issue_create(
         ado_issue.create(session, remote, type_, title, description, resolved_board, tag, screenshot)
 
 
+@issue_app.command("search")
+def issue_search(
+    keywords: list[str] = typer.Argument(
+        None, help="Keywords to search for (ANDed together); omit to just list issues/work items"
+    ),
+    since_days: int = typer.Option(
+        30, "--since-days", help="Only include issues/work items updated within this many days (0 = no date filter)"
+    ),
+    state: str = typer.Option("open", "--state", help="Filter by state: 'open', 'closed', or 'all'"),
+    board: str | None = typer.Option(
+        None,
+        "--board",
+        help="Scope the search to this Azure Boards team's Area Path subtree (Azure DevOps only; "
+        r"falls back to \[tool.bdt.ado].board in pyproject.toml, same as `issue create`)",
+    ),
+    limit: int = typer.Option(10, "--limit", help="Max results to return"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
+) -> None:
+    """Search (or, with no keywords, just list) issues / work items, defaulting to open issues
+    from the last 30 days (Azure DevOps or GitHub, auto-detected).
+    """
+    if state not in ("open", "closed", "all"):
+        raise typer.BadParameter("Must be one of: open, closed, all", param_hint="--state")
+    since = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%Y-%m-%d") if since_days > 0 else None
+
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh_issue.search(require_gh(), keywords or [], since, limit, state)
+    else:
+        session = requests.Session()
+        session.headers.update(auth_header(pat))
+        resolved_board = ado_issue.resolve_board(board)
+        ado_issue.search(session, remote, keywords or [], since=since, board=resolved_board, top=limit, state=state)
+
+
 @issue_app.command("update")
 def issue_update(
     number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
@@ -339,7 +380,14 @@ def issue_update(
         r"this is only applied when explicitly given here — it does not fall back to \[tool.bdt.ado].board, "
         "so an unrelated field update can't silently move the item onto a different board.",
     ),
-    state: str | None = typer.Option(None, "--state", help="New work item state, e.g. Active, Resolved, Closed (Azure DevOps only)"),
+    state: str | None = typer.Option(
+        None,
+        "--state",
+        help="New state. Both backends understand 'Open', 'Closed'/'Done' (closes as completed), and "
+        "'Removed'/'Not Planned' (closes as not planned); other values (e.g. Active, Resolved) only "
+        "apply where that exact state name exists for the work item's type — elsewhere the state is "
+        "left unchanged and a comment records what was requested.",
+    ),
     tag: list[str] | None = typer.Option(None, "--tag", help="Replaces all tags (Azure DevOps only, repeatable); omit to leave unchanged"),
     label: list[str] | None = typer.Option(None, "--label", help="Label to add (GitHub only, repeatable)"),
     remove_label: list[str] | None = typer.Option(None, "--remove-label", help="Label to remove (GitHub only, repeatable)"),
@@ -353,7 +401,7 @@ def issue_update(
     """Update an issue / work item's fields (Azure DevOps or GitHub, auto-detected)."""
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_issue.update(require_gh(), number, title, description, label, remove_label)
+        gh_issue.update(require_gh(), number, title, description, label, remove_label, state)
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
@@ -483,7 +531,7 @@ def commit(
     message: str,
     files: list[str],
     json_output: bool = typer.Option(False, "--json", help="Structured JSON output for AI-agent callers"),
-    no_verify: bool = typer.Option(False, "--no-verify", help="Skip pre-commit hooks"),
+    no_verify: bool = typer.Option(False, "--no-verify", help="Skip pre-commit hooks (not intended for regular use; prints a warning)"),
     subrepo: list[str] = typer.Option([], "--subrepo", help="Submodule directory name to split matching files into (repeatable)"),
     skip_message_check: bool = typer.Option(False, "--skip-message-check", help="Don't require a conventional-commit-style message"),
     allow_main: bool = typer.Option(False, "--allow-main", help="Allow committing directly on main/master"),

@@ -18,6 +18,7 @@ hosts).
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -81,6 +82,68 @@ def create(
         print(f"Attached {len(screenshot_paths)} screenshot(s) to issue #{number}")
 
 
+def build_search_query(keywords: list[str], since: str | None) -> str:
+    """The `gh issue list --search` query string: keywords ANDed together (GitHub search's
+    implicit default), optionally scoped to issues updated on/after `since` (an ISO
+    'YYYY-MM-DD' date) via the `updated:` qualifier. Always sorted `updated:desc` — GitHub's
+    default search order is text-relevance, not recency, which `search()`'s ordering relies on.
+    `keywords` may be empty, to list issues without a text filter.
+    """
+    parts = [*keywords, "sort:updated-desc"]
+    if since:
+        parts.append(f"updated:>={since}")
+    return " ".join(parts)
+
+
+def search(gh: str, keywords: list[str], since: str | None, limit: int, state: str = "open") -> list[dict]:
+    """Search (or, with no keywords, just list) issues by state, most recently updated first.
+
+    `state` is `gh issue list`'s own `open|closed|all` flag, not a search qualifier.
+    """
+    query = build_search_query(keywords, since)
+    out = _run_gh(gh, ["issue", "list", "--search", query, "--state", state, "--limit", str(limit), "--json", "number,title,url,state"])
+    items = json.loads(out) if out else []
+    for item in items:
+        print(f"#{item['number']} [{item['state']}] {item['title']}")
+        print(item["url"])
+    if not items:
+        print("No matching issues found.")
+    return items
+
+
+_DONE_STATE_NAMES = ("closed", "done", "completed")
+_REMOVED_STATE_NAMES = ("removed", "not planned", "not_planned", "wontfix", "won't fix")
+_OPEN_STATE_NAMES = ("open", "reopened", "reopen")
+
+
+def _set_state(gh: str, number: int, state: str) -> None:
+    """GitHub issues only have two states (open/closed) plus, when closed, a `state_reason` of
+    'completed' or 'not planned' — no per-process-template state names like Azure DevOps. Map the
+    common terminal-state spellings onto that: 'Closed'/'Done'/'Completed' close as completed
+    (GitHub's "done" concept); 'Removed'/'Not Planned'/'Wontfix' close as not planned; 'Open'/
+    'Reopened' reopens. Anything else has no GitHub equivalent — leave the issue's state
+    unchanged and comment with the exact state that was requested, so it isn't silently dropped.
+    """
+    normalized = state.strip().lower()
+    if normalized in _DONE_STATE_NAMES:
+        _run_gh(gh, ["issue", "close", str(number), "--reason", "completed"])
+    elif normalized in _REMOVED_STATE_NAMES:
+        _run_gh(gh, ["issue", "close", str(number), "--reason", "not planned"])
+    elif normalized in _OPEN_STATE_NAMES:
+        _run_gh(gh, ["issue", "reopen", str(number)])
+    else:
+        _run_gh(
+            gh,
+            [
+                "issue",
+                "comment",
+                str(number),
+                "--body",
+                f"Requested state change to '{state}', which isn't a valid GitHub issue state — left unchanged.",
+            ],
+        )
+
+
 def update(
     gh: str,
     number: int,
@@ -88,6 +151,7 @@ def update(
     body: str | None = None,
     add_labels: list[str] | None = None,
     remove_labels: list[str] | None = None,
+    state: str | None = None,
 ) -> None:
     args = ["issue", "edit", str(number)]
     if title is not None:
@@ -98,10 +162,13 @@ def update(
         args += ["--add-label", label]
     for label in remove_labels or []:
         args += ["--remove-label", label]
-    if len(args) == 3:
-        sys.exit("Nothing to update — provide at least one of --title, --description, --label, --remove-label.")
+    if len(args) == 3 and state is None:
+        sys.exit("Nothing to update — provide at least one of --title, --description, --label, --remove-label, --state.")
 
-    _run_gh(gh, args)
+    if len(args) > 3:
+        _run_gh(gh, args)
+    if state is not None:
+        _set_state(gh, number, state)
     print(f"Updated issue #{number}")
 
 
