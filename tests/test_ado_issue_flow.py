@@ -52,8 +52,11 @@ def make_session(get_map: dict[str, dict] | None = None, wiql_ids: list[int] | N
             return FakeResponse({"workItems": [{"id": i} for i in (wiql_ids or [])]})
         if "/_apis/wit/attachments" in url:
             assert params is not None
-            name = params["fileName"]
-            return FakeResponse({"id": "attach-1", "url": f"https://dev.azure.com/myorg/_apis/wit/attachments/attach-1?fileName={name}"})
+            assert "fileName" in params  # upload always names the attachment
+            # Deliberately a *bare* url (no query string) here, to exercise
+            # `upload_attachment`'s defensive fallback that appends `?fileName=...` itself
+            # when the upload API's response doesn't already carry it.
+            return FakeResponse({"id": "attach-1", "url": "https://dev.azure.com/myorg/_apis/wit/attachments/attach-1"})
         if url.endswith("/comments"):
             return FakeResponse({"id": 1, "text": kwargs["json"]["text"]})
         if "/_apis/wit/workitems/$" in url:
@@ -111,10 +114,16 @@ def test_create_with_screenshots_uploads_links_and_comments(tmp_path) -> None:
     assert patch_url == "https://dev.azure.com/myorg/MyProj/_apis/wit/workitems/123"
     relation = patch_kwargs["json"][0]["value"]
     assert relation["rel"] == "AttachedFile"
-    assert "00-shot.png" in relation["url"]
+    assert relation["url"] == "https://dev.azure.com/myorg/_apis/wit/attachments/attach-1?fileName=00-shot.png"
 
     comment_text = session.post.call_args_list[2].kwargs["json"]["text"]
-    assert "![shot.png]" in comment_text
+    # A raw HTML <img> tag, not Markdown `![]()` — the "Add Comment" REST API has no way to
+    # request Markdown rendering (whether it's applied is an org-level rollout state outside
+    # the caller's control), so `![]()` can end up showing as literal unrendered text. An
+    # <img> tag renders either way. It must also carry `?fileName=...` in its src — without it
+    # Azure DevOps serves the attachment as application/octet-stream with
+    # Content-Disposition: attachment instead of e.g. image/png.
+    assert '<img src="https://dev.azure.com/myorg/_apis/wit/attachments/attach-1?fileName=00-shot.png" alt="shot.png"' in comment_text
 
 
 def test_comment_with_screenshots_message_only() -> None:
@@ -138,7 +147,7 @@ def test_comment_with_screenshots_links_attachments_before_commenting(tmp_path) 
 
     session.patch.assert_called_once()
     comment_text = session.post.call_args_list[-1].kwargs["json"]["text"]
-    assert "![after.png]" in comment_text
+    assert '<img src="https://dev.azure.com/myorg/_apis/wit/attachments/attach-1?fileName=00-after.png" alt="after.png"' in comment_text
     assert "Fixed" in comment_text
 
 

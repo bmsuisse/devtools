@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 from bmsdna.devtools.ado_issue import (
     build_attach_ops,
     build_create_ops,
@@ -6,8 +8,11 @@ from bmsdna.devtools.ado_issue import (
     edit_url,
     html_url,
     resolve_board,
+    upload_attachment,
 )
 from bmsdna.devtools.gitrepo import AdoRemote
+
+REMOTE = AdoRemote(org="myorg", project="MyProj", repo="myrepo")
 
 
 def write_pyproject(tmp_path, body: str):
@@ -51,6 +56,18 @@ def test_build_create_ops_omits_empty_optional_fields() -> None:
     assert [op["path"] for op in ops] == ["/fields/System.Title"]
 
 
+def test_build_create_ops_opts_description_into_markdown_formatting() -> None:
+    # Description defaults to HTML formatting via the REST API — without this op, Markdown
+    # syntax passed to --description (##, **bold**, `code`, - lists) renders as literal text.
+    ops = build_create_ops("Title", description="## Heading\n\n- one\n- two")
+    assert {"op": "add", "path": "/multilineFieldsFormat/System.Description", "value": "Markdown"} in ops
+
+
+def test_build_create_ops_no_markdown_format_op_without_description() -> None:
+    ops = build_create_ops("Title")
+    assert not any(op["path"] == "/multilineFieldsFormat/System.Description" for op in ops)
+
+
 def test_build_attach_ops_shape() -> None:
     ops = build_attach_ops([("shot.png", "https://dev.azure.com/x/_apis/wit/attachments/1?fileName=shot.png")])
     assert ops == [
@@ -64,6 +81,58 @@ def test_build_attach_ops_shape() -> None:
             },
         }
     ]
+
+
+def test_upload_attachment_appends_filename_query_if_missing(tmp_path) -> None:
+    """Azure DevOps' WIT attachment-download endpoint only infers Content-Type/
+    Content-Disposition from a `?fileName=...` query param — without it, a GET serves
+    `application/octet-stream` with `Content-Disposition: attachment` instead of e.g.
+    `image/png` (confirmed against a live org), which would make a Markdown `![]()` embed show
+    a broken image instead of the picture. `upload_attachment` guards against an upload-API
+    response whose `url` doesn't already carry it.
+    """
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"fake-png-bytes")
+    session = MagicMock()
+    session.post.return_value.json.return_value = {
+        "id": "abc-123",
+        "url": "https://dev.azure.com/myorg/MyProj/_apis/wit/attachments/abc-123",
+    }
+
+    attachment_id, url = upload_attachment(session, REMOTE, "shot.png", str(shot))
+
+    assert attachment_id == "abc-123"
+    assert url == "https://dev.azure.com/myorg/MyProj/_apis/wit/attachments/abc-123?fileName=shot.png"
+
+
+def test_upload_attachment_url_encodes_filename_with_special_characters(tmp_path) -> None:
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"fake-png-bytes")
+    session = MagicMock()
+    session.post.return_value.json.return_value = {
+        "id": "abc-123",
+        "url": "https://dev.azure.com/myorg/MyProj/_apis/wit/attachments/abc-123",
+    }
+
+    _, url = upload_attachment(session, REMOTE, "00-my screenshot.png", str(shot))
+
+    assert url.endswith("?fileName=00-my%20screenshot.png")
+
+
+def test_upload_attachment_does_not_double_append_when_already_present(tmp_path) -> None:
+    # The real API echoes the fileName query param it was given back in `url` — must not
+    # append a second one on top (that would produce a malformed `?fileName=x?fileName=x`).
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"fake-png-bytes")
+    session = MagicMock()
+    session.post.return_value.json.return_value = {
+        "id": "abc-123",
+        "url": "https://dev.azure.com/myorg/MyProj/_apis/wit/attachments/abc-123?fileName=shot.png",
+    }
+
+    _, url = upload_attachment(session, REMOTE, "shot.png", str(shot))
+
+    assert url == "https://dev.azure.com/myorg/MyProj/_apis/wit/attachments/abc-123?fileName=shot.png"
 
 
 def test_build_update_ops_empty_when_nothing_given() -> None:
@@ -81,6 +150,7 @@ def test_build_update_ops_all_fields() -> None:
     assert paths == {
         "/fields/System.Title": "T",
         "/fields/System.Description": "D",
+        "/multilineFieldsFormat/System.Description": "Markdown",
         "/fields/System.AreaPath": "Proj\\Team",
         "/fields/System.Tags": "a; b",
         "/fields/System.State": "Resolved",
@@ -91,6 +161,16 @@ def test_build_update_ops_empty_tags_list_clears_tags() -> None:
     # An explicit [] (distinct from the default None) is a deliberate "clear all tags".
     ops = build_update_ops(tags=[])
     assert ops == [{"op": "add", "path": "/fields/System.Tags", "value": ""}]
+
+
+def test_build_update_ops_opts_description_into_markdown_formatting() -> None:
+    ops = build_update_ops(description="## Heading")
+    assert {"op": "add", "path": "/multilineFieldsFormat/System.Description", "value": "Markdown"} in ops
+
+
+def test_build_update_ops_no_markdown_format_op_without_description() -> None:
+    ops = build_update_ops(title="New title")
+    assert not any(op["path"] == "/multilineFieldsFormat/System.Description" for op in ops)
 
 
 def test_html_url_present() -> None:
