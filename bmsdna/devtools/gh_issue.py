@@ -82,14 +82,27 @@ def create(
         print(f"Attached {len(screenshot_paths)} screenshot(s) to issue #{number}")
 
 
+def _literal_keyword(keyword: str) -> str:
+    """Quote a keyword if it contains a ':' so GitHub's search syntax matches it as literal
+    text instead of parsing it as a qualifier (like `sort:`, `is:`, `label:`) — e.g. a keyword
+    of `sort:created-asc` or `is:pr` would otherwise be interpreted as a search qualifier
+    rather than searched for literally.
+    """
+    if ":" in keyword:
+        return '"' + keyword.replace('"', '\\"') + '"'
+    return keyword
+
+
 def build_search_query(keywords: list[str], since: str | None) -> str:
     """The `gh issue list --search` query string: keywords ANDed together (GitHub search's
     implicit default), optionally scoped to issues updated on/after `since` (an ISO
     'YYYY-MM-DD' date) via the `updated:` qualifier. Always sorted `updated:desc` — GitHub's
     default search order is text-relevance, not recency, which `search()`'s ordering relies on.
-    `keywords` may be empty, to list issues without a text filter.
+    `keywords` may be empty, to list issues without a text filter. Keywords that look like they
+    could be parsed as search qualifiers (contain a ':') are quoted so they're always matched
+    as literal text — see `_literal_keyword`.
     """
-    parts = [*keywords, "sort:updated-desc"]
+    parts = [*(_literal_keyword(k) for k in keywords), "sort:updated-desc"]
     if since:
         parts.append(f"updated:>={since}")
     return " ".join(parts)

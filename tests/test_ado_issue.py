@@ -163,3 +163,11 @@ def test_build_search_wiql_area_path_scopes_to_board() -> None:
 
 def test_build_search_wiql_no_area_path_by_default() -> None:
     assert "AreaPath" not in build_search_wiql(["auth"])
+
+
+def test_build_search_wiql_escapes_single_quote_in_since() -> None:
+    # since is a public-function parameter, not just whatever cli.py currently passes
+    # (a strftime-formatted date) — a caller passing an unsanitized value with a single
+    # quote must not break or corrupt the WIQL query.
+    wiql = build_search_wiql(["auth"], since="2026-08-10'; DROP")
+    assert "[System.ChangedDate] >= '2026-08-10''; DROPT00:00:00Z'" in wiql

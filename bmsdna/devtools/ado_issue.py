@@ -328,7 +328,7 @@ def build_search_wiql(
         for k in keywords
     ]
     if since:
-        clauses.append(f"[System.ChangedDate] >= '{since}T00:00:00Z'")
+        clauses.append(f"[System.ChangedDate] >= '{_escape_wiql_string(since)}T00:00:00Z'")
     if area_path:
         clauses.append(f"[System.AreaPath] UNDER '{_escape_wiql_string(area_path)}'")
     if state == "open":

@@ -44,6 +44,18 @@ def test_build_search_query_always_sorts_by_updated_desc() -> None:
     assert "sort:updated-desc" in build_search_query(["auth"], None)
 
 
+def test_build_search_query_quotes_keyword_that_looks_like_a_qualifier() -> None:
+    # A bare `sort:created-asc` or `is:pr` keyword would otherwise be parsed by GitHub's
+    # search syntax as a qualifier rather than searched for literally.
+    assert build_search_query(["sort:created-asc"], None) == '"sort:created-asc" sort:updated-desc'
+    assert build_search_query(["is:pr"], None) == '"is:pr" sort:updated-desc'
+
+
+def test_build_search_query_does_not_quote_plain_keywords() -> None:
+    # Existing, working behavior for ordinary keywords must be unaffected.
+    assert build_search_query(["auth", "timeout"], None) == "auth timeout sort:updated-desc"
+
+
 def test_search_defaults_to_open_state(monkeypatch) -> None:
     captured_cmd: list[str] = []
 
