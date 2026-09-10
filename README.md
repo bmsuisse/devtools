@@ -68,6 +68,11 @@ title/body from commit info so it never blocks on an interactive prompt).
 Extra arguments pass through either way, e.g.
 `bdt pr create --target main -- --title "..."`.
 
+PRs are created as **drafts by default**; a successful create always prints
+the PR's link plus the exact command to publish it (`bdt pr publish`, or the
+host-specific command). Pass `--no-draft` to open it ready for review
+immediately instead.
+
 `--label` (repeatable) applies labels to the PR on either host: on GitHub
 these map to `gh pr create --label`, so the label must already exist on the
 repo (`gh label create`); on Azure DevOps they map to `az repos pr create

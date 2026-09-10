@@ -90,7 +90,11 @@ def _attach_screenshots(attach: Callable[[], None]) -> None:
 @pr_app.command("create")
 def pr_create(
     target: str = typer.Option("main", "--target", help="Target branch (e.g. main, test)"),
-    draft: bool = typer.Option(False, "--draft", help="Create the PR as a draft (not ready for review)"),
+    draft: bool = typer.Option(
+        True,
+        "--draft/--no-draft",
+        help="Create the PR as a draft (not ready for review). Defaults to draft; pass --no-draft to publish it immediately.",
+    ),
     label: list[str] = typer.Option(
         [],
         "--label",
