@@ -35,6 +35,7 @@ import requests
 
 from .bdt_config import load_bdt_table
 from .gitrepo import AdoRemote
+from .issue_state import DONE_STATE_NAMES, OPEN_STATE_NAMES, REMOVED_STATE_NAMES
 from .pr_markdown import build_screenshots_section
 
 COMMENTS_API_VERSION = "7.1-preview.4"
@@ -416,6 +417,30 @@ def create(
     return work_item
 
 
+def _resolve_state(state: str, valid_states: list[str]) -> str | None:
+    """Resolve a requested `--state` value to its canonical spelling among `valid_states`, or
+    `None` if it has no equivalent there.
+
+    Tries an exact case-insensitive match first ('closed' for a project whose actual state is
+    'Closed' still needs to PATCH the canonical casing, since Azure DevOps state values are
+    case-sensitive on write). Failing that, falls back to the same open/done/removed synonym
+    categories `gh_issue._set_state` uses for GitHub (see `issue_state.py`): if the requested
+    state belongs to one of those categories, accept whichever of `valid_states` also belongs to
+    it. This is what lets '--state Closed' land on a Basic-process work item type whose actual
+    terminal state is named 'Done' (and vice versa), instead of failing just because the two
+    backends spell the same concept differently.
+    """
+    direct = next((s for s in valid_states if state.lower() == s.lower()), None)
+    if direct is not None:
+        return direct
+
+    normalized = state.strip().lower()
+    for synonyms in (DONE_STATE_NAMES, REMOVED_STATE_NAMES, OPEN_STATE_NAMES):
+        if normalized in synonyms:
+            return next((s for s in valid_states if s.lower() in synonyms), None)
+    return None
+
+
 def update(
     session: requests.Session,
     remote: AdoRemote,
@@ -430,24 +455,19 @@ def update(
     touched) when explicitly given — it never falls back to `[tool.bdt.ado].board`, so an unrelated
     field update (e.g. just `--title`) can't silently move the item to a different team's board.
 
-    If `state` isn't one of this work item's type's valid states (state names, and which ones are
-    terminal, are defined per work item type per process template — e.g. a Basic-process Issue has
-    'Done' but no 'Closed'), the state is left unchanged and a comment records the exact state that
-    was requested instead of the update failing or silently doing nothing.
+    If `state` isn't one of this work item's type's valid states, or a synonym of one of them (state
+    names, and which ones are terminal, are defined per work item type per process template — e.g. a
+    Basic-process Issue has 'Done' but no 'Closed', though '--state Closed' still resolves to it via
+    `_resolve_state`), the state is left unchanged and a comment records the exact state that was
+    requested instead of the update failing or silently doing nothing.
     """
     area_path = get_team_area_path(session, remote, board) if board else None
-    applied_state = state
+    resolved_state = None
     if state is not None:
         work_item_type = get_work_item_type(session, remote, work_item_id)
         valid_states = get_valid_states(session, remote, work_item_type)
-        # Azure DevOps state values are case-sensitive, so a case-insensitive match ('closed' for
-        # a project whose actual state is 'Closed') must still PATCH the canonical casing, not the
-        # caller's — otherwise the update fails (or silently sets a technically-invalid value)
-        # despite the validation above having found a match.
-        canonical_state = next((s for s in valid_states if state.lower() == s.lower()), None)
-        if canonical_state is not None:
-            applied_state = canonical_state
-        else:
+        resolved_state = _resolve_state(state, valid_states)
+        if resolved_state is None:
             add_comment(
                 session,
                 remote,
@@ -455,15 +475,14 @@ def update(
                 f"Requested state change to '{state}', which isn't a valid state for a "
                 f"'{work_item_type}' here (valid states: {', '.join(valid_states)}) — left unchanged.",
             )
-            applied_state = None
 
-    if title is None and description is None and area_path is None and tags is None and applied_state is None:
+    if title is None and description is None and area_path is None and tags is None and resolved_state is None:
         if state is not None:
             print(f"Work item #{work_item_id}: '{state}' isn't a valid state here — noted in a comment.")
             return None
         sys.exit("Nothing to update — provide at least one of --title, --description, --board, --tag, --state.")
 
-    work_item = update_work_item(session, remote, work_item_id, title, description, area_path, tags, applied_state)
+    work_item = update_work_item(session, remote, work_item_id, title, description, area_path, tags, resolved_state)
     print(f"Updated work item #{work_item_id}")
     return work_item
 

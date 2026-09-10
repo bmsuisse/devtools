@@ -307,14 +307,52 @@ def test_update_with_invalid_state_comments_instead_of_failing() -> None:
         }
     )
 
-    result = update(session, REMOTE, 42, state="Done")
+    # 'Resolved' has no equivalent among the valid states (and isn't a done/removed/open synonym
+    # either, unlike 'Done' — see test_update_state_synonym_* below), so it's genuinely invalid here.
+    result = update(session, REMOTE, 42, state="Resolved")
 
     assert result is None
     session.patch.assert_not_called()
     comment_url, comment_kwargs = session.post.call_args.args[0], session.post.call_args.kwargs
     assert comment_url == "https://dev.azure.com/myorg/MyProj/_apis/wit/workItems/42/comments"
-    assert "'Done'" in comment_kwargs["json"]["text"]
+    assert "'Resolved'" in comment_kwargs["json"]["text"]
     assert "Bug" in comment_kwargs["json"]["text"]
+
+
+def test_update_state_synonym_closed_resolves_to_actual_done_state() -> None:
+    # A Basic/Scrum-process work item type whose actual terminal state is named 'Done', not
+    # 'Closed' — the documented '--state Closed' synonym must still resolve to it (bug: it
+    # previously fell through to "not a valid state" since there's no literal 'Closed' here).
+    session = make_session(
+        get_map={
+            "/_apis/wit/workitems/42": {"fields": {"System.WorkItemType": "Issue"}},
+            "/_apis/wit/workitemtypes/Issue/states": {"value": [{"name": "New"}, {"name": "Active"}, {"name": "Done"}]},
+        }
+    )
+
+    result = update(session, REMOTE, 42, state="Closed")
+
+    assert result is not None
+    session.post.assert_not_called()  # no "invalid state" comment
+    ops = session.patch.call_args.kwargs["json"]
+    assert {"op": "add", "path": "/fields/System.State", "value": "Done"} in ops
+
+
+def test_update_state_synonym_done_resolves_to_actual_closed_state() -> None:
+    # The mirror case: an Agile/CMMI-process type's actual terminal state is 'Closed', not 'Done'.
+    session = make_session(
+        get_map={
+            "/_apis/wit/workitems/42": {"fields": {"System.WorkItemType": "Bug"}},
+            "/_apis/wit/workitemtypes/Bug/states": {"value": [{"name": "New"}, {"name": "Active"}, {"name": "Closed"}]},
+        }
+    )
+
+    result = update(session, REMOTE, 42, state="Done")
+
+    assert result is not None
+    session.post.assert_not_called()
+    ops = session.patch.call_args.kwargs["json"]
+    assert {"op": "add", "path": "/fields/System.State", "value": "Closed"} in ops
 
 
 def test_update_with_invalid_state_still_patches_other_given_fields() -> None:

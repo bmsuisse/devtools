@@ -110,3 +110,27 @@ def test_update_errors_with_nothing_to_do(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", MagicMock())
     with pytest.raises(SystemExit):
         update("gh", 42)
+
+
+def test_update_does_not_claim_success_when_only_a_comment_was_posted(monkeypatch, capsys) -> None:
+    # 'Active' has no GitHub equivalent, so _set_state only posts an explanatory comment — the
+    # issue itself is unchanged, so "Updated issue #42" would be misleading here.
+    _run_update_capturing_commands(monkeypatch, state="Active")
+
+    out = capsys.readouterr().out
+    assert "Updated issue #42" not in out
+    assert "Issue #42: 'Active' isn't a valid GitHub issue state — noted in a comment." in out
+
+
+def test_update_reports_success_when_state_synonym_applies(monkeypatch, capsys) -> None:
+    _run_update_capturing_commands(monkeypatch, state="Closed")
+
+    out = capsys.readouterr().out
+    assert "Updated issue #42" in out
+
+
+def test_update_reports_success_when_other_fields_change_even_if_state_is_unsupported(monkeypatch, capsys) -> None:
+    _run_update_capturing_commands(monkeypatch, title="New title", state="Active")
+
+    out = capsys.readouterr().out
+    assert "Updated issue #42" in out

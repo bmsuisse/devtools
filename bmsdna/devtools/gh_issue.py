@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 
 from .gh_pr import push_screenshots
+from .issue_state import DONE_STATE_NAMES, OPEN_STATE_NAMES, REMOVED_STATE_NAMES
 from .pr_markdown import build_screenshots_section
 
 _COMMENT_ID_RE = re.compile(r"#issuecomment-(\d+)")
@@ -111,26 +112,27 @@ def search(gh: str, keywords: list[str], since: str | None, limit: int, state: s
     return items
 
 
-_DONE_STATE_NAMES = ("closed", "done", "completed")
-_REMOVED_STATE_NAMES = ("removed", "not planned", "not_planned", "wontfix", "won't fix")
-_OPEN_STATE_NAMES = ("open", "reopened", "reopen")
-
-
-def _set_state(gh: str, number: int, state: str) -> None:
+def _set_state(gh: str, number: int, state: str) -> bool:
     """GitHub issues only have two states (open/closed) plus, when closed, a `state_reason` of
     'completed' or 'not planned' — no per-process-template state names like Azure DevOps. Map the
     common terminal-state spellings onto that: 'Closed'/'Done'/'Completed' close as completed
     (GitHub's "done" concept); 'Removed'/'Not Planned'/'Wontfix' close as not planned; 'Open'/
     'Reopened' reopens. Anything else has no GitHub equivalent — leave the issue's state
     unchanged and comment with the exact state that was requested, so it isn't silently dropped.
+
+    Returns whether the issue's state was actually changed (False when only an explanatory
+    comment was posted), so callers don't report a successful update that didn't happen.
     """
     normalized = state.strip().lower()
-    if normalized in _DONE_STATE_NAMES:
+    if normalized in DONE_STATE_NAMES:
         _run_gh(gh, ["issue", "close", str(number), "--reason", "completed"])
-    elif normalized in _REMOVED_STATE_NAMES:
+        return True
+    elif normalized in REMOVED_STATE_NAMES:
         _run_gh(gh, ["issue", "close", str(number), "--reason", "not planned"])
-    elif normalized in _OPEN_STATE_NAMES:
+        return True
+    elif normalized in OPEN_STATE_NAMES:
         _run_gh(gh, ["issue", "reopen", str(number)])
+        return True
     else:
         _run_gh(
             gh,
@@ -142,6 +144,7 @@ def _set_state(gh: str, number: int, state: str) -> None:
                 f"Requested state change to '{state}', which isn't a valid GitHub issue state — left unchanged.",
             ],
         )
+        return False
 
 
 def update(
@@ -165,11 +168,18 @@ def update(
     if len(args) == 3 and state is None:
         sys.exit("Nothing to update — provide at least one of --title, --description, --label, --remove-label, --state.")
 
-    if len(args) > 3:
+    edited_other_fields = len(args) > 3
+    if edited_other_fields:
         _run_gh(gh, args)
+
+    state_applied = True
     if state is not None:
-        _set_state(gh, number, state)
-    print(f"Updated issue #{number}")
+        state_applied = _set_state(gh, number, state)
+
+    if edited_other_fields or state_applied:
+        print(f"Updated issue #{number}")
+    else:
+        print(f"Issue #{number}: '{state}' isn't a valid GitHub issue state — noted in a comment.")
 
 
 def delete(gh: str, number: int) -> None:
