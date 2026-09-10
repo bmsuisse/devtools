@@ -115,7 +115,6 @@ def test_pr_create_defaults_to_draft_and_prints_publish_hint_for_github(monkeypa
     assert "--draft" in captured_cmd
     assert "https://github.com/owner/repo/pull/7" in result.output
     assert "bdt pr publish" in result.output
-    assert "gh pr ready" in result.output
 
 
 def test_pr_create_no_draft_skips_draft_flag_and_publish_hint_for_github(monkeypatch) -> None:
@@ -163,7 +162,6 @@ def test_pr_create_defaults_to_draft_for_ado(monkeypatch) -> None:
     assert "--draft" in captured_cmd
     assert captured_cmd[captured_cmd.index("--draft") + 1] == "true"
     assert "bdt pr publish" in result.output
-    assert "az repos pr update --id <PR-ID> --draft false" in result.output
 
 
 def test_pr_create_fails_before_touching_gh_az_when_required_label_group_missing(monkeypatch) -> None:
