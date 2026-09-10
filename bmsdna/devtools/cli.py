@@ -354,6 +354,10 @@ def issue_search(
     """
     if state not in ("open", "closed", "all"):
         raise typer.BadParameter("Must be one of: open, closed, all", param_hint="--state")
+    if since_days < 0:
+        raise typer.BadParameter(
+            "--since-days must be non-negative (0 means no date filter)", param_hint="--since-days"
+        )
     since = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%Y-%m-%d") if since_days > 0 else None
 
     remote = current_remote()
