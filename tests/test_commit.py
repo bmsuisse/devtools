@@ -1,9 +1,10 @@
+import os
 import shutil
 import subprocess
 
 import pytest
 
-from bmsdna.devtools.commit import commit_and_push
+from bmsdna.devtools.commit import _pre_commit_hook_installed, commit_and_push
 
 
 def init_repo(path):
@@ -163,6 +164,61 @@ def test_commit_and_push_no_verify_skips_prek_hook_install(tmp_path, monkeypatch
     assert result.committed is True
     assert not any("prek" in w for w in result.warnings)
     assert not (tmp_path / ".git" / "hooks" / "pre-commit").exists()
+
+
+def test_pre_commit_hook_installed_from_linked_worktree(tmp_path, monkeypatch):
+    """Regression test: in a linked worktree, `git rev-parse --git-dir`
+    returns the worktree-private admin dir (e.g. `.git/worktrees/<name>`),
+    which has no `hooks/` of its own -- the shared hooks live under the repo
+    found via `--git-common-dir`. Detection must use the common dir, or a
+    hook that's installed in the main checkout is reported as "not
+    installed" every time a command runs from inside the worktree."""
+    main_repo = tmp_path / "main"
+    main_repo.mkdir()
+    init_repo(main_repo)
+    (main_repo / "a.txt").write_text("hello")
+    subprocess.run(["git", "add", "a.txt"], cwd=main_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=main_repo, check=True)
+
+    hooks_dir = main_repo / ".git" / "hooks"
+    hooks_dir.mkdir(exist_ok=True)
+    hook_path = hooks_dir / "pre-commit"
+    hook_path.write_text("#!/bin/sh\nexit 0\n")
+    hook_path.chmod(0o755)
+
+    worktree = tmp_path / "wt"
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "-b", "wt-branch", str(worktree)],
+        cwd=main_repo,
+        check=True,
+    )
+
+    # Sanity check on the premise: --git-dir and --git-common-dir genuinely
+    # differ inside the linked worktree, and only the common dir has hooks/.
+    git_dir = subprocess.run(
+        ["git", "rev-parse", "--git-dir"], cwd=worktree, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    common_dir = subprocess.run(
+        ["git", "rev-parse", "--git-common-dir"], cwd=worktree, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    assert git_dir != common_dir
+    assert not os.path.isdir(os.path.join(worktree, git_dir, "hooks"))
+
+    assert _pre_commit_hook_installed(str(worktree)) is True
+
+
+def test_hooks_dir_prefers_core_hooks_path(tmp_path, monkeypatch):
+    """If a repo sets `core.hooksPath`, hooks live there instead of under
+    `<git-common-dir>/hooks` -- that override must be respected."""
+    init_repo(tmp_path)
+    custom_hooks = tmp_path / "custom-hooks"
+    custom_hooks.mkdir()
+    subprocess.run(["git", "config", "core.hooksPath", str(custom_hooks)], cwd=tmp_path, check=True)
+    hook_path = custom_hooks / "pre-commit"
+    hook_path.write_text("#!/bin/sh\nexit 0\n")
+    hook_path.chmod(0o755)
+
+    assert _pre_commit_hook_installed(str(tmp_path)) is True
 
 
 @pytest.mark.skipif(shutil.which("prek") is None, reason="prek is not installed")

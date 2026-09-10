@@ -41,17 +41,31 @@ def _staged_deletion(path: str, cwd: str | None = None) -> bool:
     return r.returncode == 0 and path in r.stdout.splitlines()
 
 
-def _git_dir(cwd: str | None) -> str:
-    """Absolute path to the repo's git dir (handles worktrees/submodules,
-    where it isn't simply `<cwd>/.git`)."""
+def _git_common_dir(cwd: str | None) -> str:
+    """Absolute path to the repo's *shared* git dir. In a linked worktree,
+    `git rev-parse --git-dir` returns the worktree-private admin dir (e.g.
+    `.git/worktrees/<name>`), which has no `hooks/` of its own -- the hooks
+    live in the common dir shared by the main checkout and all worktrees,
+    found via `--git-common-dir` (e.g. plain `.git`)."""
     root = cwd or "."
-    r = _run(["git", "rev-parse", "--git-dir"], cwd=cwd)
+    r = _run(["git", "rev-parse", "--git-common-dir"], cwd=cwd)
     git_dir = r.stdout.strip() if r.returncode == 0 else ".git"
     return git_dir if os.path.isabs(git_dir) else os.path.join(root, git_dir)
 
 
+def _hooks_dir(cwd: str | None) -> str:
+    """Absolute path to the directory git hooks live in: `core.hooksPath` if
+    the repo configures a custom one, otherwise `<git-common-dir>/hooks`."""
+    root = cwd or "."
+    r = _run(["git", "config", "core.hooksPath"], cwd=cwd)
+    custom = r.stdout.strip() if r.returncode == 0 else ""
+    if custom:
+        return custom if os.path.isabs(custom) else os.path.join(root, custom)
+    return os.path.join(_git_common_dir(cwd), "hooks")
+
+
 def _pre_commit_hook_installed(cwd: str | None) -> bool:
-    hook_path = os.path.join(_git_dir(cwd), "hooks", "pre-commit")
+    hook_path = os.path.join(_hooks_dir(cwd), "pre-commit")
     return os.path.isfile(hook_path) and os.access(hook_path, os.X_OK)
 
 
