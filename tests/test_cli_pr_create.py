@@ -94,6 +94,76 @@ def test_pr_create_passes_labels_and_prints_web_link_for_github(monkeypatch) -> 
     assert "https://github.com/owner/repo/pull/7" in result.output
 
 
+def test_pr_create_defaults_to_draft_and_prints_publish_hint_for_github(monkeypatch) -> None:
+    remote = GitHubRemote("owner", "repo")
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
+    monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feature-x")
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.has_build_policy", lambda gh, target: False)
+
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/pull/7\n", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    result = runner.invoke(app, ["pr", "create", "--target", "main"])
+
+    assert result.exit_code == 0, result.output
+    assert "--draft" in captured_cmd
+    assert "https://github.com/owner/repo/pull/7" in result.output
+    assert "bdt pr publish" in result.output
+
+
+def test_pr_create_no_draft_skips_draft_flag_and_publish_hint_for_github(monkeypatch) -> None:
+    remote = GitHubRemote("owner", "repo")
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
+    monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feature-x")
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.has_build_policy", lambda gh, target: False)
+
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/pull/7\n", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    result = runner.invoke(app, ["pr", "create", "--target", "main", "--no-draft"])
+
+    assert result.exit_code == 0, result.output
+    assert "--draft" not in captured_cmd
+    assert "https://github.com/owner/repo/pull/7" in result.output
+    assert "bdt pr publish" not in result.output
+
+
+def test_pr_create_defaults_to_draft_for_ado(monkeypatch) -> None:
+    remote = AdoRemote("bmeurope", "BMS - CCMT2", "BMS - CCMT2")
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
+    monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feature-x")
+    monkeypatch.setattr("bmsdna.devtools.cli.require_az", lambda: "az")
+    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.pr_build.has_build_policy", lambda session, remote, target: False)
+
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout=json.dumps({"pullRequestId": 456, "title": "feat: widgets"}), stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.cli.subprocess.run", fake_run)
+
+    result = runner.invoke(app, ["pr", "create", "--target", "test"])
+
+    assert result.exit_code == 0, result.output
+    assert "--draft" in captured_cmd
+    assert captured_cmd[captured_cmd.index("--draft") + 1] == "true"
+    assert "bdt pr publish" in result.output
+
+
 def test_pr_create_fails_before_touching_gh_az_when_required_label_group_missing(monkeypatch) -> None:
     monkeypatch.setattr(
         "bmsdna.devtools.cli.pr_labels.required_label_groups",

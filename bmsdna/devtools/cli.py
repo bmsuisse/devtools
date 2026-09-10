@@ -91,7 +91,11 @@ def _attach_screenshots(attach: Callable[[], None]) -> None:
 @pr_app.command("create")
 def pr_create(
     target: str = typer.Option("main", "--target", help="Target branch (e.g. main, test)"),
-    draft: bool = typer.Option(False, "--draft", help="Create the PR as a draft (not ready for review)"),
+    draft: bool = typer.Option(
+        True,
+        "--draft/--no-draft",
+        help="Create the PR as a draft (not ready for review). Defaults to draft; pass --no-draft to publish it immediately.",
+    ),
     label: list[str] = typer.Option(
         [],
         "--label",
@@ -129,7 +133,6 @@ def pr_create(
         build_policy = gh_pr.has_build_policy(gh, target)
         if returncode == 0 and screenshot:
             _attach_screenshots(lambda: gh_pr.add_screenshots(gh, remote.owner, remote.repo, source_branch, screenshot))
-        publish_hint = "`gh pr ready`"
     else:
         az = require_az()
         cmd = [
@@ -176,13 +179,12 @@ def pr_create(
                 pr_build.add_screenshots(session, remote, pr, screenshot)
 
             _attach_screenshots(_add)
-        publish_hint = "`az repos pr update --id <PR-ID> --draft false`"
 
     if returncode == 0 and pr_url:
         print(f"\n{pr_url}")
 
     if returncode == 0 and draft:
-        print(f"\nCreated as a draft PR. Run `bdt pr publish` (or {publish_hint}) to mark it ready for review.")
+        print("\nCreated as a draft PR. Run `bdt pr publish` to mark it ready for review.")
 
     if returncode == 0 and build_policy:
         print("\nRun `bdt pr status` to check whether the CI build passes.")
