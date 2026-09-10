@@ -14,15 +14,28 @@ Built directly on the Work Item Tracking REST API (api-version 7.1):
 
 Screenshots are handled in two steps, since the classic long-text fields
 (Description, Repro Steps, ...) default to HTML formatting via the REST API
-(Markdown is an explicit opt-in per field via `/multilineFieldsFormat/...`)
-while a raw `![name](url)` would just render as literal text there:
+(Markdown is an explicit opt-in per field via `/multilineFieldsFormat/...`),
+and Comments have no such per-field toggle at all:
   1. Upload each screenshot as an attachment and link it to the work item via
      an "AttachedFile" relation, so it shows up in the Attachments tab.
-  2. Post/append a comment embedding the same images with Markdown `![]()`
-     syntax — the work item Discussion/Comments control has rendered
-     Markdown (including inline images) since it replaced the old HTML
-     System.History field, independent of the Description field's
-     HTML/Markdown toggle.
+  2. Post/append a comment embedding the same images as raw HTML `<img>` tags
+     (`build_screenshots_section_html`), not Markdown `![]()`. Whether a work
+     item's Comments/Discussion control renders Markdown at all is an
+     org/tenant-level rollout state — the "Add Comment" REST API's request
+     body is just `{"text": ...}`, with no `format` field a caller can set to
+     request it (confirmed: passing one is silently ignored) — so `![]()` can
+     end up showing as literal unrendered text depending on the org. A raw
+     `<img>` tag sidesteps that: it renders natively wherever comments are
+     HTML-formatted, and still renders under Markdown formatting since
+     Markdown renderers pass inline HTML through untouched.
+
+`--description` opts System.Description into that same Markdown formatting (see
+`_markdown_format_op`) for every create/update that sets it, since callers write it as Markdown
+(headings, lists, inline code, ...) — left as literal HTML-escaped text otherwise. This is a
+per-field, per-work-item JSON Patch op (`/multilineFieldsFormat/System.Description`), included
+alongside the field's own value in the same create/update patch document; it doesn't touch any
+other field, work item, or process-level setting. One caveat carried over from the web UI: once
+a field is saved as Markdown it can't be switched back to HTML via the API.
 """
 
 from __future__ import annotations
@@ -35,7 +48,7 @@ import requests
 
 from .bdt_config import load_bdt_table
 from .gitrepo import AdoRemote
-from .pr_markdown import build_screenshots_section
+from .pr_markdown import build_screenshots_section_html
 
 COMMENTS_API_VERSION = "7.1-preview.4"
 
@@ -61,6 +74,14 @@ def get_team_area_path(session: requests.Session, remote: AdoRemote, team: str) 
     return r.json()["defaultValue"]
 
 
+def _markdown_format_op(field: str) -> dict:
+    """The JSON Patch op that opts a long-text field into Markdown rendering (HTML is the
+    REST API default). Per-field, per-work-item — safe to include alongside that field's own
+    value in the same create/update patch document without affecting other fields/work items.
+    """
+    return {"op": "add", "path": f"/multilineFieldsFormat/{field}", "value": "Markdown"}
+
+
 def build_create_ops(
     title: str,
     description: str | None = None,
@@ -71,6 +92,7 @@ def build_create_ops(
     ops = [{"op": "add", "path": "/fields/System.Title", "value": title}]
     if description:
         ops.append({"op": "add", "path": "/fields/System.Description", "value": description})
+        ops.append(_markdown_format_op("System.Description"))
     if area_path:
         ops.append({"op": "add", "path": "/fields/System.AreaPath", "value": area_path})
     if tags:
@@ -99,6 +121,7 @@ def build_update_ops(
         ops.append({"op": "add", "path": "/fields/System.Title", "value": title})
     if description is not None:
         ops.append({"op": "add", "path": "/fields/System.Description", "value": description})
+        ops.append(_markdown_format_op("System.Description"))
     if area_path is not None:
         ops.append({"op": "add", "path": "/fields/System.AreaPath", "value": area_path})
     if tags is not None:
@@ -194,7 +217,16 @@ def delete_work_item(session: requests.Session, remote: AdoRemote, work_item_id:
 
 
 def upload_attachment(session: requests.Session, remote: AdoRemote, attachment_name: str, file_path: str) -> tuple[str, str]:
-    """Upload `file_path` as a work item attachment named `attachment_name`; returns (id, download url)."""
+    """Upload `file_path` as a work item attachment named `attachment_name`; returns (id, download url).
+
+    Azure DevOps' WIT attachment-download endpoint only infers Content-Type/Content-Disposition
+    from a `?fileName=...` query parameter — without it, a GET serves `application/octet-stream`
+    with `Content-Disposition: attachment` instead of e.g. `image/png` (confirmed by comparing
+    response headers with/without it against a live org), which would make an `<img>`/`![]()`
+    embed (see `build_screenshots_section_html`) show a broken image instead of the picture. In
+    practice the upload API already echoes the `fileName` query param back in its `url` response
+    field, but this guards against an environment/API-version where it doesn't.
+    """
     r = session.post(
         f"{_base_url(remote)}/_apis/wit/attachments",
         params={"fileName": attachment_name, "api-version": "7.1"},
@@ -203,7 +235,10 @@ def upload_attachment(session: requests.Session, remote: AdoRemote, attachment_n
     )
     r.raise_for_status()
     body = r.json()
-    return body["id"], body["url"]
+    url = body["url"]
+    if "fileName=" not in url:
+        url = f"{url}?fileName={quote(attachment_name, safe='')}"
+    return body["id"], url
 
 
 def _upload_screenshots(session: requests.Session, remote: AdoRemote, screenshot_paths: list[str]) -> list[tuple[str, str]]:
@@ -265,10 +300,10 @@ def delete_comment(session: requests.Session, remote: AdoRemote, work_item_id: i
 
 
 def add_screenshots(session: requests.Session, remote: AdoRemote, work_item_id: int, screenshot_paths: list[str]) -> None:
-    """Upload+link screenshots as attachments, then post a comment embedding them (Markdown)."""
+    """Upload+link screenshots as attachments, then post a comment embedding them as HTML `<img>` tags."""
     images = _upload_screenshots(session, remote, screenshot_paths)
     link_attachments(session, remote, work_item_id, images)
-    comment = add_comment(session, remote, work_item_id, build_screenshots_section(None, images).strip())
+    comment = add_comment(session, remote, work_item_id, build_screenshots_section_html(None, images).strip())
     print(f"Attached {len(screenshot_paths)} screenshot(s) to work item #{work_item_id} (comment #{comment['id']})")
 
 
@@ -277,7 +312,7 @@ def comment_with_screenshots(session: requests.Session, remote: AdoRemote, work_
     images = _upload_screenshots(session, remote, screenshot_paths) if screenshot_paths else []
     if images:
         link_attachments(session, remote, work_item_id, images)
-    content = build_screenshots_section(message, images).strip() if images else (message or "")
+    content = build_screenshots_section_html(message, images).strip() if images else (message or "")
     comment = add_comment(session, remote, work_item_id, content)
     print(f"Added comment #{comment['id']} ({len(screenshot_paths)} screenshot(s)) to work item #{work_item_id}")
     return comment
