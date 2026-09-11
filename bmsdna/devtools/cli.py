@@ -74,8 +74,8 @@ def _resolve_ado_pr(pat: str | None, remote: AdoRemote, source_branch: str, targ
     return session, pr
 
 
-def _attach_screenshots(attach: Callable[[], None]) -> None:
-    """Run an attach-screenshots step without letting its failure mask an already-successful `pr create`.
+def _attach_assets(attach: Callable[[], None]) -> None:
+    """Run an attach-screenshots/files step without letting its failure mask an already-successful `pr create`.
 
     The PR itself is already live by the time this runs; a transient failure
     here (a rejected push, an attachment upload error, a stale --target not
@@ -85,7 +85,7 @@ def _attach_screenshots(attach: Callable[[], None]) -> None:
     try:
         attach()
     except (Exception, SystemExit) as e:
-        print(f"Warning: PR created, but attaching screenshots failed: {e}")
+        print(f"Warning: PR created, but attaching screenshots/files failed: {e}")
 
 
 @pr_app.command("create")
@@ -107,6 +107,9 @@ def pr_create(
     screenshot: list[str] = typer.Option(
         [], "--screenshot", help="Path to an image to attach to the PR description (repeatable)"
     ),
+    file: list[str] = typer.Option(
+        [], "--file", help="Path to an arbitrary file to attach to the PR description as a linked attachment (repeatable)"
+    ),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -119,6 +122,9 @@ def pr_create(
     for path in screenshot:
         if not Path(path).is_file():
             raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
+    for path in file:
+        if not Path(path).is_file():
+            raise typer.BadParameter(f"File not found: {path}", param_hint="--file")
 
     missing_groups = pr_labels.missing_label_groups(pr_labels.required_label_groups(), label)
     if missing_groups:
@@ -132,7 +138,9 @@ def pr_create(
         returncode, pr_url = gh_pr.create(gh, target, args or [], draft=draft, labels=label)
         build_policy = gh_pr.has_build_policy(gh, target)
         if returncode == 0 and screenshot:
-            _attach_screenshots(lambda: gh_pr.add_screenshots(gh, remote.owner, remote.repo, source_branch, screenshot))
+            _attach_assets(lambda: gh_pr.add_screenshots(gh, remote.owner, remote.repo, source_branch, screenshot))
+        if returncode == 0 and file:
+            _attach_assets(lambda: gh_pr.add_files(gh, remote.owner, remote.repo, source_branch, file))
     else:
         az = require_az()
         cmd = [
@@ -174,11 +182,17 @@ def pr_create(
         session.headers.update(auth_header(pat))
         build_policy = pr_build.has_build_policy(session, remote, target)
         if returncode == 0 and screenshot:
-            def _add() -> None:
+            def _add_screenshots() -> None:
                 pr = pr_build.get_pr(session, remote, source_branch, target)
                 pr_build.add_screenshots(session, remote, pr, screenshot)
 
-            _attach_screenshots(_add)
+            _attach_assets(_add_screenshots)
+        if returncode == 0 and file:
+            def _add_files() -> None:
+                pr = pr_build.get_pr(session, remote, source_branch, target)
+                pr_build.add_files(session, remote, pr, file)
+
+            _attach_assets(_add_files)
 
     if returncode == 0 and pr_url:
         print(f"\n{pr_url}")
@@ -235,6 +249,9 @@ def pr_update(
     screenshot: list[str] = typer.Option(
         [], "--screenshot", help="Path to an image to append to the PR description (repeatable)"
     ),
+    file: list[str] = typer.Option(
+        [], "--file", help="Path to an arbitrary file to append to the PR description as a linked attachment (repeatable)"
+    ),
     target: str = typer.Option("main", "--target", help="Target branch of the PR (Azure DevOps only)"),
     pat: str | None = typer.Option(
         None,
@@ -247,16 +264,19 @@ def pr_update(
     for path in screenshot:
         if not Path(path).is_file():
             raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
-    if title is None and description is None and not screenshot:
-        raise typer.BadParameter("Provide at least one of --title, --description, --screenshot")
+    for path in file:
+        if not Path(path).is_file():
+            raise typer.BadParameter(f"File not found: {path}", param_hint="--file")
+    if title is None and description is None and not screenshot and not file:
+        raise typer.BadParameter("Provide at least one of --title, --description, --screenshot, --file")
 
     remote = current_remote()
     source_branch = current_branch()
     if isinstance(remote, GitHubRemote):
-        gh_pr.update(require_gh(), remote.owner, remote.repo, source_branch, title, description, screenshot)
+        gh_pr.update(require_gh(), remote.owner, remote.repo, source_branch, title, description, screenshot, file)
     else:
         session, pr = _resolve_ado_pr(pat, remote, source_branch, target)
-        pr_build.update(session, remote, pr, title, description, screenshot)
+        pr_build.update(session, remote, pr, title, description, screenshot, file)
 
 
 @pr_app.command("comment")
@@ -264,6 +284,9 @@ def pr_comment(
     message: str | None = typer.Option(None, "--message", help="Comment text"),
     screenshot: list[str] = typer.Option(
         [], "--screenshot", help="Path to an image to embed in the comment (repeatable)"
+    ),
+    file: list[str] = typer.Option(
+        [], "--file", help="Path to an arbitrary file to link in the comment as an attachment (repeatable)"
     ),
     target: str = typer.Option("main", "--target", help="Target branch of the PR (Azure DevOps only)"),
     pat: str | None = typer.Option(
@@ -277,16 +300,19 @@ def pr_comment(
     for path in screenshot:
         if not Path(path).is_file():
             raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
-    if not message and not screenshot:
-        raise typer.BadParameter("Provide at least one of --message, --screenshot")
+    for path in file:
+        if not Path(path).is_file():
+            raise typer.BadParameter(f"File not found: {path}", param_hint="--file")
+    if not message and not screenshot and not file:
+        raise typer.BadParameter("Provide at least one of --message, --screenshot, --file")
 
     remote = current_remote()
     source_branch = current_branch()
     if isinstance(remote, GitHubRemote):
-        gh_pr.comment_with_screenshots(require_gh(), remote.owner, remote.repo, source_branch, message, screenshot)
+        gh_pr.comment_with_screenshots(require_gh(), remote.owner, remote.repo, source_branch, message, screenshot, file)
     else:
         session, pr = _resolve_ado_pr(pat, remote, source_branch, target)
-        pr_build.comment_with_screenshots(session, remote, pr["pullRequestId"], message, screenshot)
+        pr_build.comment_with_screenshots(session, remote, pr["pullRequestId"], message, screenshot, file)
 
 
 @issue_app.command("create")
@@ -305,6 +331,9 @@ def issue_create(
     screenshot: list[str] = typer.Option(
         [], "--screenshot", help="Path to an image to attach to the issue / work item (repeatable)"
     ),
+    file: list[str] = typer.Option(
+        [], "--file", help="Path to an arbitrary file to attach to the issue / work item as a linked attachment (repeatable)"
+    ),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -317,15 +346,18 @@ def issue_create(
     for path in screenshot:
         if not Path(path).is_file():
             raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
+    for path in file:
+        if not Path(path).is_file():
+            raise typer.BadParameter(f"File not found: {path}", param_hint="--file")
 
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_issue.create(require_gh(), remote.owner, remote.repo, title, description, label, screenshot, args or [])
+        gh_issue.create(require_gh(), remote.owner, remote.repo, title, description, label, screenshot, args or [], file_paths=file)
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
         resolved_board = ado_issue.resolve_board(board)
-        ado_issue.create(session, remote, type_, title, description, resolved_board, tag, screenshot)
+        ado_issue.create(session, remote, type_, title, description, resolved_board, tag, screenshot, file)
 
 
 @issue_app.command("search")
@@ -443,6 +475,9 @@ def issue_comment_add(
     screenshot: list[str] = typer.Option(
         [], "--screenshot", help="Path to an image to embed in the comment (repeatable)"
     ),
+    file: list[str] = typer.Option(
+        [], "--file", help="Path to an arbitrary file to link in the comment as an attachment (repeatable)"
+    ),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -454,16 +489,19 @@ def issue_comment_add(
     for path in screenshot:
         if not Path(path).is_file():
             raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
-    if not message and not screenshot:
-        raise typer.BadParameter("Provide at least one of --message, --screenshot")
+    for path in file:
+        if not Path(path).is_file():
+            raise typer.BadParameter(f"File not found: {path}", param_hint="--file")
+    if not message and not screenshot and not file:
+        raise typer.BadParameter("Provide at least one of --message, --screenshot, --file")
 
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_issue.comment(require_gh(), remote.owner, remote.repo, number, message, screenshot)
+        gh_issue.comment(require_gh(), remote.owner, remote.repo, number, message, screenshot, file)
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
-        ado_issue.comment_with_screenshots(session, remote, number, message, screenshot)
+        ado_issue.comment_with_screenshots(session, remote, number, message, screenshot, file)
 
 
 @issue_comment_app.command("update")

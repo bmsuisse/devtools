@@ -13,7 +13,7 @@ import requests
 from .ado_auth import auth_header
 from .cli_tools import is_claude_code
 from .gitrepo import AdoRemote, current_branch
-from .pr_markdown import build_screenshots_section
+from .pr_markdown import build_attachments_section, build_screenshots_section
 
 # Matches an ISO 8601 timestamp at the start of a log line, e.g. 2024-03-21T15:01:23.1234567Z
 TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*")
@@ -158,15 +158,15 @@ def upload_attachment(session: requests.Session, remote: AdoRemote, pr_id: int, 
     return r.json()["url"]
 
 
-def _upload_screenshots(session: requests.Session, remote: AdoRemote, pr_id: int, screenshot_paths: list[str]) -> list[tuple[str, str]]:
-    """Upload each screenshot as a PR attachment; returns (display name, url) pairs.
+def _upload_attachments(session: requests.Session, remote: AdoRemote, pr_id: int, paths: list[str]) -> list[tuple[str, str]]:
+    """Upload each path as a PR attachment (screenshot or arbitrary file); returns (display name, url) pairs.
 
-    Attachment names are index-prefixed so two screenshots sharing a basename
-    (e.g. two 'before.png' from different folders) don't overwrite each other.
+    Attachment names are index-prefixed so two paths sharing a basename (e.g. two 'before.png'
+    from different folders) don't overwrite each other.
     """
     return [
         (Path(path).name, upload_attachment(session, remote, pr_id, f"{i:02d}-{Path(path).name}", path))
-        for i, path in enumerate(screenshot_paths)
+        for i, path in enumerate(paths)
     ]
 
 
@@ -182,9 +182,17 @@ def _patch_pr(session: requests.Session, remote: AdoRemote, pr_id: int, fields: 
 def add_screenshots(session: requests.Session, remote: AdoRemote, pr: dict, screenshot_paths: list[str]) -> None:
     """Upload each screenshot as a PR attachment and append them to the PR description."""
     pr_id = pr["pullRequestId"]
-    images = _upload_screenshots(session, remote, pr_id, screenshot_paths)
+    images = _upload_attachments(session, remote, pr_id, screenshot_paths)
     _patch_pr(session, remote, pr_id, {"description": build_screenshots_section(pr.get("description"), images)})
     print(f"Attached {len(screenshot_paths)} screenshot(s) to PR #{pr_id}")
+
+
+def add_files(session: requests.Session, remote: AdoRemote, pr: dict, file_paths: list[str]) -> None:
+    """Upload each file as a PR attachment and append them as linked attachments to the PR description."""
+    pr_id = pr["pullRequestId"]
+    files = _upload_attachments(session, remote, pr_id, file_paths)
+    _patch_pr(session, remote, pr_id, {"description": build_attachments_section(pr.get("description"), files)})
+    print(f"Attached {len(file_paths)} file(s) to PR #{pr_id}")
 
 
 def update(
@@ -194,16 +202,19 @@ def update(
     title: str | None = None,
     description: str | None = None,
     screenshot_paths: list[str] | None = None,
+    file_paths: list[str] | None = None,
 ) -> None:
-    """Update a PR's title and/or description, optionally appending screenshots to the description."""
+    """Update a PR's title and/or description, optionally appending screenshots/files to the description."""
     pr_id = pr["pullRequestId"]
     fields: dict = {}
     if title:
         fields["title"] = title
-    if description is not None or screenshot_paths:
+    if description is not None or screenshot_paths or file_paths:
         new_description = description if description is not None else pr.get("description")
         if screenshot_paths:
-            new_description = build_screenshots_section(new_description, _upload_screenshots(session, remote, pr_id, screenshot_paths))
+            new_description = build_screenshots_section(new_description, _upload_attachments(session, remote, pr_id, screenshot_paths))
+        if file_paths:
+            new_description = build_attachments_section(new_description, _upload_attachments(session, remote, pr_id, file_paths))
         fields["description"] = new_description
     if not fields:
         return
@@ -229,12 +240,27 @@ def add_comment(session: requests.Session, remote: AdoRemote, pr_id: int, conten
     r.raise_for_status()
 
 
-def comment_with_screenshots(session: requests.Session, remote: AdoRemote, pr_id: int, message: str | None, screenshot_paths: list[str]) -> None:
-    """Post a comment, with a message and/or screenshots, on the PR."""
-    images = _upload_screenshots(session, remote, pr_id, screenshot_paths) if screenshot_paths else []
-    content = build_screenshots_section(message, images).strip() if images else (message or "")
+def comment_with_screenshots(
+    session: requests.Session,
+    remote: AdoRemote,
+    pr_id: int,
+    message: str | None,
+    screenshot_paths: list[str],
+    file_paths: list[str] | None = None,
+) -> None:
+    """Post a comment, with a message and/or screenshots/files, on the PR."""
+    file_paths = file_paths or []
+    images = _upload_attachments(session, remote, pr_id, screenshot_paths) if screenshot_paths else []
+    files = _upload_attachments(session, remote, pr_id, file_paths) if file_paths else []
+    content = message or ""
+    if images:
+        content = build_screenshots_section(content, images)
+    if files:
+        content = build_attachments_section(content, files)
+    if images or files:
+        content = content.strip()
     add_comment(session, remote, pr_id, content)
-    print(f"Added comment ({len(screenshot_paths)} screenshot(s)) to PR #{pr_id}")
+    print(f"Added comment ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) to PR #{pr_id}")
 
 
 def get_builds_for_pr(session: requests.Session, remote: AdoRemote, source_branch: str, pr_id: int) -> list:

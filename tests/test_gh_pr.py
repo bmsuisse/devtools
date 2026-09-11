@@ -3,12 +3,15 @@ from unittest.mock import MagicMock
 import pytest
 
 from bmsdna.devtools.gh_pr import (
+    add_files,
     check_bucket,
     check_label,
+    comment_with_screenshots,
     create,
     draft_notice,
     merge_conflict_message,
     protection_requires_status_checks,
+    update,
 )
 
 # Real statusCheckRollup entries captured from `gh pr view 13902 -R cli/cli --json statusCheckRollup`.
@@ -135,3 +138,69 @@ def test_create_returns_none_url_on_failure(monkeypatch, capsys) -> None:
     assert returncode == 1
     assert url is None
     assert "not found" in capsys.readouterr().err
+
+
+def _fake_push_assets(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.push_assets",
+        lambda owner, repo, branch, paths, **kwargs: [f"https://github.com/{owner}/{repo}/blob/pr-assets/{branch}/{i:02d}-{p.split('/')[-1]}?raw=true" for i, p in enumerate(paths)],
+    )
+
+
+def test_add_files_pushes_and_appends_attachments_section(monkeypatch) -> None:
+    _fake_push_assets(monkeypatch)
+    captured_cmds: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmds.append(cmd)
+        if "view" in cmd:
+            return MagicMock(returncode=0, stdout='{"number": 7, "body": "existing body"}', stderr="")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    add_files("gh", "owner", "repo", "feature-x", ["/tmp/report.pdf"])
+
+    edit_cmd = next(cmd for cmd in captured_cmds if "edit" in cmd)
+    body = edit_cmd[edit_cmd.index("--body") + 1]
+    assert "## Attachments" in body
+    assert "[report.pdf]" in body
+    assert "existing body" in body
+
+
+def test_update_appends_both_screenshots_and_files(monkeypatch) -> None:
+    _fake_push_assets(monkeypatch)
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        if "view" in cmd:
+            return MagicMock(returncode=0, stdout='{"number": 7, "body": "existing body"}', stderr="")
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    update("gh", "owner", "repo", "feature-x", screenshot_paths=["/tmp/shot.png"], file_paths=["/tmp/report.pdf"])
+
+    body = captured_cmd[captured_cmd.index("--body") + 1]
+    assert "## Screenshots" in body
+    assert "## Attachments" in body
+    assert body.index("## Screenshots") < body.index("## Attachments")
+
+
+def test_comment_with_screenshots_and_files_builds_both_sections(monkeypatch) -> None:
+    _fake_push_assets(monkeypatch)
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    comment_with_screenshots("gh", "owner", "repo", "feature-x", "Fixed", ["/tmp/shot.png"], ["/tmp/report.pdf"])
+
+    body = captured_cmd[captured_cmd.index("--body") + 1]
+    assert "Fixed" in body
+    assert "## Screenshots" in body
+    assert "## Attachments" in body

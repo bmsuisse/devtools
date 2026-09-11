@@ -182,6 +182,40 @@ def test_pr_create_fails_before_touching_gh_az_when_required_label_group_missing
     assert "breaking" in result.output
 
 
+def test_pr_create_rejects_missing_file(monkeypatch) -> None:
+    result = runner.invoke(app, ["pr", "create", "--target", "main", "--file", "/nonexistent/report.pdf"])
+
+    assert result.exit_code != 0
+    assert "File not found" in result.output
+
+
+def test_pr_create_attaches_files_for_github(monkeypatch, tmp_path) -> None:
+    remote = GitHubRemote("owner", "repo")
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
+    monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feature-x")
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.has_build_policy", lambda gh, target: False)
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.subprocess.run",
+        lambda cmd, **kwargs: MagicMock(returncode=0, stdout="https://github.com/owner/repo/pull/7\n", stderr=""),
+    )
+
+    captured: dict = {}
+
+    def fake_add_files(gh, owner, repo, branch, file_paths):
+        captured["file_paths"] = file_paths
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.add_files", fake_add_files)
+
+    report = tmp_path / "report.pdf"
+    report.write_bytes(b"fake-pdf-bytes")
+
+    result = runner.invoke(app, ["pr", "create", "--target", "main", "--file", str(report)])
+
+    assert result.exit_code == 0, result.output
+    assert captured["file_paths"] == [str(report)]
+
+
 def test_pr_create_proceeds_when_required_label_group_satisfied(monkeypatch) -> None:
     remote = GitHubRemote("owner", "repo")
     monkeypatch.setattr(

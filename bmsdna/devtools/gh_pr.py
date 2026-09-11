@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 
 from .cli_tools import is_claude_code
-from .pr_markdown import build_screenshots_section
+from .pr_markdown import build_attachments_section, build_screenshots_section
 
 PR_VIEW_FIELDS = "number,title,baseRefName,mergeable,statusCheckRollup,isDraft"
 
@@ -206,16 +206,17 @@ def _git(args: list[str], env: dict[str, str] | None = None) -> str:
     return r.stdout.strip()
 
 
-def push_screenshots(owner: str, repo: str, branch: str, paths: list[str], max_attempts: int = 5) -> list[str]:
-    """Push `paths` to a `<branch>/` folder on the `pr-assets` branch and return their raw blob URLs.
+def push_assets(owner: str, repo: str, branch: str, paths: list[str], max_attempts: int = 5) -> list[str]:
+    """Push `paths` (screenshots or arbitrary files) to a `<branch>/` folder on the `pr-assets`
+    branch and return their raw blob URLs.
 
     Built entirely from plumbing commands (hash-object/read-tree/write-tree/
     commit-tree) against a throwaway index file, so nothing is checked out —
     safe to call no matter what the current working tree looks like.
 
-    Tree paths are index-prefixed so two screenshots sharing a basename don't
+    Tree paths are index-prefixed so two paths sharing a basename don't
     overwrite each other. Retries on push rejection (another `pr create
-    --screenshot` moved the branch tip in the meantime) by re-fetching the new
+    --screenshot`/`--file` moved the branch tip in the meantime) by re-fetching the new
     tip and rebuilding the commit on top of it.
     """
     for attempt in range(1, max_attempts + 1):
@@ -239,7 +240,7 @@ def push_screenshots(owner: str, repo: str, branch: str, paths: list[str], max_a
 
             tree_sha = _git(["write-tree"], env=env)
 
-        commit_args = ["commit-tree", tree_sha, "-m", f"screenshots: {branch}"]
+        commit_args = ["commit-tree", tree_sha, "-m", f"assets: {branch}"]
         if parent:
             commit_args += ["-p", parent]
         commit_sha = _git(commit_args)
@@ -258,8 +259,13 @@ def push_screenshots(owner: str, repo: str, branch: str, paths: list[str], max_a
 
 
 def _screenshot_images(owner: str, repo: str, branch: str, screenshot_paths: list[str]) -> list[tuple[str, str]]:
-    urls = push_screenshots(owner, repo, branch, screenshot_paths)
+    urls = push_assets(owner, repo, branch, screenshot_paths)
     return list(zip((Path(p).name for p in screenshot_paths), urls))
+
+
+def _file_links(owner: str, repo: str, branch: str, file_paths: list[str]) -> list[tuple[str, str]]:
+    urls = push_assets(owner, repo, branch, file_paths)
+    return list(zip((Path(p).name for p in file_paths), urls))
 
 
 def add_screenshots(gh: str, owner: str, repo: str, branch: str, screenshot_paths: list[str]) -> None:
@@ -273,6 +279,17 @@ def add_screenshots(gh: str, owner: str, repo: str, branch: str, screenshot_path
     print(f"Attached {len(screenshot_paths)} screenshot(s) to PR #{pr['number']}")
 
 
+def add_files(gh: str, owner: str, repo: str, branch: str, file_paths: list[str]) -> None:
+    """Push files to the `pr-assets` branch and append them as linked attachments to the current branch's PR body."""
+    files = _file_links(owner, repo, branch, file_paths)
+    pr = _run_gh_json(gh, ["pr", "view", "--json", "number,body"])
+    body = build_attachments_section(pr.get("body"), files)
+    r = subprocess.run([gh, "pr", "edit", str(pr["number"]), "--body", body], capture_output=True, encoding="utf-8")
+    if r.returncode != 0:
+        sys.exit((r.stderr or r.stdout).strip() or "`gh pr edit` failed")
+    print(f"Attached {len(file_paths)} file(s) to PR #{pr['number']}")
+
+
 def update(
     gh: str,
     owner: str,
@@ -281,16 +298,19 @@ def update(
     title: str | None = None,
     description: str | None = None,
     screenshot_paths: list[str] | None = None,
+    file_paths: list[str] | None = None,
 ) -> None:
-    """Update a PR's title and/or body, optionally appending screenshots to the body."""
+    """Update a PR's title and/or body, optionally appending screenshots/files to the body."""
     pr = _run_gh_json(gh, ["pr", "view", "--json", "number,body"])
     args = [gh, "pr", "edit", str(pr["number"])]
     if title:
         args += ["--title", title]
-    if description is not None or screenshot_paths:
+    if description is not None or screenshot_paths or file_paths:
         new_body: str = description if description is not None else (pr.get("body") or "")
         if screenshot_paths:
             new_body = build_screenshots_section(new_body, _screenshot_images(owner, repo, branch, screenshot_paths))
+        if file_paths:
+            new_body = build_attachments_section(new_body, _file_links(owner, repo, branch, file_paths))
         args += ["--body", new_body]
     if len(args) == 3:
         return
@@ -300,14 +320,30 @@ def update(
     print(f"Updated PR #{pr['number']}")
 
 
-def comment_with_screenshots(gh: str, owner: str, repo: str, branch: str, message: str | None, screenshot_paths: list[str]) -> None:
-    """Post a comment, with a message and/or screenshots, on the current branch's PR."""
+def comment_with_screenshots(
+    gh: str,
+    owner: str,
+    repo: str,
+    branch: str,
+    message: str | None,
+    screenshot_paths: list[str],
+    file_paths: list[str] | None = None,
+) -> None:
+    """Post a comment, with a message and/or screenshots/files, on the current branch's PR."""
+    file_paths = file_paths or []
     images = _screenshot_images(owner, repo, branch, screenshot_paths) if screenshot_paths else []
-    content = build_screenshots_section(message, images).strip() if images else (message or "")
+    files = _file_links(owner, repo, branch, file_paths) if file_paths else []
+    content = message or ""
+    if images:
+        content = build_screenshots_section(content, images)
+    if files:
+        content = build_attachments_section(content, files)
+    if images or files:
+        content = content.strip()
     r = subprocess.run([gh, "pr", "comment", "--body", content], capture_output=True, encoding="utf-8")
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or "`gh pr comment` failed")
-    print(f"Added comment ({len(screenshot_paths)} screenshot(s)) to the current PR")
+    print(f"Added comment ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) to the current PR")
 
 
 def protection_requires_status_checks(protection: dict) -> bool:

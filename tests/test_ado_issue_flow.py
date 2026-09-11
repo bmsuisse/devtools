@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from bmsdna.devtools.ado_issue import (
+    add_files,
     comment_with_screenshots,
     create,
     delete,
@@ -126,6 +127,35 @@ def test_create_with_screenshots_uploads_links_and_comments(tmp_path) -> None:
     assert '<img src="https://dev.azure.com/myorg/_apis/wit/attachments/attach-1?fileName=00-shot.png" alt="shot.png"' in comment_text
 
 
+def test_create_with_files_uploads_links_and_comments(tmp_path) -> None:
+    session = make_session()
+    report = tmp_path / "report.pdf"
+    report.write_bytes(b"fake-pdf-bytes")
+
+    create(session, REMOTE, "Task", "Do the thing", "desc", None, ["tag1"], [], [str(report)])
+
+    post_urls = [c.args[0] for c in session.post.call_args_list]
+    assert post_urls[0] == "https://dev.azure.com/myorg/MyProj/_apis/wit/workitems/$Task"
+    assert "/_apis/wit/attachments" in post_urls[1]
+    assert post_urls[2] == "https://dev.azure.com/myorg/MyProj/_apis/wit/workItems/123/comments"
+
+    comment_text = session.post.call_args_list[2].kwargs["json"]["text"]
+    assert '<a href="https://dev.azure.com/myorg/_apis/wit/attachments/attach-1?fileName=00-report.pdf">report.pdf</a>' in comment_text
+    assert "<img" not in comment_text
+
+
+def test_add_files_links_attachment_and_comments(tmp_path) -> None:
+    session = make_session()
+    report = tmp_path / "report.pdf"
+    report.write_bytes(b"fake-pdf-bytes")
+
+    add_files(session, REMOTE, 123, [str(report)])
+
+    session.patch.assert_called_once()
+    comment_text = session.post.call_args_list[-1].kwargs["json"]["text"]
+    assert '<a href="https://dev.azure.com/myorg/_apis/wit/attachments/attach-1?fileName=00-report.pdf">report.pdf</a>' in comment_text
+
+
 def test_comment_with_screenshots_message_only() -> None:
     session = make_session()
 
@@ -149,6 +179,25 @@ def test_comment_with_screenshots_links_attachments_before_commenting(tmp_path) 
     comment_text = session.post.call_args_list[-1].kwargs["json"]["text"]
     assert '<img src="https://dev.azure.com/myorg/_apis/wit/attachments/attach-1?fileName=00-after.png" alt="after.png"' in comment_text
     assert "Fixed" in comment_text
+
+
+def test_comment_with_screenshots_and_files_links_both_and_sections_both(tmp_path) -> None:
+    session = make_session()
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"fake-png-bytes")
+    report = tmp_path / "report.pdf"
+    report.write_bytes(b"fake-pdf-bytes")
+
+    comment_with_screenshots(session, REMOTE, 42, "Fixed", [str(shot)], [str(report)])
+
+    session.patch.assert_called_once()
+    relations = session.patch.call_args.kwargs["json"]
+    assert [r["value"]["attributes"]["comment"] for r in relations] == ["shot.png", "report.pdf"]
+
+    comment_text = session.post.call_args_list[-1].kwargs["json"]["text"]
+    assert "<h2>Screenshots</h2>" in comment_text
+    assert "<h2>Attachments</h2>" in comment_text
+    assert comment_text.index("<h2>Screenshots</h2>") < comment_text.index("<h2>Attachments</h2>")
 
 
 def test_update_title_only_does_not_touch_board() -> None:
