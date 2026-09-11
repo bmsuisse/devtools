@@ -6,7 +6,7 @@ from bmsdna.devtools.gh_pr import (
     check_bucket,
     check_label,
     create,
-    draft_needs_publish_message,
+    draft_notice,
     merge_conflict_message,
     protection_requires_status_checks,
 )
@@ -71,19 +71,14 @@ def test_merge_conflict_message_conflicting() -> None:
     assert "main" in msg
 
 
-def test_draft_needs_publish_message_none_when_not_draft() -> None:
-    pr = {"number": 1, "title": "x", "isDraft": False, "reviews": [{"state": "APPROVED"}]}
-    assert draft_needs_publish_message(pr) is None
+def test_draft_notice_none_when_not_draft() -> None:
+    pr = {"number": 1, "title": "x", "isDraft": False}
+    assert draft_notice(pr) is None
 
 
-def test_draft_needs_publish_message_none_when_draft_without_review() -> None:
-    pr = {"number": 1, "title": "x", "isDraft": True, "reviews": []}
-    assert draft_needs_publish_message(pr) is None
-
-
-def test_draft_needs_publish_message_when_draft_with_review() -> None:
-    pr = {"number": 42, "title": "feat: widgets", "isDraft": True, "reviews": [{"state": "COMMENTED"}]}
-    msg = draft_needs_publish_message(pr)
+def test_draft_notice_when_draft() -> None:
+    pr = {"number": 42, "title": "feat: widgets", "isDraft": True}
+    msg = draft_notice(pr)
     assert msg is not None
     assert "PR #42" in msg
     assert "bdt pr publish" in msg

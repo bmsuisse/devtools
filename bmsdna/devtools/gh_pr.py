@@ -19,7 +19,7 @@ from pathlib import Path
 
 from .pr_markdown import build_screenshots_section
 
-PR_VIEW_FIELDS = "number,title,baseRefName,mergeable,statusCheckRollup,isDraft,reviews"
+PR_VIEW_FIELDS = "number,title,baseRefName,mergeable,statusCheckRollup,isDraft"
 
 # GitHub has no API for uploading images to a PR description (only the web
 # UI's drag-and-drop, which needs a browser session). The standard
@@ -87,17 +87,15 @@ def merge_conflict_message(pr: dict) -> str | None:
     return f"PR #{pr.get('number')} ({pr.get('title', '?')!r}) has merge conflicts with '{pr.get('baseRefName', '?')}' (mergeable=CONFLICTING)"
 
 
-def draft_needs_publish_message(pr: dict) -> str | None:
-    """None if it's fine to report status for this PR; else a message telling the user to publish it first.
+def draft_notice(pr: dict) -> str | None:
+    """None if the PR isn't a draft; else a heads-up that it is.
 
-    A draft that nobody has reviewed yet is still just work in progress — checking
-    build status on it is normal. But once a review has been submitted, the draft
-    state is what's actually blocking things, so surface that instead of reporting
-    (possibly stale or absent) check results.
+    Purely informational, not an error — review typically already happened before
+    `pr status` is even run, so this doesn't block the rest of the command.
     """
-    if not pr.get("isDraft") or not pr.get("reviews"):
+    if not pr.get("isDraft"):
         return None
-    return f"PR #{pr.get('number')} ({pr.get('title', '?')!r}) is still a draft but already has a code review — run `bdt pr publish` to mark it ready for review first."
+    return f"Note: PR #{pr.get('number')} ({pr.get('title', '?')!r}) is still a draft — run `bdt pr publish` to mark it ready for review."
 
 
 def print_check(check: dict) -> None:
@@ -108,6 +106,7 @@ def print_check(check: dict) -> None:
 
 def run(gh: str, wait: bool) -> None:
     last_line = ""
+    draft_notice_shown = False
     while True:
         pr = get_pr(gh)
 
@@ -123,9 +122,11 @@ def run(gh: str, wait: bool) -> None:
         if conflict:
             sys.exit(conflict)
 
-        draft_msg = draft_needs_publish_message(pr)
-        if draft_msg:
-            sys.exit(draft_msg)
+        if not draft_notice_shown:
+            draft_msg = draft_notice(pr)
+            if draft_msg:
+                print(draft_msg)
+            draft_notice_shown = True
 
         pr_number = pr.get("number")
         title = pr.get("title", "?")

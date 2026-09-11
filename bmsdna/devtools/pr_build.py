@@ -99,50 +99,18 @@ def merge_conflict_message(pr: dict) -> str | None:
     return f"PR #{pr_id} ({title!r}) {detail} (mergeStatus={merge_status})"
 
 
-def get_pr_threads(session: requests.Session, remote: AdoRemote, pr_id: int) -> list:
-    r = session.get(f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}/pullRequests/{pr_id}/threads", params={"api-version": "7.1"})
-    r.raise_for_status()
-    return r.json().get("value", [])
+def draft_notice(pr: dict) -> str | None:
+    """None if the PR isn't a draft; else a heads-up that it is.
 
-
-def has_code_review(threads: list) -> bool:
-    """True if a reviewer has ever cast a real vote (approve, approve-with-suggestions,
-    wait-for-author, or reject) on this PR.
-
-    Can't be answered from the PR's current `reviewers[].vote` — Azure DevOps resets every
-    vote to 0 as soon as the PR is marked back to draft, which is the only way a currently-draft
-    PR could have been reviewed in the first place (voting on a draft PR isn't allowed at all).
-    The vote event survives in the PR's system comment threads though, tagged with a
-    `CodeReviewThreadType` of "VoteUpdate", so that's what this checks instead.
+    Purely informational, not an error — review typically already happened before
+    `pr status` is even run, so this doesn't block the rest of the command.
     """
-    for thread in threads:
-        props = thread.get("properties") or {}
-        if props.get("CodeReviewThreadType", {}).get("$value") != "VoteUpdate":
-            continue
-        if props.get("CodeReviewVoteResult", {}).get("$value", "0") != "0":
-            return True
-    return False
-
-
-def draft_needs_publish_message(pr: dict, threads: list) -> str | None:
-    """None if it's fine to report status for this PR; else a message telling the user to publish it first.
-
-    A draft that nobody has reviewed yet is still just work in progress — checking
-    build status on it is normal. But once a review has been submitted, the draft
-    state is what's actually blocking things, so surface that instead of reporting
-    (possibly stale or absent) build status.
-    """
-    if not pr.get("isDraft") or not has_code_review(threads):
+    if not pr.get("isDraft"):
         return None
-    return f"PR #{pr.get('pullRequestId')} ({pr.get('title', '?')!r}) is still a draft but already has a code review — run `bdt pr publish` to mark it ready for review first."
+    return f"Note: PR #{pr.get('pullRequestId')} ({pr.get('title', '?')!r}) is still a draft — run `bdt pr publish` to mark it ready for review."
 
 
 def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, target_branch: str) -> dict:
-    """The PR from `source_branch` into `target_branch` — shared by `pr status`, `pr publish`,
-    `pr update` and `pr comment`. Deliberately doesn't apply `draft_needs_publish_message` here:
-    `pr publish` resolves its PR through this same function, and that message tells the user to
-    run `pr publish` — which would then be unable to resolve its own target PR.
-    """
     url = f"{_base_url(remote)}/_apis/git/repositories/{remote.repo}/pullrequests"
     for status in ["active", "completed"]:
         r = session.get(
@@ -340,29 +308,26 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
     session = requests.Session()
     session.headers.update(auth_header(pat))
 
-    # Checked once up front, not on every poll iteration below (fetching threads is a
-    # separate request `get_pr` doesn't need for anything else) and not inside `get_pr`
-    # itself (also used to resolve the PR for `pr publish`/`update`/`comment` — a reviewed
-    # draft must stay resolvable there, since publishing it is the way out of this message).
-    pr = get_pr(session, remote, source_branch, target_branch)
-    if pr.get("isDraft"):
-        draft_msg = draft_needs_publish_message(pr, get_pr_threads(session, remote, pr["pullRequestId"]))
-        if draft_msg:
-            sys.exit(draft_msg)
-
     # When waiting, a pipeline's "latest" build may already be a completed run
     # from before this invocation. Only accept builds newer than whatever was
     # already there when we started, so --wait actually waits for the build(s)
     # triggered by the current HEAD instead of immediately reporting a stale result.
     baseline_ids: dict[int, int] = {}
     if wait:
+        pr = get_pr(session, remote, source_branch, target_branch)
         for b in get_builds_for_pr(session, remote, source_branch, pr["pullRequestId"]):
             def_id = b.get("definition", {}).get("id")
             baseline_ids[def_id] = max(baseline_ids.get(def_id, 0), b["id"])
 
+    draft_notice_shown = False
     last_line = ""
     while True:
         pr = get_pr(session, remote, source_branch, target_branch)
+        if not draft_notice_shown:
+            draft_msg = draft_notice(pr)
+            if draft_msg:
+                print(draft_msg)
+            draft_notice_shown = True
         pr_id = pr["pullRequestId"]
         pr_title = pr.get("title", "?")
         pr_status = pr.get("status", "?")
