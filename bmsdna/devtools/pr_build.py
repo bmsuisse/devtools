@@ -99,14 +99,32 @@ def merge_conflict_message(pr: dict) -> str | None:
     return f"PR #{pr_id} ({title!r}) {detail} (mergeStatus={merge_status})"
 
 
-def has_code_review(pr: dict) -> bool:
-    """True if any reviewer has actually voted — as opposed to just being added as a
-    reviewer (which starts at vote=0, "no vote").
+def get_pr_threads(session: requests.Session, remote: AdoRemote, pr_id: int) -> list:
+    r = session.get(f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}/pullRequests/{pr_id}/threads", params={"api-version": "7.1"})
+    r.raise_for_status()
+    return r.json().get("value", [])
+
+
+def has_code_review(threads: list) -> bool:
+    """True if a reviewer has ever cast a real vote (approve, approve-with-suggestions,
+    wait-for-author, or reject) on this PR.
+
+    Can't be answered from the PR's current `reviewers[].vote` — Azure DevOps resets every
+    vote to 0 as soon as the PR is marked back to draft, which is the only way a currently-draft
+    PR could have been reviewed in the first place (voting on a draft PR isn't allowed at all).
+    The vote event survives in the PR's system comment threads though, tagged with a
+    `CodeReviewThreadType` of "VoteUpdate", so that's what this checks instead.
     """
-    return any(r.get("vote", 0) != 0 for r in pr.get("reviewers", []))
+    for thread in threads:
+        props = thread.get("properties") or {}
+        if props.get("CodeReviewThreadType", {}).get("$value") != "VoteUpdate":
+            continue
+        if props.get("CodeReviewVoteResult", {}).get("$value", "0") != "0":
+            return True
+    return False
 
 
-def draft_needs_publish_message(pr: dict) -> str | None:
+def draft_needs_publish_message(pr: dict, threads: list) -> str | None:
     """None if it's fine to report status for this PR; else a message telling the user to publish it first.
 
     A draft that nobody has reviewed yet is still just work in progress — checking
@@ -114,7 +132,7 @@ def draft_needs_publish_message(pr: dict) -> str | None:
     state is what's actually blocking things, so surface that instead of reporting
     (possibly stale or absent) build status.
     """
-    if not pr.get("isDraft") or not has_code_review(pr):
+    if not pr.get("isDraft") or not has_code_review(threads):
         return None
     return f"PR #{pr.get('pullRequestId')} ({pr.get('title', '?')!r}) is still a draft but already has a code review — run `bdt pr publish` to mark it ready for review first."
 
@@ -139,9 +157,10 @@ def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, tar
             conflict = merge_conflict_message(pr)
             if conflict:
                 sys.exit(conflict)
-            draft_msg = draft_needs_publish_message(pr)
-            if draft_msg:
-                sys.exit(draft_msg)
+            if pr.get("isDraft"):
+                draft_msg = draft_needs_publish_message(pr, get_pr_threads(session, remote, pr["pullRequestId"]))
+                if draft_msg:
+                    sys.exit(draft_msg)
             return pr
 
     print(f"No PR found from '{source_branch}' → '{target_branch}'")

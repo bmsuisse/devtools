@@ -65,32 +65,53 @@ def test_merge_conflict_message_covers_all_bad_statuses(merge_status: str) -> No
     assert merge_conflict_message(pr) is not None
 
 
-def test_has_code_review_false_when_no_reviewers() -> None:
-    assert has_code_review({"reviewers": []}) is False
+# Shapes captured from a real `.../pullRequests/{id}/threads` response, in order: the PR
+# being published, a reviewer joining, casting an "approve" vote, the PR being marked back
+# to draft, and Azure DevOps resetting that vote as a result (current reviewers[].vote is
+# back to 0 by this point — the "voted 10" thread is the only place that ever happened).
+VOTE_UPDATE_THREAD = {"properties": {"CodeReviewThreadType": {"$value": "VoteUpdate"}, "CodeReviewVoteResult": {"$value": "10"}}}
+VOTE_RESET_THREAD = {"properties": {"CodeReviewThreadType": {"$value": "VoteReset"}}}
+JOINED_REVIEWER_THREAD = {"properties": {"CodeReviewThreadType": {"$value": "ReviewersUpdate"}}}
+PLAIN_COMMENT_THREAD = {"comments": [{"commentType": "text", "content": "looks fine so far"}]}
 
 
-def test_has_code_review_false_when_reviewer_has_no_vote() -> None:
-    assert has_code_review({"reviewers": [{"vote": 0}]}) is False
+def test_has_code_review_false_when_no_threads() -> None:
+    assert has_code_review([]) is False
 
 
-@pytest.mark.parametrize("vote", [10, 5, -5, -10])
-def test_has_code_review_true_when_reviewer_voted(vote: int) -> None:
-    assert has_code_review({"reviewers": [{"vote": vote}]}) is True
+def test_has_code_review_false_for_non_vote_threads() -> None:
+    assert has_code_review([JOINED_REVIEWER_THREAD, PLAIN_COMMENT_THREAD, VOTE_RESET_THREAD]) is False
+
+
+@pytest.mark.parametrize("vote_result", ["10", "5", "-5", "-10"])
+def test_has_code_review_true_for_nonzero_vote_update(vote_result: str) -> None:
+    thread = {"properties": {"CodeReviewThreadType": {"$value": "VoteUpdate"}, "CodeReviewVoteResult": {"$value": vote_result}}}
+    assert has_code_review([thread]) is True
+
+
+def test_has_code_review_false_for_zero_vote_update() -> None:
+    thread = {"properties": {"CodeReviewThreadType": {"$value": "VoteUpdate"}, "CodeReviewVoteResult": {"$value": "0"}}}
+    assert has_code_review([thread]) is False
+
+
+def test_has_code_review_true_even_after_vote_reset() -> None:
+    """The vote survives in its own thread even once a later re-draft resets it."""
+    assert has_code_review([VOTE_UPDATE_THREAD, VOTE_RESET_THREAD]) is True
 
 
 def test_draft_needs_publish_message_none_when_not_draft() -> None:
-    pr = {"pullRequestId": 1, "title": "x", "isDraft": False, "reviewers": [{"vote": 10}]}
-    assert draft_needs_publish_message(pr) is None
+    pr = {"pullRequestId": 1, "title": "x", "isDraft": False}
+    assert draft_needs_publish_message(pr, [VOTE_UPDATE_THREAD]) is None
 
 
 def test_draft_needs_publish_message_none_when_draft_without_review() -> None:
-    pr = {"pullRequestId": 1, "title": "x", "isDraft": True, "reviewers": [{"vote": 0}]}
-    assert draft_needs_publish_message(pr) is None
+    pr = {"pullRequestId": 1, "title": "x", "isDraft": True}
+    assert draft_needs_publish_message(pr, [JOINED_REVIEWER_THREAD]) is None
 
 
 def test_draft_needs_publish_message_when_draft_with_review() -> None:
-    pr = {"pullRequestId": 42, "title": "feat: widgets", "isDraft": True, "reviewers": [{"vote": 10}]}
-    msg = draft_needs_publish_message(pr)
+    pr = {"pullRequestId": 42, "title": "feat: widgets", "isDraft": True}
+    msg = draft_needs_publish_message(pr, [VOTE_UPDATE_THREAD, VOTE_RESET_THREAD])
     assert msg is not None
     assert "PR #42" in msg
     assert "bdt pr publish" in msg
