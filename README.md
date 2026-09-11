@@ -159,6 +159,19 @@ subcommand for editing/deleting an arbitrary comment by ID). Extra arguments
 to `bdt issue create` pass through to `gh issue create`, e.g.
 `bdt issue create --title "..." -- --assignee @me`.
 
+`--board <name>` on `create` adds the issue to that GitHub Projects (v2)
+board by title (needs a token with the `project` scope — `gh auth refresh -s
+project`). On `search`, `--board` (title or number) scopes results to issues
+currently on that board; since `gh issue list` has no board filter of its
+own, this fetches a wider raw pool and filters it down client-side, so a
+board with few matches may return fewer results than `--limit` asks for. A
+CLI flag beats `[tool.bdt.github].board` in `pyproject.toml`:
+
+```toml
+[tool.bdt.github]
+board = "Roadmap"
+```
+
 ## `bdt worktree`
 
 ```bash

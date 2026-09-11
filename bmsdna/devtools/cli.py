@@ -315,8 +315,9 @@ def issue_create(
     board: str | None = typer.Option(
         None,
         "--board",
-        help="Azure Boards team to file the work item against — sets its Area Path so the item shows up on that "
-        r"team's board (Azure DevOps only; parameter overrides \[tool.bdt.ado].board in pyproject.toml)",
+        help="Board to file the issue/work item against, so it shows up there: an Azure Boards team "
+        r"(sets its Area Path; overrides \[tool.bdt.ado].board in pyproject.toml) or a GitHub Projects "
+        r"(v2) board by title (overrides \[tool.bdt.github].board)",
     ),
     label: list[str] = typer.Option([], "--label", help="Label to apply (GitHub only, repeatable)"),
     tag: list[str] = typer.Option([], "--tag", help="Tag to apply (Azure DevOps only, repeatable)"),
@@ -344,7 +345,10 @@ def issue_create(
 
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_issue.create(require_gh(), remote.owner, remote.repo, title, description, label, screenshot, args or [], file_paths=file)
+        resolved_board = gh_issue.resolve_board(board)
+        gh_issue.create(
+            require_gh(), remote.owner, remote.repo, title, description, label, screenshot, args or [], file_paths=file, board=resolved_board
+        )
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
@@ -364,8 +368,9 @@ def issue_search(
     board: str | None = typer.Option(
         None,
         "--board",
-        help="Scope the search to this Azure Boards team's Area Path subtree (Azure DevOps only; "
-        r"falls back to \[tool.bdt.ado].board in pyproject.toml, same as `issue create`)",
+        help="Scope the search to this board: an Azure Boards team's Area Path subtree "
+        r"(falls back to \[tool.bdt.ado].board) or a GitHub Projects (v2) board by title or number "
+        r"(falls back to \[tool.bdt.github].board), same as `issue create`",
     ),
     limit: int = typer.Option(10, "--limit", help="Max results to return"),
     pat: str | None = typer.Option(
@@ -384,7 +389,8 @@ def issue_search(
 
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_issue.search(require_gh(), keywords or [], since, limit, state)
+        resolved_board = gh_issue.resolve_board(board)
+        gh_issue.search(require_gh(), remote.owner, remote.repo, keywords or [], since, limit, state, board=resolved_board)
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
