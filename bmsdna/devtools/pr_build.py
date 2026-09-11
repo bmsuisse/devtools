@@ -99,6 +99,26 @@ def merge_conflict_message(pr: dict) -> str | None:
     return f"PR #{pr_id} ({title!r}) {detail} (mergeStatus={merge_status})"
 
 
+def has_code_review(pr: dict) -> bool:
+    """True if any reviewer has actually voted — as opposed to just being added as a
+    reviewer (which starts at vote=0, "no vote").
+    """
+    return any(r.get("vote", 0) != 0 for r in pr.get("reviewers", []))
+
+
+def draft_needs_publish_message(pr: dict) -> str | None:
+    """None if it's fine to report status for this PR; else a message telling the user to publish it first.
+
+    A draft that nobody has reviewed yet is still just work in progress — checking
+    build status on it is normal. But once a review has been submitted, the draft
+    state is what's actually blocking things, so surface that instead of reporting
+    (possibly stale or absent) build status.
+    """
+    if not pr.get("isDraft") or not has_code_review(pr):
+        return None
+    return f"PR #{pr.get('pullRequestId')} ({pr.get('title', '?')!r}) is still a draft but already has a code review — run `bdt pr publish` to mark it ready for review first."
+
+
 def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, target_branch: str) -> dict:
     url = f"{_base_url(remote)}/_apis/git/repositories/{remote.repo}/pullrequests"
     for status in ["active", "completed"]:
@@ -119,6 +139,9 @@ def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, tar
             conflict = merge_conflict_message(pr)
             if conflict:
                 sys.exit(conflict)
+            draft_msg = draft_needs_publish_message(pr)
+            if draft_msg:
+                sys.exit(draft_msg)
             return pr
 
     print(f"No PR found from '{source_branch}' → '{target_branch}'")
@@ -201,6 +224,7 @@ def publish(session: requests.Session, remote: AdoRemote, pr: dict) -> None:
     pr_id = pr["pullRequestId"]
     _patch_pr(session, remote, pr_id, {"isDraft": False})
     print(f"Marked PR #{pr_id} as ready for review")
+    print("\nRun `bdt pr status --wait` to watch the PR's CI.")
 
 
 def add_comment(session: requests.Session, remote: AdoRemote, pr_id: int, content: str) -> None:

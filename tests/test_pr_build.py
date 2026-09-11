@@ -1,7 +1,13 @@
 import pytest
 
 from bmsdna.devtools.gitrepo import AdoRemote
-from bmsdna.devtools.pr_build import merge_conflict_message, policy_configs_include_branch, pr_web_url
+from bmsdna.devtools.pr_build import (
+    draft_needs_publish_message,
+    has_code_review,
+    merge_conflict_message,
+    policy_configs_include_branch,
+    pr_web_url,
+)
 
 REPO_ID = "0cd3a822-389e-416e-a4fa-b73f988c2930"
 
@@ -57,6 +63,37 @@ def test_merge_conflict_message_uses_failure_message_when_present() -> None:
 def test_merge_conflict_message_covers_all_bad_statuses(merge_status: str) -> None:
     pr = {"pullRequestId": 1, "title": "x", "mergeStatus": merge_status}
     assert merge_conflict_message(pr) is not None
+
+
+def test_has_code_review_false_when_no_reviewers() -> None:
+    assert has_code_review({"reviewers": []}) is False
+
+
+def test_has_code_review_false_when_reviewer_has_no_vote() -> None:
+    assert has_code_review({"reviewers": [{"vote": 0}]}) is False
+
+
+@pytest.mark.parametrize("vote", [10, 5, -5, -10])
+def test_has_code_review_true_when_reviewer_voted(vote: int) -> None:
+    assert has_code_review({"reviewers": [{"vote": vote}]}) is True
+
+
+def test_draft_needs_publish_message_none_when_not_draft() -> None:
+    pr = {"pullRequestId": 1, "title": "x", "isDraft": False, "reviewers": [{"vote": 10}]}
+    assert draft_needs_publish_message(pr) is None
+
+
+def test_draft_needs_publish_message_none_when_draft_without_review() -> None:
+    pr = {"pullRequestId": 1, "title": "x", "isDraft": True, "reviewers": [{"vote": 0}]}
+    assert draft_needs_publish_message(pr) is None
+
+
+def test_draft_needs_publish_message_when_draft_with_review() -> None:
+    pr = {"pullRequestId": 42, "title": "feat: widgets", "isDraft": True, "reviewers": [{"vote": 10}]}
+    msg = draft_needs_publish_message(pr)
+    assert msg is not None
+    assert "PR #42" in msg
+    assert "bdt pr publish" in msg
 
 
 def test_policy_configs_include_branch_matches_build_policy_on_scoped_branch() -> None:

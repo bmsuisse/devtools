@@ -19,7 +19,7 @@ from pathlib import Path
 
 from .pr_markdown import build_screenshots_section
 
-PR_VIEW_FIELDS = "number,title,baseRefName,mergeable,statusCheckRollup"
+PR_VIEW_FIELDS = "number,title,baseRefName,mergeable,statusCheckRollup,isDraft,reviews"
 
 # GitHub has no API for uploading images to a PR description (only the web
 # UI's drag-and-drop, which needs a browser session). The standard
@@ -87,6 +87,19 @@ def merge_conflict_message(pr: dict) -> str | None:
     return f"PR #{pr.get('number')} ({pr.get('title', '?')!r}) has merge conflicts with '{pr.get('baseRefName', '?')}' (mergeable=CONFLICTING)"
 
 
+def draft_needs_publish_message(pr: dict) -> str | None:
+    """None if it's fine to report status for this PR; else a message telling the user to publish it first.
+
+    A draft that nobody has reviewed yet is still just work in progress — checking
+    build status on it is normal. But once a review has been submitted, the draft
+    state is what's actually blocking things, so surface that instead of reporting
+    (possibly stale or absent) check results.
+    """
+    if not pr.get("isDraft") or not pr.get("reviews"):
+        return None
+    return f"PR #{pr.get('number')} ({pr.get('title', '?')!r}) is still a draft but already has a code review — run `bdt pr publish` to mark it ready for review first."
+
+
 def print_check(check: dict) -> None:
     bucket = check_bucket(check)
     icon = {"pass": "✓", "fail": "✗", "cancel": "⊘"}.get(bucket, "…")
@@ -109,6 +122,10 @@ def run(gh: str, wait: bool) -> None:
         conflict = merge_conflict_message(pr)
         if conflict:
             sys.exit(conflict)
+
+        draft_msg = draft_needs_publish_message(pr)
+        if draft_msg:
+            sys.exit(draft_msg)
 
         pr_number = pr.get("number")
         title = pr.get("title", "?")
@@ -174,6 +191,7 @@ def publish(gh: str) -> None:
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or "`gh pr ready` failed")
     print("Marked PR as ready for review")
+    print("\nRun `bdt pr status --wait` to watch the PR's CI.")
 
 
 def _git(args: list[str], env: dict[str, str] | None = None) -> str:

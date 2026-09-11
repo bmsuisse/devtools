@@ -2,7 +2,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from bmsdna.devtools.gh_pr import check_bucket, check_label, create, merge_conflict_message, protection_requires_status_checks
+from bmsdna.devtools.gh_pr import (
+    check_bucket,
+    check_label,
+    create,
+    draft_needs_publish_message,
+    merge_conflict_message,
+    protection_requires_status_checks,
+)
 
 # Real statusCheckRollup entries captured from `gh pr view 13902 -R cli/cli --json statusCheckRollup`.
 COMPLETED_SUCCESS_CHECK_RUN = {
@@ -62,6 +69,24 @@ def test_merge_conflict_message_conflicting() -> None:
     assert msg is not None
     assert "PR #42" in msg
     assert "main" in msg
+
+
+def test_draft_needs_publish_message_none_when_not_draft() -> None:
+    pr = {"number": 1, "title": "x", "isDraft": False, "reviews": [{"state": "APPROVED"}]}
+    assert draft_needs_publish_message(pr) is None
+
+
+def test_draft_needs_publish_message_none_when_draft_without_review() -> None:
+    pr = {"number": 1, "title": "x", "isDraft": True, "reviews": []}
+    assert draft_needs_publish_message(pr) is None
+
+
+def test_draft_needs_publish_message_when_draft_with_review() -> None:
+    pr = {"number": 42, "title": "feat: widgets", "isDraft": True, "reviews": [{"state": "COMMENTED"}]}
+    msg = draft_needs_publish_message(pr)
+    assert msg is not None
+    assert "PR #42" in msg
+    assert "bdt pr publish" in msg
 
 
 def test_protection_requires_status_checks_true_when_configured() -> None:
