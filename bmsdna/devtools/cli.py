@@ -390,7 +390,7 @@ def issue_search(
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
         resolved_board = gh_issue.resolve_board(board)
-        gh_issue.search(require_gh(), remote.owner, keywords or [], since, limit, state, board=resolved_board)
+        gh_issue.search(require_gh(), remote.owner, remote.repo, keywords or [], since, limit, state, board=resolved_board)
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))

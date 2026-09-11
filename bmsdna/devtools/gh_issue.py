@@ -87,7 +87,7 @@ def resolve_project_number(gh: str, owner: str, board: str) -> int:
     """The GitHub Projects (v2) board `board` (a number or a title) as its project number."""
     if board.isdigit():
         return int(board)
-    out = _run_gh(gh, ["project", "list", "--owner", owner, "--format", "json", "--closed"])
+    out = _run_gh(gh, ["project", "list", "--owner", owner, "--format", "json", "--closed", "--limit", str(_BOARD_ITEM_LIMIT)])
     projects = json.loads(out).get("projects", []) if out else []
     number = _find_project_number(projects, board)
     if number is None:
@@ -95,25 +95,33 @@ def resolve_project_number(gh: str, owner: str, board: str) -> int:
     return number
 
 
-def _extract_issue_numbers(items: list[dict]) -> set[int]:
-    """Issue numbers among a board's items -- drops pull requests and draft issues, which either
-    belong to a different search or have no repo issue number to match against.
+_ISSUE_URL_RE = re.compile(r"github\.com/([^/]+)/([^/]+)/issues/(\d+)")
+
+
+def _extract_issue_numbers(items: list[dict], owner: str, repo: str) -> set[int]:
+    """Issue numbers among a board's items that belong to `owner/repo` -- drops pull requests and
+    draft issues (no repo issue number to match against), and issues from other repos on the same
+    org-wide board: issue numbers are only unique within a single repo, so matching on the bare
+    number alone would treat e.g. some-other-repo#7 as this repo's #7 too.
     """
     numbers = set()
     for item in items:
         if item.get("type") != "Issue":
             continue
         url = item.get("url")
-        if url:
-            numbers.add(int(parse_issue_number(url)))
+        if not url:
+            continue
+        match = _ISSUE_URL_RE.search(url)
+        if match and match.group(1).casefold() == owner.casefold() and match.group(2).casefold() == repo.casefold():
+            numbers.add(int(match.group(3)))
     return numbers
 
 
-def board_issue_numbers(gh: str, owner: str, project_number: int) -> set[int]:
-    """Issue numbers currently on `owner`'s Projects (v2) board `project_number`."""
+def board_issue_numbers(gh: str, owner: str, repo: str, project_number: int) -> set[int]:
+    """Issue numbers on `owner`'s Projects (v2) board `project_number` that belong to `owner/repo`."""
     out = _run_gh(gh, ["project", "item-list", str(project_number), "--owner", owner, "--format", "json", "--limit", str(_BOARD_ITEM_LIMIT)])
     items = json.loads(out).get("items", []) if out else []
-    return _extract_issue_numbers(items)
+    return _extract_issue_numbers(items, owner, repo)
 
 
 def create(
@@ -169,7 +177,9 @@ def build_search_query(keywords: list[str], since: str | None) -> str:
     return " ".join(parts)
 
 
-def search(gh: str, owner: str, keywords: list[str], since: str | None, limit: int, state: str = "open", board: str | None = None) -> list[dict]:
+def search(
+    gh: str, owner: str, repo: str, keywords: list[str], since: str | None, limit: int, state: str = "open", board: str | None = None
+) -> list[dict]:
     """Search (or, with no keywords, just list) issues by state, most recently updated first.
 
     `state` is `gh issue list`'s own `open|closed|all` flag, not a search qualifier. `board`
@@ -184,7 +194,7 @@ def search(gh: str, owner: str, keywords: list[str], since: str | None, limit: i
 
     if board:
         project_number = resolve_project_number(gh, owner, board)
-        allowed = board_issue_numbers(gh, owner, project_number)
+        allowed = board_issue_numbers(gh, owner, repo, project_number)
         items = [item for item in items if item["number"] in allowed]
 
     items = items[:limit]

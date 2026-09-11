@@ -64,7 +64,7 @@ def test_search_defaults_to_open_state(monkeypatch) -> None:
 
     monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
 
-    search("gh", "owner", [], None, 10)
+    search("gh", "owner", "repo", [], None, 10)
 
     assert captured_cmd[captured_cmd.index("--state") + 1] == "open"
 
@@ -78,7 +78,7 @@ def test_search_passes_through_requested_state(monkeypatch) -> None:
 
     monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
 
-    search("gh", "owner", ["auth"], None, 10, state="all")
+    search("gh", "owner", "repo", ["auth"], None, 10, state="all")
 
     assert captured_cmd[captured_cmd.index("--state") + 1] == "all"
 
@@ -104,12 +104,51 @@ def test_search_board_overfetches_then_filters_to_limit(monkeypatch) -> None:
 
     monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
 
-    results = search("gh", "owner", [], None, 3, board="Roadmap")
+    results = search("gh", "owner", "repo", [], None, 3, board="Roadmap")
 
     issue_list_cmd = captured_cmds[0]
     assert issue_list_cmd[issue_list_cmd.index("--limit") + 1] == "30"  # limit * _BOARD_SEARCH_OVERFETCH
     assert len(results) == 3
     assert all(item["number"] % 2 == 0 for item in results)
+
+
+def test_search_board_ignores_same_number_issue_from_a_different_repo(monkeypatch) -> None:
+    import json
+
+    # This repo's own #7, plus a same-numbered #7 from an unrelated repo that also happens to
+    # be on the (org-wide) board -- only the former should count as a match.
+    issues = [{"number": 7, "title": "our issue", "url": "https://github.com/owner/repo/issues/7", "state": "OPEN"}]
+    board_items = [{"type": "Issue", "url": "https://github.com/owner/other-repo/issues/7"}]
+
+    def fake_run(cmd, **kwargs):
+        if "list" in cmd and "issue" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps(issues), stderr="")
+        if "item-list" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps({"items": board_items}), stderr="")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
+
+    results = search("gh", "owner", "repo", [], None, 10, board="7")
+
+    assert results == []
+
+
+def test_resolve_project_number_list_call_includes_a_limit(monkeypatch) -> None:
+    import json
+
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout=json.dumps({"projects": [{"title": "Roadmap", "number": 7}]}), stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
+
+    from bmsdna.devtools.gh_issue import resolve_project_number
+
+    assert resolve_project_number("gh", "owner", "Roadmap") == 7
+    assert "--limit" in captured_cmd
 
 
 def test_resolve_board_prefers_explicit_over_config(tmp_path, monkeypatch) -> None:
@@ -145,7 +184,16 @@ def test_extract_issue_numbers_drops_pull_requests_and_draft_issues() -> None:
         {"type": "PullRequest", "url": "https://github.com/owner/repo/pull/6"},
         {"type": "DraftIssue", "title": "no url"},
     ]
-    assert _extract_issue_numbers(items) == {5}
+    assert _extract_issue_numbers(items, "owner", "repo") == {5}
+
+
+def test_extract_issue_numbers_drops_issues_from_other_repos() -> None:
+    items = [
+        {"type": "Issue", "url": "https://github.com/owner/repo/issues/5"},
+        {"type": "Issue", "url": "https://github.com/owner/other-repo/issues/5"},
+        {"type": "Issue", "url": "https://github.com/other-owner/repo/issues/5"},
+    ]
+    assert _extract_issue_numbers(items, "owner", "repo") == {5}
 
 
 def _run_update_capturing_commands(monkeypatch, **update_kwargs) -> list[list[str]]:
