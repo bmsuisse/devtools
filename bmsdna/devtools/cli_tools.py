@@ -9,11 +9,22 @@ concerns for arguments that come from user input, e.g. PR titles).
 
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 
 AZ_INSTALL_HINT = "Install the Azure CLI: https://learn.microsoft.com/cli/azure/install-azure-cli"
 GH_INSTALL_HINT = "Install the GitHub CLI: https://cli.github.com"
+
+
+def is_claude_code() -> bool:
+    """True if this process is running as a subprocess of Claude Code.
+
+    Claude Code sets `CLAUDECODE=1` on every subprocess it spawns — confirmed
+    empirically, not a documented/stable contract, so treat this as best-effort
+    (spoofable, and could change in a future Claude Code release).
+    """
+    return os.environ.get("CLAUDECODE") == "1"
 
 
 def require_tool(name: str, install_hint: str) -> str:

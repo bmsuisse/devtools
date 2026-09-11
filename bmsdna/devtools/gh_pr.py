@@ -17,6 +17,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from .cli_tools import is_claude_code
 from .pr_markdown import build_screenshots_section
 
 PR_VIEW_FIELDS = "number,title,baseRefName,mergeable,statusCheckRollup,isDraft"
@@ -95,7 +96,10 @@ def draft_notice(pr: dict) -> str | None:
     """
     if not pr.get("isDraft"):
         return None
-    return f"PR #{pr.get('number')} is a draft - no CI yet. To publish, use command: `bdt pr publish` (but do an automatic code review first)"
+    pr_ref = f"PR #{pr.get('number')} is a draft - no CI yet."
+    if is_claude_code():
+        return f"{pr_ref} Run `/code-review` first, then `bdt pr publish`."
+    return f"{pr_ref} To publish, use command: `bdt pr publish` (but do an automatic code review first)"
 
 
 def print_check(check: dict) -> None:

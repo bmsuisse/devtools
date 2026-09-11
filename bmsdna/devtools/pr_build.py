@@ -11,6 +11,7 @@ from urllib.parse import quote
 import requests
 
 from .ado_auth import auth_header
+from .cli_tools import is_claude_code
 from .gitrepo import AdoRemote, current_branch
 from .pr_markdown import build_screenshots_section
 
@@ -107,7 +108,10 @@ def draft_notice(pr: dict) -> str | None:
     """
     if not pr.get("isDraft"):
         return None
-    return f"PR #{pr.get('pullRequestId')} is a draft - no CI yet. To publish, use command: `bdt pr publish` (but do an automatic code review first)"
+    pr_ref = f"PR #{pr.get('pullRequestId')} is a draft - no CI yet."
+    if is_claude_code():
+        return f"{pr_ref} Run `/code-review` first, then `bdt pr publish`."
+    return f"{pr_ref} To publish, use command: `bdt pr publish` (but do an automatic code review first)"
 
 
 def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, target_branch: str) -> dict:

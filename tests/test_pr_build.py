@@ -59,16 +59,29 @@ def test_merge_conflict_message_covers_all_bad_statuses(merge_status: str) -> No
     assert merge_conflict_message(pr) is not None
 
 
-def test_draft_notice_none_when_not_draft() -> None:
+def test_draft_notice_none_when_not_draft(monkeypatch) -> None:
+    monkeypatch.delenv("CLAUDECODE", raising=False)
     pr = {"pullRequestId": 1, "title": "x", "isDraft": False}
     assert draft_notice(pr) is None
 
 
-def test_draft_notice_when_draft() -> None:
+def test_draft_notice_when_draft(monkeypatch) -> None:
+    monkeypatch.delenv("CLAUDECODE", raising=False)
     pr = {"pullRequestId": 42, "title": "feat: widgets", "isDraft": True}
     msg = draft_notice(pr)
     assert msg is not None
     assert "PR #42" in msg
+    assert "bdt pr publish" in msg
+    assert "/code-review" not in msg
+
+
+def test_draft_notice_tells_claude_code_to_review_first(monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDECODE", "1")
+    pr = {"pullRequestId": 42, "title": "feat: widgets", "isDraft": True}
+    msg = draft_notice(pr)
+    assert msg is not None
+    assert "PR #42" in msg
+    assert "/code-review" in msg
     assert "bdt pr publish" in msg
 
 
