@@ -138,6 +138,11 @@ def draft_needs_publish_message(pr: dict, threads: list) -> str | None:
 
 
 def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, target_branch: str) -> dict:
+    """The PR from `source_branch` into `target_branch` — shared by `pr status`, `pr publish`,
+    `pr update` and `pr comment`. Deliberately doesn't apply `draft_needs_publish_message` here:
+    `pr publish` resolves its PR through this same function, and that message tells the user to
+    run `pr publish` — which would then be unable to resolve its own target PR.
+    """
     url = f"{_base_url(remote)}/_apis/git/repositories/{remote.repo}/pullrequests"
     for status in ["active", "completed"]:
         r = session.get(
@@ -157,10 +162,6 @@ def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, tar
             conflict = merge_conflict_message(pr)
             if conflict:
                 sys.exit(conflict)
-            if pr.get("isDraft"):
-                draft_msg = draft_needs_publish_message(pr, get_pr_threads(session, remote, pr["pullRequestId"]))
-                if draft_msg:
-                    sys.exit(draft_msg)
             return pr
 
     print(f"No PR found from '{source_branch}' → '{target_branch}'")
@@ -339,13 +340,22 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
     session = requests.Session()
     session.headers.update(auth_header(pat))
 
+    # Checked once up front, not on every poll iteration below (fetching threads is a
+    # separate request `get_pr` doesn't need for anything else) and not inside `get_pr`
+    # itself (also used to resolve the PR for `pr publish`/`update`/`comment` — a reviewed
+    # draft must stay resolvable there, since publishing it is the way out of this message).
+    pr = get_pr(session, remote, source_branch, target_branch)
+    if pr.get("isDraft"):
+        draft_msg = draft_needs_publish_message(pr, get_pr_threads(session, remote, pr["pullRequestId"]))
+        if draft_msg:
+            sys.exit(draft_msg)
+
     # When waiting, a pipeline's "latest" build may already be a completed run
     # from before this invocation. Only accept builds newer than whatever was
     # already there when we started, so --wait actually waits for the build(s)
     # triggered by the current HEAD instead of immediately reporting a stale result.
     baseline_ids: dict[int, int] = {}
     if wait:
-        pr = get_pr(session, remote, source_branch, target_branch)
         for b in get_builds_for_pr(session, remote, source_branch, pr["pullRequestId"]):
             def_id = b.get("definition", {}).get("id")
             baseline_ids[def_id] = max(baseline_ids.get(def_id, 0), b["id"])
