@@ -107,7 +107,7 @@ def draft_notice(pr: dict) -> str | None:
     """
     if not pr.get("isDraft"):
         return None
-    return f"Note: PR #{pr.get('pullRequestId')} ({pr.get('title', '?')!r}) is still a draft — run `bdt pr publish` to mark it ready for review."
+    return f"PR #{pr.get('pullRequestId')} is a draft - no CI yet. To publish, use command: `bdt pr publish` (but do an automatic code review first)"
 
 
 def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, target_branch: str) -> dict:

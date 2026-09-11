@@ -95,7 +95,7 @@ def draft_notice(pr: dict) -> str | None:
     """
     if not pr.get("isDraft"):
         return None
-    return f"Note: PR #{pr.get('number')} ({pr.get('title', '?')!r}) is still a draft — run `bdt pr publish` to mark it ready for review."
+    return f"PR #{pr.get('number')} is a draft - no CI yet. To publish, use command: `bdt pr publish` (but do an automatic code review first)"
 
 
 def print_check(check: dict) -> None:
