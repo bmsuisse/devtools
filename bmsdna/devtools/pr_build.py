@@ -11,6 +11,7 @@ from urllib.parse import quote
 import requests
 
 from .ado_auth import auth_header
+from .cli_tools import is_claude_code
 from .gitrepo import AdoRemote, current_branch
 from .pr_markdown import build_screenshots_section
 
@@ -97,6 +98,20 @@ def merge_conflict_message(pr: dict) -> str | None:
     title = pr.get("title", "?")
     detail = pr.get("mergeFailureMessage") or BAD_MERGE_STATUSES[merge_status]
     return f"PR #{pr_id} ({title!r}) {detail} (mergeStatus={merge_status})"
+
+
+def draft_notice(pr: dict) -> str | None:
+    """None if the PR isn't a draft; else a heads-up that it is.
+
+    Purely informational, not an error — review typically already happened before
+    `pr status` is even run, so this doesn't block the rest of the command.
+    """
+    if not pr.get("isDraft"):
+        return None
+    pr_ref = f"PR #{pr.get('pullRequestId')} is a draft - no CI yet."
+    if is_claude_code():
+        return f"{pr_ref} Run `/code-review` first, then `bdt pr publish`."
+    return f"{pr_ref} To publish, use command: `bdt pr publish` (but do an automatic code review first)"
 
 
 def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, target_branch: str) -> dict:
@@ -201,6 +216,7 @@ def publish(session: requests.Session, remote: AdoRemote, pr: dict) -> None:
     pr_id = pr["pullRequestId"]
     _patch_pr(session, remote, pr_id, {"isDraft": False})
     print(f"Marked PR #{pr_id} as ready for review")
+    print("\nRun `bdt pr status --wait` to watch the PR's CI.")
 
 
 def add_comment(session: requests.Session, remote: AdoRemote, pr_id: int, content: str) -> None:
@@ -307,9 +323,15 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
             def_id = b.get("definition", {}).get("id")
             baseline_ids[def_id] = max(baseline_ids.get(def_id, 0), b["id"])
 
+    draft_notice_shown = False
     last_line = ""
     while True:
         pr = get_pr(session, remote, source_branch, target_branch)
+        if not draft_notice_shown:
+            draft_msg = draft_notice(pr)
+            if draft_msg:
+                print(draft_msg)
+            draft_notice_shown = True
         pr_id = pr["pullRequestId"]
         pr_title = pr.get("title", "?")
         pr_status = pr.get("status", "?")

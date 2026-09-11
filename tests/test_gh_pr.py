@@ -2,7 +2,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from bmsdna.devtools.gh_pr import check_bucket, check_label, create, merge_conflict_message, protection_requires_status_checks
+from bmsdna.devtools.gh_pr import (
+    check_bucket,
+    check_label,
+    create,
+    draft_notice,
+    merge_conflict_message,
+    protection_requires_status_checks,
+)
 
 # Real statusCheckRollup entries captured from `gh pr view 13902 -R cli/cli --json statusCheckRollup`.
 COMPLETED_SUCCESS_CHECK_RUN = {
@@ -62,6 +69,32 @@ def test_merge_conflict_message_conflicting() -> None:
     assert msg is not None
     assert "PR #42" in msg
     assert "main" in msg
+
+
+def test_draft_notice_none_when_not_draft(monkeypatch) -> None:
+    monkeypatch.delenv("CLAUDECODE", raising=False)
+    pr = {"number": 1, "title": "x", "isDraft": False}
+    assert draft_notice(pr) is None
+
+
+def test_draft_notice_when_draft(monkeypatch) -> None:
+    monkeypatch.delenv("CLAUDECODE", raising=False)
+    pr = {"number": 42, "title": "feat: widgets", "isDraft": True}
+    msg = draft_notice(pr)
+    assert msg is not None
+    assert "PR #42" in msg
+    assert "bdt pr publish" in msg
+    assert "/code-review" not in msg
+
+
+def test_draft_notice_tells_claude_code_to_review_first(monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDECODE", "1")
+    pr = {"number": 42, "title": "feat: widgets", "isDraft": True}
+    msg = draft_notice(pr)
+    assert msg is not None
+    assert "PR #42" in msg
+    assert "/code-review" in msg
+    assert "bdt pr publish" in msg
 
 
 def test_protection_requires_status_checks_true_when_configured() -> None:

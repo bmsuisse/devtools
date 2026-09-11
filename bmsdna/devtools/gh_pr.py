@@ -17,9 +17,10 @@ import tempfile
 import time
 from pathlib import Path
 
+from .cli_tools import is_claude_code
 from .pr_markdown import build_screenshots_section
 
-PR_VIEW_FIELDS = "number,title,baseRefName,mergeable,statusCheckRollup"
+PR_VIEW_FIELDS = "number,title,baseRefName,mergeable,statusCheckRollup,isDraft"
 
 # GitHub has no API for uploading images to a PR description (only the web
 # UI's drag-and-drop, which needs a browser session). The standard
@@ -87,6 +88,20 @@ def merge_conflict_message(pr: dict) -> str | None:
     return f"PR #{pr.get('number')} ({pr.get('title', '?')!r}) has merge conflicts with '{pr.get('baseRefName', '?')}' (mergeable=CONFLICTING)"
 
 
+def draft_notice(pr: dict) -> str | None:
+    """None if the PR isn't a draft; else a heads-up that it is.
+
+    Purely informational, not an error — review typically already happened before
+    `pr status` is even run, so this doesn't block the rest of the command.
+    """
+    if not pr.get("isDraft"):
+        return None
+    pr_ref = f"PR #{pr.get('number')} is a draft - no CI yet."
+    if is_claude_code():
+        return f"{pr_ref} Run `/code-review` first, then `bdt pr publish`."
+    return f"{pr_ref} To publish, use command: `bdt pr publish` (but do an automatic code review first)"
+
+
 def print_check(check: dict) -> None:
     bucket = check_bucket(check)
     icon = {"pass": "✓", "fail": "✗", "cancel": "⊘"}.get(bucket, "…")
@@ -95,6 +110,7 @@ def print_check(check: dict) -> None:
 
 def run(gh: str, wait: bool) -> None:
     last_line = ""
+    draft_notice_shown = False
     while True:
         pr = get_pr(gh)
 
@@ -109,6 +125,12 @@ def run(gh: str, wait: bool) -> None:
         conflict = merge_conflict_message(pr)
         if conflict:
             sys.exit(conflict)
+
+        if not draft_notice_shown:
+            draft_msg = draft_notice(pr)
+            if draft_msg:
+                print(draft_msg)
+            draft_notice_shown = True
 
         pr_number = pr.get("number")
         title = pr.get("title", "?")
@@ -174,6 +196,7 @@ def publish(gh: str) -> None:
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or "`gh pr ready` failed")
     print("Marked PR as ready for review")
+    print("\nRun `bdt pr status --wait` to watch the PR's CI.")
 
 
 def _git(args: list[str], env: dict[str, str] | None = None) -> str:

@@ -1,7 +1,7 @@
 import pytest
 
 from bmsdna.devtools.gitrepo import AdoRemote
-from bmsdna.devtools.pr_build import merge_conflict_message, policy_configs_include_branch, pr_web_url
+from bmsdna.devtools.pr_build import draft_notice, merge_conflict_message, policy_configs_include_branch, pr_web_url
 
 REPO_ID = "0cd3a822-389e-416e-a4fa-b73f988c2930"
 
@@ -57,6 +57,32 @@ def test_merge_conflict_message_uses_failure_message_when_present() -> None:
 def test_merge_conflict_message_covers_all_bad_statuses(merge_status: str) -> None:
     pr = {"pullRequestId": 1, "title": "x", "mergeStatus": merge_status}
     assert merge_conflict_message(pr) is not None
+
+
+def test_draft_notice_none_when_not_draft(monkeypatch) -> None:
+    monkeypatch.delenv("CLAUDECODE", raising=False)
+    pr = {"pullRequestId": 1, "title": "x", "isDraft": False}
+    assert draft_notice(pr) is None
+
+
+def test_draft_notice_when_draft(monkeypatch) -> None:
+    monkeypatch.delenv("CLAUDECODE", raising=False)
+    pr = {"pullRequestId": 42, "title": "feat: widgets", "isDraft": True}
+    msg = draft_notice(pr)
+    assert msg is not None
+    assert "PR #42" in msg
+    assert "bdt pr publish" in msg
+    assert "/code-review" not in msg
+
+
+def test_draft_notice_tells_claude_code_to_review_first(monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDECODE", "1")
+    pr = {"pullRequestId": 42, "title": "feat: widgets", "isDraft": True}
+    msg = draft_notice(pr)
+    assert msg is not None
+    assert "PR #42" in msg
+    assert "/code-review" in msg
+    assert "bdt pr publish" in msg
 
 
 def test_policy_configs_include_branch_matches_build_policy_on_scoped_branch() -> None:
