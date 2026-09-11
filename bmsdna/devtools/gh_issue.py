@@ -1,7 +1,7 @@
 """GitHub issue create/update/delete and comment add/update/delete via the `gh` CLI.
 
-Screenshot support reuses the `pr-assets` orphan-branch trick from
-`gh_pr.py` (GitHub has no API for uploading an image straight into an issue
+Screenshot/file support reuses the `pr-assets` orphan-branch trick from
+`gh_pr.py` (GitHub has no API for uploading a file straight into an issue
 body/comment — only the web UI's drag-and-drop). Each issue gets its own
 `issue-<number>` folder there, mirroring how `gh_pr.py` uses one folder per
 source branch.
@@ -24,8 +24,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .gh_pr import push_screenshots
-from .pr_markdown import build_screenshots_section
+from .gh_pr import push_assets
+from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 _COMMENT_ID_RE = re.compile(r"#issuecomment-(\d+)")
 
@@ -38,8 +38,13 @@ def _run_gh(gh: str, args: list[str]) -> str:
 
 
 def _screenshot_images(owner: str, repo: str, key: str, screenshot_paths: list[str]) -> list[tuple[str, str]]:
-    urls = push_screenshots(owner, repo, key, screenshot_paths)
+    urls = push_assets(owner, repo, key, screenshot_paths)
     return list(zip((Path(p).name for p in screenshot_paths), urls))
+
+
+def _file_links(owner: str, repo: str, key: str, file_paths: list[str]) -> list[tuple[str, str]]:
+    urls = push_assets(owner, repo, key, file_paths)
+    return list(zip((Path(p).name for p in file_paths), urls))
 
 
 def parse_issue_number(issue_url: str) -> str:
@@ -64,8 +69,10 @@ def create(
     labels: list[str],
     screenshot_paths: list[str],
     extra_args: list[str],
+    file_paths: list[str] | None = None,
 ) -> None:
-    """Create a GitHub issue, then (if any) attach screenshots as a follow-up edit."""
+    """Create a GitHub issue, then (if any) attach screenshots/files as a follow-up edit."""
+    file_paths = file_paths or []
     args = ["issue", "create", "--title", title, "--body", body or ""]
     for label in labels:
         args += ["--label", label]
@@ -75,11 +82,14 @@ def create(
     print(url)
     number = parse_issue_number(url)
 
-    if screenshot_paths:
-        images = _screenshot_images(owner, repo, f"issue-{number}", screenshot_paths)
-        new_body = build_screenshots_section(body, images)
+    if screenshot_paths or file_paths:
+        new_body: str = body or ""
+        if screenshot_paths:
+            new_body = build_screenshots_section(new_body, _screenshot_images(owner, repo, f"issue-{number}", screenshot_paths))
+        if file_paths:
+            new_body = build_attachments_section(new_body, _file_links(owner, repo, f"issue-{number}", file_paths))
         _run_gh(gh, ["issue", "edit", number, "--body", new_body])
-        print(f"Attached {len(screenshot_paths)} screenshot(s) to issue #{number}")
+        print(f"Attached {len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s) to issue #{number}")
 
 
 def build_search_query(keywords: list[str], since: str | None) -> str:
@@ -178,14 +188,24 @@ def delete(gh: str, number: int) -> None:
     print(f"Deleted issue #{number}")
 
 
-def comment(gh: str, owner: str, repo: str, number: int, message: str | None, screenshot_paths: list[str]) -> None:
-    """Post a comment, with a message and/or screenshots, on a GitHub issue."""
+def comment(
+    gh: str,
+    owner: str,
+    repo: str,
+    number: int,
+    message: str | None,
+    screenshot_paths: list[str],
+    file_paths: list[str] | None = None,
+) -> None:
+    """Post a comment, with a message and/or screenshots/files, on a GitHub issue."""
+    file_paths = file_paths or []
     images = _screenshot_images(owner, repo, f"issue-{number}", screenshot_paths) if screenshot_paths else []
-    content = build_screenshots_section(message, images).strip() if images else (message or "")
+    files = _file_links(owner, repo, f"issue-{number}", file_paths) if file_paths else []
+    content = build_comment_content(message, images, files)
     url = _run_gh(gh, ["issue", "comment", str(number), "--body", content])
     comment_id = parse_comment_id(url)
     suffix = f" (comment #{comment_id})" if comment_id else ""
-    print(f"Added comment ({len(screenshot_paths)} screenshot(s)) to issue #{number}{suffix}")
+    print(f"Added comment ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) to issue #{number}{suffix}")
     print(url)
 
 

@@ -1,4 +1,4 @@
-"""Markdown building shared by the Azure DevOps and GitHub screenshot-attach paths."""
+"""Markdown building shared by the Azure DevOps and GitHub screenshot/file-attach paths."""
 
 from __future__ import annotations
 
@@ -30,3 +30,47 @@ def build_screenshots_section_html(existing_text: str | None, images: list[tuple
     """
     section = "\n".join(f'<img src="{escape(url)}" alt="{escape(name)}" style="max-width:100%;">' for name, url in images)
     return f"{existing_text or ''}\n\n<h2>Screenshots</h2>\n\n{section}\n"
+
+
+def build_attachments_section(existing_text: str | None, files: list[tuple[str, str]]) -> str:
+    """Append an '## Attachments' markdown section of `files` (name, url) as links to `existing_text`.
+
+    Unlike `build_screenshots_section`, this links rather than embeds -- for arbitrary files
+    (logs, archives, documents, ...) that can't be shown inline as an image.
+    """
+    section = "\n".join(f"- [{name}]({url})" for name, url in files)
+    return f"{existing_text or ''}\n\n## Attachments\n\n{section}\n"
+
+
+def build_attachments_section_html(existing_text: str | None, files: list[tuple[str, str]]) -> str:
+    """HTML-link equivalent of `build_attachments_section`, for the same HTML-only surfaces
+    `build_screenshots_section_html` targets (Azure DevOps work item comments).
+    """
+    section = "\n".join(f'<a href="{escape(url)}">{escape(name)}</a><br>' for name, url in files)
+    return f"{existing_text or ''}\n\n<h2>Attachments</h2>\n\n{section}\n"
+
+
+def build_comment_content(message: str | None, images: list[tuple[str, str]], files: list[tuple[str, str]]) -> str:
+    """A comment/description body: `message` with an optional Markdown Screenshots section (embedded)
+    and/or Attachments section (linked) appended, trimmed only when at least one was added.
+
+    Shared by every `*_with_screenshots`/comment path that accepts both screenshots and files, so
+    the message-then-sections-then-trim assembly logic lives in one place.
+    """
+    content = message or ""
+    if images:
+        content = build_screenshots_section(content, images)
+    if files:
+        content = build_attachments_section(content, files)
+    return content.strip() if (images or files) else content
+
+
+def build_comment_content_html(message: str | None, images: list[tuple[str, str]], files: list[tuple[str, str]]) -> str:
+    """HTML equivalent of `build_comment_content`, for the same HTML-only surfaces
+    `build_screenshots_section_html` targets (Azure DevOps work item comments)."""
+    content = message or ""
+    if images:
+        content = build_screenshots_section_html(content, images)
+    if files:
+        content = build_attachments_section_html(content, files)
+    return content.strip() if (images or files) else content

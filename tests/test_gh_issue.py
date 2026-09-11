@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from bmsdna.devtools.gh_issue import build_search_query, parse_comment_id, parse_issue_number, search, update
+from bmsdna.devtools.gh_issue import build_search_query, comment, create, parse_comment_id, parse_issue_number, search, update
 
 
 @pytest.mark.parametrize(
@@ -110,3 +110,49 @@ def test_update_errors_with_nothing_to_do(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", MagicMock())
     with pytest.raises(SystemExit):
         update("gh", 42)
+
+
+def _fake_push_assets(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_issue.push_assets",
+        lambda owner, repo, key, paths, **kwargs: [f"https://github.com/{owner}/{repo}/blob/pr-assets/{key}/{i:02d}-{p.split('/')[-1]}?raw=true" for i, p in enumerate(paths)],
+    )
+
+
+def test_create_with_files_appends_attachments_section(monkeypatch) -> None:
+    _fake_push_assets(monkeypatch)
+    captured_cmds: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmds.append(cmd)
+        if "create" in cmd:
+            return MagicMock(returncode=0, stdout="https://github.com/owner/repo/issues/42\n", stderr="")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
+
+    create("gh", "owner", "repo", "Bug title", "body text", [], [], [], file_paths=["/tmp/report.pdf"])
+
+    edit_cmd = next(cmd for cmd in captured_cmds if "edit" in cmd)
+    body = edit_cmd[edit_cmd.index("--body") + 1]
+    assert "## Attachments" in body
+    assert "[report.pdf]" in body
+    assert "body text" in body
+
+
+def test_comment_with_screenshots_and_files_builds_both_sections(monkeypatch) -> None:
+    _fake_push_assets(monkeypatch)
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/issues/42#issuecomment-1\n", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
+
+    comment("gh", "owner", "repo", 42, "Fixed", ["/tmp/shot.png"], ["/tmp/report.pdf"])
+
+    body = captured_cmd[captured_cmd.index("--body") + 1]
+    assert "Fixed" in body
+    assert "## Screenshots" in body
+    assert "## Attachments" in body
