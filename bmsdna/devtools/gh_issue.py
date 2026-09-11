@@ -24,10 +24,21 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .bdt_config import load_bdt_table
 from .gh_pr import push_assets
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 _COMMENT_ID_RE = re.compile(r"#issuecomment-(\d+)")
+
+# Raw pool size to fetch from `gh issue list` before filtering to a board, as a multiple of the
+# caller's requested `limit` -- board membership is filtered client-side after the fact (`gh issue
+# list` has no board-scoping of its own), so asking for exactly `limit` up front would usually
+# return fewer than that once off-board results are dropped.
+_BOARD_SEARCH_OVERFETCH = 10
+
+# Max items to pull back per board when resolving its membership -- generous enough to cover any
+# board this is likely to be pointed at without needing pagination.
+_BOARD_ITEM_LIMIT = 500
 
 
 def _run_gh(gh: str, args: list[str]) -> str:
@@ -60,6 +71,51 @@ def parse_comment_id(comment_url: str) -> str | None:
     return match.group(1) if match else None
 
 
+def resolve_board(board: str | None, start: Path | None = None) -> str | None:
+    """--board wins; else `[tool.bdt.github].board` from pyproject.toml; else None."""
+    return board or load_bdt_table("github", start).get("board")
+
+
+def _find_project_number(projects: list[dict], board: str) -> int | None:
+    for project in projects:
+        if project.get("title", "").casefold() == board.casefold():
+            return project.get("number")
+    return None
+
+
+def resolve_project_number(gh: str, owner: str, board: str) -> int:
+    """The GitHub Projects (v2) board `board` (a number or a title) as its project number."""
+    if board.isdigit():
+        return int(board)
+    out = _run_gh(gh, ["project", "list", "--owner", owner, "--format", "json", "--closed"])
+    projects = json.loads(out).get("projects", []) if out else []
+    number = _find_project_number(projects, board)
+    if number is None:
+        sys.exit(f"GitHub Project board '{board}' not found for owner '{owner}'. Pass its number instead, or check the name.")
+    return number
+
+
+def _extract_issue_numbers(items: list[dict]) -> set[int]:
+    """Issue numbers among a board's items -- drops pull requests and draft issues, which either
+    belong to a different search or have no repo issue number to match against.
+    """
+    numbers = set()
+    for item in items:
+        if item.get("type") != "Issue":
+            continue
+        url = item.get("url")
+        if url:
+            numbers.add(int(parse_issue_number(url)))
+    return numbers
+
+
+def board_issue_numbers(gh: str, owner: str, project_number: int) -> set[int]:
+    """Issue numbers currently on `owner`'s Projects (v2) board `project_number`."""
+    out = _run_gh(gh, ["project", "item-list", str(project_number), "--owner", owner, "--format", "json", "--limit", str(_BOARD_ITEM_LIMIT)])
+    items = json.loads(out).get("items", []) if out else []
+    return _extract_issue_numbers(items)
+
+
 def create(
     gh: str,
     owner: str,
@@ -70,12 +126,20 @@ def create(
     screenshot_paths: list[str],
     extra_args: list[str],
     file_paths: list[str] | None = None,
+    board: str | None = None,
 ) -> None:
-    """Create a GitHub issue, then (if any) attach screenshots/files as a follow-up edit."""
+    """Create a GitHub issue, then (if any) attach screenshots/files as a follow-up edit.
+
+    `board` adds the issue to that GitHub Projects (v2) board by title (`gh issue create
+    --project` takes a name, not a number -- unlike board-scoped search, which needs the number
+    to query the board's items).
+    """
     file_paths = file_paths or []
     args = ["issue", "create", "--title", title, "--body", body or ""]
     for label in labels:
         args += ["--label", label]
+    if board:
+        args += ["--project", board]
     args += extra_args
 
     url = _run_gh(gh, args)
@@ -105,14 +169,25 @@ def build_search_query(keywords: list[str], since: str | None) -> str:
     return " ".join(parts)
 
 
-def search(gh: str, keywords: list[str], since: str | None, limit: int, state: str = "open") -> list[dict]:
+def search(gh: str, owner: str, keywords: list[str], since: str | None, limit: int, state: str = "open", board: str | None = None) -> list[dict]:
     """Search (or, with no keywords, just list) issues by state, most recently updated first.
 
-    `state` is `gh issue list`'s own `open|closed|all` flag, not a search qualifier.
+    `state` is `gh issue list`'s own `open|closed|all` flag, not a search qualifier. `board`
+    scopes results to a GitHub Projects (v2) board (by title or number) -- `gh issue list` has no
+    board filter of its own, so this over-fetches a wider raw pool first and filters down to
+    `limit` afterward, client-side.
     """
     query = build_search_query(keywords, since)
-    out = _run_gh(gh, ["issue", "list", "--search", query, "--state", state, "--limit", str(limit), "--json", "number,title,url,state"])
+    fetch_limit = limit * _BOARD_SEARCH_OVERFETCH if board else limit
+    out = _run_gh(gh, ["issue", "list", "--search", query, "--state", state, "--limit", str(fetch_limit), "--json", "number,title,url,state"])
     items = json.loads(out) if out else []
+
+    if board:
+        project_number = resolve_project_number(gh, owner, board)
+        allowed = board_issue_numbers(gh, owner, project_number)
+        items = [item for item in items if item["number"] in allowed]
+
+    items = items[:limit]
     for item in items:
         print(f"#{item['number']} [{item['state']}] {item['title']}")
         print(item["url"])
