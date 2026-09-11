@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 from .gh_pr import push_assets
-from .pr_markdown import build_attachments_section, build_screenshots_section
+from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 _COMMENT_ID_RE = re.compile(r"#issuecomment-(\d+)")
 
@@ -201,13 +201,7 @@ def comment(
     file_paths = file_paths or []
     images = _screenshot_images(owner, repo, f"issue-{number}", screenshot_paths) if screenshot_paths else []
     files = _file_links(owner, repo, f"issue-{number}", file_paths) if file_paths else []
-    content = message or ""
-    if images:
-        content = build_screenshots_section(content, images)
-    if files:
-        content = build_attachments_section(content, files)
-    if images or files:
-        content = content.strip()
+    content = build_comment_content(message, images, files)
     url = _run_gh(gh, ["issue", "comment", str(number), "--body", content])
     comment_id = parse_comment_id(url)
     suffix = f" (comment #{comment_id})" if comment_id else ""

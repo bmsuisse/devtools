@@ -202,10 +202,10 @@ def test_pr_create_attaches_files_for_github(monkeypatch, tmp_path) -> None:
 
     captured: dict = {}
 
-    def fake_add_files(gh, owner, repo, branch, file_paths):
+    def fake_add_attachments(gh, owner, repo, branch, screenshot_paths, file_paths):
         captured["file_paths"] = file_paths
 
-    monkeypatch.setattr("bmsdna.devtools.gh_pr.add_files", fake_add_files)
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.add_attachments", fake_add_attachments)
 
     report = tmp_path / "report.pdf"
     report.write_bytes(b"fake-pdf-bytes")

@@ -48,3 +48,29 @@ def build_attachments_section_html(existing_text: str | None, files: list[tuple[
     """
     section = "\n".join(f'<a href="{escape(url)}">{escape(name)}</a><br>' for name, url in files)
     return f"{existing_text or ''}\n\n<h2>Attachments</h2>\n\n{section}\n"
+
+
+def build_comment_content(message: str | None, images: list[tuple[str, str]], files: list[tuple[str, str]]) -> str:
+    """A comment/description body: `message` with an optional Markdown Screenshots section (embedded)
+    and/or Attachments section (linked) appended, trimmed only when at least one was added.
+
+    Shared by every `*_with_screenshots`/comment path that accepts both screenshots and files, so
+    the message-then-sections-then-trim assembly logic lives in one place.
+    """
+    content = message or ""
+    if images:
+        content = build_screenshots_section(content, images)
+    if files:
+        content = build_attachments_section(content, files)
+    return content.strip() if (images or files) else content
+
+
+def build_comment_content_html(message: str | None, images: list[tuple[str, str]], files: list[tuple[str, str]]) -> str:
+    """HTML equivalent of `build_comment_content`, for the same HTML-only surfaces
+    `build_screenshots_section_html` targets (Azure DevOps work item comments)."""
+    content = message or ""
+    if images:
+        content = build_screenshots_section_html(content, images)
+    if files:
+        content = build_attachments_section_html(content, files)
+    return content.strip() if (images or files) else content

@@ -48,7 +48,7 @@ import requests
 
 from .bdt_config import load_bdt_table
 from .gitrepo import AdoRemote
-from .pr_markdown import build_attachments_section_html, build_screenshots_section_html
+from .pr_markdown import build_comment_content_html
 
 COMMENTS_API_VERSION = "7.1-preview.4"
 
@@ -299,20 +299,38 @@ def delete_comment(session: requests.Session, remote: AdoRemote, work_item_id: i
     print(f"Deleted comment #{comment_id} on work item #{work_item_id}")
 
 
+def add_attachments(
+    session: requests.Session,
+    remote: AdoRemote,
+    work_item_id: int,
+    screenshot_paths: list[str] | None = None,
+    file_paths: list[str] | None = None,
+) -> None:
+    """Upload+link screenshots/files as attachments, then post one comment embedding/linking them
+    as HTML `<img>`/`<a>` tags -- a single round trip whether one or both kinds are given.
+    """
+    screenshot_paths = screenshot_paths or []
+    file_paths = file_paths or []
+    images = _upload_attachments(session, remote, screenshot_paths) if screenshot_paths else []
+    files = _upload_attachments(session, remote, file_paths) if file_paths else []
+    if images or files:
+        link_attachments(session, remote, work_item_id, images + files)
+    content = build_comment_content_html(None, images, files)
+    comment = add_comment(session, remote, work_item_id, content)
+    print(
+        f"Attached {len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s) to work item "
+        f"#{work_item_id} (comment #{comment['id']})"
+    )
+
+
 def add_screenshots(session: requests.Session, remote: AdoRemote, work_item_id: int, screenshot_paths: list[str]) -> None:
     """Upload+link screenshots as attachments, then post a comment embedding them as HTML `<img>` tags."""
-    images = _upload_attachments(session, remote, screenshot_paths)
-    link_attachments(session, remote, work_item_id, images)
-    comment = add_comment(session, remote, work_item_id, build_screenshots_section_html(None, images).strip())
-    print(f"Attached {len(screenshot_paths)} screenshot(s) to work item #{work_item_id} (comment #{comment['id']})")
+    add_attachments(session, remote, work_item_id, screenshot_paths=screenshot_paths)
 
 
 def add_files(session: requests.Session, remote: AdoRemote, work_item_id: int, file_paths: list[str]) -> None:
     """Upload+link arbitrary files as attachments, then post a comment linking them as HTML `<a>` tags."""
-    files = _upload_attachments(session, remote, file_paths)
-    link_attachments(session, remote, work_item_id, files)
-    comment = add_comment(session, remote, work_item_id, build_attachments_section_html(None, files).strip())
-    print(f"Attached {len(file_paths)} file(s) to work item #{work_item_id} (comment #{comment['id']})")
+    add_attachments(session, remote, work_item_id, file_paths=file_paths)
 
 
 def comment_with_screenshots(
@@ -329,13 +347,7 @@ def comment_with_screenshots(
     files = _upload_attachments(session, remote, file_paths) if file_paths else []
     if images or files:
         link_attachments(session, remote, work_item_id, images + files)
-    content = message or ""
-    if images:
-        content = build_screenshots_section_html(content, images)
-    if files:
-        content = build_attachments_section_html(content, files)
-    if images or files:
-        content = content.strip()
+    content = build_comment_content_html(message, images, files)
     comment = add_comment(session, remote, work_item_id, content)
     print(
         f"Added comment #{comment['id']} ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) "
@@ -472,10 +484,8 @@ def create(
     if url:
         print(url)
 
-    if screenshot_paths:
-        add_screenshots(session, remote, work_item_id, screenshot_paths)
-    if file_paths:
-        add_files(session, remote, work_item_id, file_paths)
+    if screenshot_paths or file_paths:
+        add_attachments(session, remote, work_item_id, screenshot_paths, file_paths)
 
     return work_item
 

@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 
 from .cli_tools import is_claude_code
-from .pr_markdown import build_attachments_section, build_screenshots_section
+from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 PR_VIEW_FIELDS = "number,title,baseRefName,mergeable,statusCheckRollup,isDraft"
 
@@ -268,26 +268,39 @@ def _file_links(owner: str, repo: str, branch: str, file_paths: list[str]) -> li
     return list(zip((Path(p).name for p in file_paths), urls))
 
 
-def add_screenshots(gh: str, owner: str, repo: str, branch: str, screenshot_paths: list[str]) -> None:
-    """Push screenshots to the `pr-assets` branch and append them to the current branch's PR body."""
-    images = _screenshot_images(owner, repo, branch, screenshot_paths)
+def add_attachments(
+    gh: str,
+    owner: str,
+    repo: str,
+    branch: str,
+    screenshot_paths: list[str] | None = None,
+    file_paths: list[str] | None = None,
+) -> None:
+    """Push screenshots/files to the `pr-assets` branch and append them to the current branch's PR
+    body in a single edit -- whether one or both kinds are given.
+    """
+    screenshot_paths = screenshot_paths or []
+    file_paths = file_paths or []
     pr = _run_gh_json(gh, ["pr", "view", "--json", "number,body"])
-    body = build_screenshots_section(pr.get("body"), images)
+    body: str = pr.get("body") or ""
+    if screenshot_paths:
+        body = build_screenshots_section(body, _screenshot_images(owner, repo, branch, screenshot_paths))
+    if file_paths:
+        body = build_attachments_section(body, _file_links(owner, repo, branch, file_paths))
     r = subprocess.run([gh, "pr", "edit", str(pr["number"]), "--body", body], capture_output=True, encoding="utf-8")
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or "`gh pr edit` failed")
-    print(f"Attached {len(screenshot_paths)} screenshot(s) to PR #{pr['number']}")
+    print(f"Attached {len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s) to PR #{pr['number']}")
+
+
+def add_screenshots(gh: str, owner: str, repo: str, branch: str, screenshot_paths: list[str]) -> None:
+    """Push screenshots to the `pr-assets` branch and append them to the current branch's PR body."""
+    add_attachments(gh, owner, repo, branch, screenshot_paths=screenshot_paths)
 
 
 def add_files(gh: str, owner: str, repo: str, branch: str, file_paths: list[str]) -> None:
     """Push files to the `pr-assets` branch and append them as linked attachments to the current branch's PR body."""
-    files = _file_links(owner, repo, branch, file_paths)
-    pr = _run_gh_json(gh, ["pr", "view", "--json", "number,body"])
-    body = build_attachments_section(pr.get("body"), files)
-    r = subprocess.run([gh, "pr", "edit", str(pr["number"]), "--body", body], capture_output=True, encoding="utf-8")
-    if r.returncode != 0:
-        sys.exit((r.stderr or r.stdout).strip() or "`gh pr edit` failed")
-    print(f"Attached {len(file_paths)} file(s) to PR #{pr['number']}")
+    add_attachments(gh, owner, repo, branch, file_paths=file_paths)
 
 
 def update(
@@ -333,13 +346,7 @@ def comment_with_screenshots(
     file_paths = file_paths or []
     images = _screenshot_images(owner, repo, branch, screenshot_paths) if screenshot_paths else []
     files = _file_links(owner, repo, branch, file_paths) if file_paths else []
-    content = message or ""
-    if images:
-        content = build_screenshots_section(content, images)
-    if files:
-        content = build_attachments_section(content, files)
-    if images or files:
-        content = content.strip()
+    content = build_comment_content(message, images, files)
     r = subprocess.run([gh, "pr", "comment", "--body", content], capture_output=True, encoding="utf-8")
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or "`gh pr comment` failed")

@@ -1,6 +1,8 @@
 from bmsdna.devtools.pr_markdown import (
     build_attachments_section,
     build_attachments_section_html,
+    build_comment_content,
+    build_comment_content_html,
     build_screenshots_section,
     build_screenshots_section_html,
 )
@@ -70,3 +72,25 @@ def test_build_attachments_section_html_escapes_special_characters() -> None:
     assert "&lt;name&gt;" in text
     assert "&amp;b=2" in text
     assert "<name>" not in text
+
+
+def test_build_comment_content_message_only_untouched() -> None:
+    assert build_comment_content("just a message", [], []) == "just a message"
+
+
+def test_build_comment_content_none_message_and_no_attachments_is_empty() -> None:
+    assert build_comment_content(None, [], []) == ""
+
+
+def test_build_comment_content_appends_screenshots_then_attachments_and_strips() -> None:
+    text = build_comment_content("Fixed", [("shot.png", "https://x/1")], [("report.pdf", "https://x/2")])
+    assert text.startswith("Fixed")
+    assert text.index("## Screenshots") < text.index("## Attachments")
+    assert not text.endswith("\n")
+
+
+def test_build_comment_content_html_appends_screenshots_then_attachments_and_strips() -> None:
+    text = build_comment_content_html("Fixed", [("shot.png", "https://x/1")], [("report.pdf", "https://x/2")])
+    assert text.startswith("Fixed")
+    assert text.index("<h2>Screenshots</h2>") < text.index("<h2>Attachments</h2>")
+    assert not text.endswith("\n")

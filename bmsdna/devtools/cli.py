@@ -137,10 +137,8 @@ def pr_create(
         gh = require_gh()
         returncode, pr_url = gh_pr.create(gh, target, args or [], draft=draft, labels=label)
         build_policy = gh_pr.has_build_policy(gh, target)
-        if returncode == 0 and screenshot:
-            _attach_assets(lambda: gh_pr.add_screenshots(gh, remote.owner, remote.repo, source_branch, screenshot))
-        if returncode == 0 and file:
-            _attach_assets(lambda: gh_pr.add_files(gh, remote.owner, remote.repo, source_branch, file))
+        if returncode == 0 and (screenshot or file):
+            _attach_assets(lambda: gh_pr.add_attachments(gh, remote.owner, remote.repo, source_branch, screenshot, file))
     else:
         az = require_az()
         cmd = [
@@ -181,18 +179,12 @@ def pr_create(
         session = requests.Session()
         session.headers.update(auth_header(pat))
         build_policy = pr_build.has_build_policy(session, remote, target)
-        if returncode == 0 and screenshot:
-            def _add_screenshots() -> None:
+        if returncode == 0 and (screenshot or file):
+            def _add() -> None:
                 pr = pr_build.get_pr(session, remote, source_branch, target)
-                pr_build.add_screenshots(session, remote, pr, screenshot)
+                pr_build.add_attachments(session, remote, pr, screenshot, file)
 
-            _attach_assets(_add_screenshots)
-        if returncode == 0 and file:
-            def _add_files() -> None:
-                pr = pr_build.get_pr(session, remote, source_branch, target)
-                pr_build.add_files(session, remote, pr, file)
-
-            _attach_assets(_add_files)
+            _attach_assets(_add)
 
     if returncode == 0 and pr_url:
         print(f"\n{pr_url}")

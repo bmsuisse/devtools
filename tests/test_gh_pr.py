@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from bmsdna.devtools.gh_pr import (
+    add_attachments,
     add_files,
     check_bucket,
     check_label,
@@ -166,6 +167,30 @@ def test_add_files_pushes_and_appends_attachments_section(monkeypatch) -> None:
     assert "## Attachments" in body
     assert "[report.pdf]" in body
     assert "existing body" in body
+
+
+def test_add_attachments_edits_pr_body_once_for_both_kinds(monkeypatch) -> None:
+    _fake_push_assets(monkeypatch)
+    captured_cmds: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmds.append(cmd)
+        if "view" in cmd:
+            return MagicMock(returncode=0, stdout='{"number": 7, "body": "existing body"}', stderr="")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    add_attachments("gh", "owner", "repo", "feature-x", screenshot_paths=["/tmp/shot.png"], file_paths=["/tmp/report.pdf"])
+
+    view_cmds = [cmd for cmd in captured_cmds if "view" in cmd]
+    edit_cmds = [cmd for cmd in captured_cmds if "edit" in cmd]
+    assert len(view_cmds) == 1
+    assert len(edit_cmds) == 1
+    body = edit_cmds[0][edit_cmds[0].index("--body") + 1]
+    assert "## Screenshots" in body
+    assert "## Attachments" in body
+    assert body.index("## Screenshots") < body.index("## Attachments")
 
 
 def test_update_appends_both_screenshots_and_files(monkeypatch) -> None:

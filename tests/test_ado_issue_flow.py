@@ -144,6 +144,25 @@ def test_create_with_files_uploads_links_and_comments(tmp_path) -> None:
     assert "<img" not in comment_text
 
 
+def test_create_with_screenshots_and_files_posts_a_single_combined_comment(tmp_path) -> None:
+    session = make_session()
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"fake-png-bytes")
+    report = tmp_path / "report.pdf"
+    report.write_bytes(b"fake-pdf-bytes")
+
+    create(session, REMOTE, "Task", "Do the thing", "desc", None, ["tag1"], [str(shot)], [str(report)])
+
+    # Exactly one PATCH (linking both attachments together) and one comment POST — not two
+    # separate round trips for the screenshot and the file.
+    session.patch.assert_called_once()
+    comment_posts = [c for c in session.post.call_args_list if c.args[0].endswith("/comments")]
+    assert len(comment_posts) == 1
+    comment_text = comment_posts[0].kwargs["json"]["text"]
+    assert "<h2>Screenshots</h2>" in comment_text
+    assert "<h2>Attachments</h2>" in comment_text
+
+
 def test_add_files_links_attachment_and_comments(tmp_path) -> None:
     session = make_session()
     report = tmp_path / "report.pdf"

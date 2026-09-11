@@ -7,7 +7,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from bmsdna.devtools.gitrepo import AdoRemote
-from bmsdna.devtools.pr_build import add_files, add_screenshots, comment_with_screenshots, update
+from bmsdna.devtools.pr_build import add_attachments, add_files, add_screenshots, comment_with_screenshots, update
 
 REMOTE = AdoRemote(org="myorg", project="MyProj", repo="myrepo")
 PR = {"pullRequestId": 42, "title": "feat: widgets", "description": "existing description"}
@@ -86,6 +86,22 @@ def test_comment_with_screenshots_and_files_builds_both_sections(tmp_path) -> No
     assert "Fixed" in content
     assert "## Screenshots" in content
     assert "## Attachments" in content
+
+
+def test_add_attachments_patches_pr_description_once_for_both_kinds(tmp_path) -> None:
+    session = make_session()
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"fake-png-bytes")
+    report = tmp_path / "report.pdf"
+    report.write_bytes(b"fake-pdf-bytes")
+
+    add_attachments(session, REMOTE, PR, screenshot_paths=[str(shot)], file_paths=[str(report)])
+
+    session.patch.assert_called_once()
+    description = session.patch.call_args.kwargs["json"]["description"]
+    assert "## Screenshots" in description
+    assert "## Attachments" in description
+    assert description.index("## Screenshots") < description.index("## Attachments")
 
 
 def test_add_screenshots_still_works_unaffected(tmp_path) -> None:
