@@ -1,4 +1,4 @@
-"""Locating required external CLIs (az, gh) with clear errors when missing.
+"""Locating required external CLIs (az, gh, psql) with clear errors when missing.
 
 Uses `shutil.which` rather than a bare command name so Windows .cmd/.bat/.exe
 shims (e.g. az.cmd from the MSI installer) resolve correctly via PATHEXT —
@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 AZ_INSTALL_HINT = "Install the Azure CLI: https://learn.microsoft.com/cli/azure/install-azure-cli"
 GH_INSTALL_HINT = "Install the GitHub CLI: https://cli.github.com"
+PSQL_INSTALL_HINT = "Install the PostgreSQL client tools (psql): https://www.postgresql.org/download/"
 
 
 def is_claude_code() -> bool:
@@ -153,3 +154,7 @@ def require_az() -> str:
 
 def require_gh() -> str:
     return require_tool("gh", GH_INSTALL_HINT)
+
+
+def require_psql() -> str:
+    return require_tool("psql", PSQL_INSTALL_HINT)
