@@ -13,11 +13,16 @@ name = "bmsdna-devtools"
 version = "0.15.0"
 description = "Shared Azure DevOps / GitHub / git / Azure Monitor developer tooling for BMS projects"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.14"  # pgdevkit>=0.7.1 requires 3.14; was >=3.11 before adding it as a dependency
 dependencies = [
     "requests>=2.32.0",
     "typer>=0.26.7",
     "rich>=13.0.0",
+    # [db] extra: pgdevkit.testdb unconditionally imports pgdevkit.db.complex_types
+    # (schema-apply machinery), which needs psycopg-pool/pydantic -- plain
+    # `pgdevkit` alone fails to import pgdevkit.testdb. Possibly worth reporting
+    # upstream, but harmless to depend on here either way.
+    "pgdevkit[db]>=0.7.1",
 ]
 
 [project.scripts]
@@ -31,6 +36,13 @@ dev = [
 test = [
     "pytest>=9.1.0",
 ]
+
+# TEMPORARY: pgdevkit 0.7.1 (adding workspace_db_names()) isn't published to
+# PyPI yet -- it's an open, unmerged PR (bmsuisse/pgdevkit#testdb-cli-orphaned-
+# followups). Remove this override once that's merged and 0.7.1 is on PyPI;
+# the >=0.7.1 constraint above is the real, intended one.
+[tool.uv.sources]
+pgdevkit = { git = "https://github.com/bmsuisse/pgdevkit", branch = "testdb-cli-orphaned-followups" }
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

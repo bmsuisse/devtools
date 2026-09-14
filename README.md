@@ -187,48 +187,65 @@ Creates `.worktrees/<name>` branched from `--base`, initializes submodules
 
 ```bash
 bdt cleanup worktrees [root] [--remote origin] [--keep-dbs] [--yes]
-bdt cleanup orphaned-dbs [root] [--remote origin] [--include-caution] [--yes]
+bdt cleanup orphaned-dbs [root] [--include-caution] [--yes]
 ```
 
-Recursively scans every git repo under `root` (default: `.`) for worktrees,
-and prunes the ones fully merged into `<remote>/main`/`<remote>/test`
-(falling back to local `main`/`test` if no such remote refs exist) — e.g. a
-tree of `.worktrees/<branch>` directories accumulated across several repos
-over time. Like `bdt issue delete`, there's no interactive prompt: both
-commands only ever *print* what they would remove/drop; pass `--yes` to
-actually do it.
+Recursively scans every git repo under `root` (default: `.`) for worktrees.
+`bdt cleanup worktrees` prunes the ones fully merged into
+`<remote>/main`/`<remote>/test` (falling back to local `main`/`test` if no
+such remote refs exist) — e.g. a tree of `.worktrees/<branch>` directories
+accumulated across several repos over time. `bdt cleanup orphaned-dbs` has no
+`--remote`/merge-status notion at all: it just finds pgdevkit test DBs with
+no matching *live* git worktree, regardless of whether that worktree was
+ever merged anywhere. Like `bdt issue delete`, neither command has an
+interactive prompt — both only ever *print* what they would remove/drop;
+pass `--yes` to actually do it.
 
-If a repo's root `pyproject.toml` has a `[tool.pgdevkit].engine = "postgres"`
-(the default once `[tool.pgdevkit]` exists at all), removing one of its
-worktrees also drops the Postgres test database pgdevkit created for that
-branch (`workspace_db_name(project_name, branch)`, reproduced exactly from
-pgdevkit's own naming so no pgdevkit import is needed) — pass `--keep-dbs` to
-skip that. `bdt cleanup orphaned-dbs` runs the same discovery but the other
-way around: it lists every *currently live* worktree's expected DB(s), then
-diffs actual Postgres databases (matching a known project-name prefix)
-against that set — anything left over belonged to a worktree that's already
-gone (removed by hand, or before this command existed). A DB whose name ends
-in a bare branch name (`main`/`test`/`dev`/`head`/`i18n`, rather than a
-slugified feature branch) is flagged `⚠ possibly a standing reference DB` and
-excluded even with `--yes`, since that might be an intentional baseline DB
-rather than an orphaned leftover — pass `--include-caution` too if you've
-verified it really is safe to drop.
+The DB-naming algorithm and orphan detection are entirely
+[pgdevkit](https://github.com/bmsuisse/pgdevkit)'s own
+(`pgdevkit.testdb.workspace_db_names()` /
+`pgdevkit.testdb.find_orphaned_dbs()`) — this used to be a hand-rolled
+reimplementation here (to avoid an import), which risked drifting out of
+sync with pgdevkit's actual naming; now that pgdevkit exposes both directly,
+bdt just calls them. If a repo's root `pyproject.toml` has a
+`[tool.pgdevkit].engine = "postgres"` (the default once `[tool.pgdevkit]`
+exists at all), removing one of its worktrees also drops the Postgres test
+database(s) pgdevkit created for that branch — pass `--keep-dbs` to skip
+that. A DB whose name ends in a bare branch name
+(`main`/`test`/`dev`/`head`/`i18n`, rather than a slugified feature branch)
+is flagged `⚠ possibly a standing reference DB` and excluded even with
+`--yes`, since that might be an intentional baseline DB rather than an
+orphaned leftover — pass `--include-caution` too if you've verified it
+really is safe to drop. That flagging (bdt's own heuristic, not pgdevkit's)
+is the one bit of naming-adjacent logic still here.
 
 A repo can additionally own **sibling** test DBs (e.g. a second DB for a
 vendored mock service) and **nested** ones (an unrelated per-branch DB, under
 a different pgdevkit project name, that happens to share the same branch).
-pgdevkit itself has no notion of either, so they're configured per-repo:
+Siblings are pgdevkit's own concern now — configure
+`[tool.pgdevkit].extra_db_suffixes` in the *consuming* repo (see pgdevkit's
+README) and both `ensure_testdb`-side tooling and `bdt cleanup` pick it up
+automatically. Nested projects have no pgdevkit equivalent (it's a wholly
+separate project name/pyproject.toml, not a literal suffix of the same
+project's DB), so that stays configured here:
 
 ```toml
 [tool.bdt.worktree]
-db_sibling_suffixes = ["_onetrade"]     # "<main_db>_onetrade" also exists
-db_nested_projects = ["akeneo_editor"]  # a wholly separate per-branch DB
+db_nested_projects = ["akeneo_editor"]  # a wholly separate per-branch DB,
+                                         # its own (possibly section-less)
+                                         # pyproject.toml, sharing this
+                                         # worktree's branch
 ```
 
-`--pg-port`/`--pg-user` (env vars `PGPORT`/`PGUSER`, falling back to `USER`
-then `LOGNAME`) point both commands at the right local Postgres cluster;
-neither defaults to a sandbox-specific port, so pass `--pg-port` explicitly
-if your test cluster isn't on Postgres' standard `5432`.
+`--pg-port`/`--pg-user` (both commands; env vars `PGPORT`/`PGUSER`, falling
+back to `USER` then `LOGNAME`) default to *pgdevkit's own* test-container
+port/user, not the OS user or Postgres' standard `5432` — `bdt cleanup
+orphaned-dbs`'s listing step always connects via pgdevkit's own
+`PGDEVKIT_TESTDB_*`-driven resolution (it's calling straight into pgdevkit),
+so its own `psql`-based DROP step defaults to matching that, rather than
+silently targeting a different Postgres instance than the one that was just
+queried. Pass `--pg-port`/`--pg-user` explicitly if your setup deliberately
+differs.
 
 ## `bdt commit`
 

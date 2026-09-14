@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import getpass
 import json
 import subprocess
 import sys
@@ -11,6 +10,7 @@ from pathlib import Path
 
 import requests
 import typer
+from pgdevkit.testdb import constants as pgdevkit_constants
 
 from . import ado_issue, app_service_logs, commit as commit_mod
 from . import env_config
@@ -73,12 +73,20 @@ cleanup_app = typer.Typer(
 )
 app.add_typer(cleanup_app, name="cleanup")
 
-# Shared `--pg-port`/`--pg-user` defaults for `bdt cleanup *`: standard Postgres
-# port/no override, then whatever env vars a local pgdevkit test cluster (or
-# the calling user) would already have set.
-_PG_PORT_OPTION = typer.Option(5432, "--pg-port", envvar="PGPORT", help="Postgres port to connect to")
+# Shared `--pg-port`/`--pg-user` defaults for `bdt cleanup *`: pgdevkit's own
+# test-container port/user (its `find_orphaned_dbs()`/`workspace_db_names()`
+# connect via *its* PGDEVKIT_TESTDB_* env vars, not these flags -- these only
+# drive bdt's own `psql`-based DROP DATABASE step, see testdb.py's module
+# docstring -- so defaulting to anything else would make the two halves of
+# `bdt cleanup orphaned-dbs` silently target different Postgres instances).
+_PG_PORT_OPTION = typer.Option(
+    pgdevkit_constants.PORT, "--pg-port", envvar="PGPORT", help="Postgres port to connect to (default: pgdevkit's own test-container port)"
+)
 _PG_USER_OPTION = typer.Option(
-    None, "--pg-user", envvar=["PGUSER", "USER", "LOGNAME"], help="Postgres user to connect as (default: current OS user)"
+    None,
+    "--pg-user",
+    envvar=["PGUSER", "USER", "LOGNAME"],
+    help="Postgres user to connect as (default: pgdevkit's own test-container user)",
 )
 
 
@@ -590,13 +598,14 @@ def cleanup_worktrees(
     pg_user: str | None = _PG_USER_OPTION,
 ) -> None:
     """Find and remove git worktrees fully merged into main/test (and their pgdevkit test DB(s)), across every repo under root."""
-    worktree_mod.clean_worktrees(root, remote=remote, keep_dbs=keep_dbs, yes=yes, pg_port=pg_port, pg_user=pg_user or getpass.getuser())
+    worktree_mod.clean_worktrees(
+        root, remote=remote, keep_dbs=keep_dbs, yes=yes, pg_port=pg_port, pg_user=pg_user or pgdevkit_constants.USER
+    )
 
 
 @cleanup_app.command("orphaned-dbs")
 def cleanup_orphaned_dbs(
     root: Path = typer.Argument(Path("."), help="Root folder to scan for git repositories (recursively)"),
-    remote: str = typer.Option("origin", "--remote", help="Remote name whose main/test branches count as 'merged into' (only affects which repos/branches are discovered, not the orphan diff itself)"),
     include_caution: bool = typer.Option(
         False, "--include-caution", help="Also drop DBs flagged as possibly a standing reference DB (verify those first!)"
     ),
@@ -605,7 +614,7 @@ def cleanup_orphaned_dbs(
     pg_user: str | None = _PG_USER_OPTION,
 ) -> None:
     """Find and drop pgdevkit test DBs whose worktree is already gone (e.g. removed by hand before this command existed)."""
-    worktree_mod.clean_orphaned_dbs(root, remote=remote, include_caution=include_caution, yes=yes, pg_port=pg_port, pg_user=pg_user or getpass.getuser())
+    worktree_mod.clean_orphaned_dbs(root, include_caution=include_caution, yes=yes, pg_port=pg_port, pg_user=pg_user or pgdevkit_constants.USER)
 
 
 @app.command()

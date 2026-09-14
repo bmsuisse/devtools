@@ -194,55 +194,49 @@ def test_clean_worktrees_reports_nothing_to_do_when_no_repos(tmp_path, capsys) -
 
 
 # --- find_orphaned_dbs / clean_orphaned_dbs --------------------------------
+#
+# testdb.find_orphaned() (which these delegate to) is exercised directly and
+# more thoroughly in test_testdb.py, including the pgdevkit-per-project-root
+# fan-out; these tests only cover find_repos-driven discovery across
+# multiple repos and the preview/drop/--include-caution CLI-flow behavior on
+# top of it, via a monkeypatched testdb.find_orphaned.
 
 
-def test_find_orphaned_dbs_excludes_dbs_owned_by_a_live_worktree(tmp_path, monkeypatch) -> None:
-    repo = init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
-    add_worktree(repo, "my-feature")
-    by_repo = {repo: collect_worktrees(repo, remote="origin")}
-
-    monkeypatch.setattr(
-        "bmsdna.devtools.worktree.testdb.list_databases",
-        lambda pg_port, pg_user: ["ccmt_my_feature", "ccmt_old_removed_feature"],
-    )
-
-    orphaned = find_orphaned_dbs(by_repo, pg_port=54322, pg_user="tester")
-
-    assert orphaned == [OrphanedDb("ccmt_old_removed_feature", "ccmt", False)]
+def _fake_find_orphaned(by_repo: dict) -> object:
+    """Monkeypatch bmsdna.devtools.worktree.testdb.find_orphaned to return
+    `by_repo[repo]` (a list of (name, project, caution) tuples) for each
+    repo, [] for any repo not in by_repo."""
+    return lambda repo: by_repo.get(repo, [])
 
 
-def test_find_orphaned_dbs_flags_caution_dbs(tmp_path, monkeypatch) -> None:
-    repo = init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
-    by_repo = {repo: collect_worktrees(repo, remote="origin")}
+def test_find_orphaned_dbs_fans_out_across_every_discovered_repo(tmp_path, monkeypatch) -> None:
+    repo_a = init_repo(tmp_path / "a", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
+    repo_b = init_repo(tmp_path / "b", pyproject="[tool.pgdevkit]\nname = 'mdm'\n")
 
     monkeypatch.setattr(
-        "bmsdna.devtools.worktree.testdb.list_databases",
-        lambda pg_port, pg_user: ["ccmt_dev"],
+        "bmsdna.devtools.worktree.testdb.find_orphaned",
+        _fake_find_orphaned(
+            {
+                repo_a: [("ccmt_old_removed_feature", "ccmt", False)],
+                repo_b: [("mdm_dev", "mdm", True)],
+            }
+        ),
     )
 
-    orphaned = find_orphaned_dbs(by_repo, pg_port=54322, pg_user="tester")
+    orphaned = find_orphaned_dbs(tmp_path)
 
-    assert orphaned == [OrphanedDb("ccmt_dev", "ccmt", True)]
-
-
-def test_find_orphaned_dbs_ignores_unrelated_project_prefixes(tmp_path, monkeypatch) -> None:
-    repo = init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
-    by_repo = {repo: collect_worktrees(repo, remote="origin")}
-
-    monkeypatch.setattr(
-        "bmsdna.devtools.worktree.testdb.list_databases",
-        lambda pg_port, pg_user: ["postgres", "some_unrelated_db"],
-    )
-
-    assert find_orphaned_dbs(by_repo, pg_port=54322, pg_user="tester") == []
+    assert sorted(orphaned, key=lambda o: o.name) == [
+        OrphanedDb("ccmt_old_removed_feature", "ccmt", False),
+        OrphanedDb("mdm_dev", "mdm", True),
+    ]
 
 
 def test_clean_orphaned_dbs_without_yes_only_previews_and_excludes_caution_by_default(tmp_path, monkeypatch, capsys) -> None:
-    init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
+    repo = init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
 
     monkeypatch.setattr(
-        "bmsdna.devtools.worktree.testdb.list_databases",
-        lambda pg_port, pg_user: ["ccmt_old_removed_feature", "ccmt_dev"],
+        "bmsdna.devtools.worktree.testdb.find_orphaned",
+        _fake_find_orphaned({repo: [("ccmt_old_removed_feature", "ccmt", False), ("ccmt_dev", "ccmt", True)]}),
     )
     dropped: list[str] = []
     monkeypatch.setattr(
@@ -250,7 +244,7 @@ def test_clean_orphaned_dbs_without_yes_only_previews_and_excludes_caution_by_de
         lambda name, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
     )
 
-    clean_orphaned_dbs(tmp_path, remote="origin", include_caution=False, yes=False, pg_port=54322, pg_user="tester")
+    clean_orphaned_dbs(tmp_path, include_caution=False, yes=False, pg_port=54322, pg_user="tester")
 
     out = capsys.readouterr().out
     assert "ccmt_old_removed_feature" in out
@@ -261,11 +255,11 @@ def test_clean_orphaned_dbs_without_yes_only_previews_and_excludes_caution_by_de
 
 
 def test_clean_orphaned_dbs_with_yes_drops_only_non_caution_by_default(tmp_path, monkeypatch) -> None:
-    init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
+    repo = init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
 
     monkeypatch.setattr(
-        "bmsdna.devtools.worktree.testdb.list_databases",
-        lambda pg_port, pg_user: ["ccmt_old_removed_feature", "ccmt_dev"],
+        "bmsdna.devtools.worktree.testdb.find_orphaned",
+        _fake_find_orphaned({repo: [("ccmt_old_removed_feature", "ccmt", False), ("ccmt_dev", "ccmt", True)]}),
     )
     dropped: list[str] = []
     monkeypatch.setattr(
@@ -273,17 +267,17 @@ def test_clean_orphaned_dbs_with_yes_drops_only_non_caution_by_default(tmp_path,
         lambda name, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
     )
 
-    clean_orphaned_dbs(tmp_path, remote="origin", include_caution=False, yes=True, pg_port=54322, pg_user="tester")
+    clean_orphaned_dbs(tmp_path, include_caution=False, yes=True, pg_port=54322, pg_user="tester")
 
     assert dropped == ["ccmt_old_removed_feature"]
 
 
 def test_clean_orphaned_dbs_with_yes_and_include_caution_drops_everything(tmp_path, monkeypatch) -> None:
-    init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
+    repo = init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
 
     monkeypatch.setattr(
-        "bmsdna.devtools.worktree.testdb.list_databases",
-        lambda pg_port, pg_user: ["ccmt_old_removed_feature", "ccmt_dev"],
+        "bmsdna.devtools.worktree.testdb.find_orphaned",
+        _fake_find_orphaned({repo: [("ccmt_old_removed_feature", "ccmt", False), ("ccmt_dev", "ccmt", True)]}),
     )
     dropped: list[str] = []
     monkeypatch.setattr(
@@ -291,16 +285,16 @@ def test_clean_orphaned_dbs_with_yes_and_include_caution_drops_everything(tmp_pa
         lambda name, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
     )
 
-    clean_orphaned_dbs(tmp_path, remote="origin", include_caution=True, yes=True, pg_port=54322, pg_user="tester")
+    clean_orphaned_dbs(tmp_path, include_caution=True, yes=True, pg_port=54322, pg_user="tester")
 
     assert sorted(dropped) == ["ccmt_dev", "ccmt_old_removed_feature"]
 
 
 def test_clean_orphaned_dbs_reports_none_found(tmp_path, monkeypatch, capsys) -> None:
-    init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
-    monkeypatch.setattr("bmsdna.devtools.worktree.testdb.list_databases", lambda pg_port, pg_user: [])
+    repo = init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
+    monkeypatch.setattr("bmsdna.devtools.worktree.testdb.find_orphaned", _fake_find_orphaned({repo: []}))
 
-    clean_orphaned_dbs(tmp_path, remote="origin", include_caution=False, yes=True, pg_port=54322, pg_user="tester")
+    clean_orphaned_dbs(tmp_path, include_caution=False, yes=True, pg_port=54322, pg_user="tester")
 
     assert "No orphaned pgdevkit test DBs found" in capsys.readouterr().out
 
@@ -309,7 +303,7 @@ def test_clean_orphaned_dbs_reports_no_repos_found_distinctly_from_no_orphans(tm
     """A typo'd/empty root (no repos at all) must be reported distinctly from
     a scan that ran but found nothing -- otherwise a mistaken --root value
     silently looks identical to a clean sweep."""
-    clean_orphaned_dbs(tmp_path, remote="origin", include_caution=False, yes=True, pg_port=54322, pg_user="tester")
+    clean_orphaned_dbs(tmp_path, include_caution=False, yes=True, pg_port=54322, pg_user="tester")
 
     out = capsys.readouterr().out
     assert "No git repositories found" in out

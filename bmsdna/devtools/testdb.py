@@ -1,114 +1,148 @@
-"""pgdevkit test-database naming and cleanup helpers.
+"""pgdevkit test-database cleanup helpers.
 
-pgdevkit (github.com/bmsuisse/pgdevkit) names each git worktree's local
-Postgres test database `workspace_db_name(project_name, branch)` --
-`slugify`/`workspace_db_name` below reproduce that algorithm exactly (see
-pgdevkit's `testdb/naming.py`) so `bdt cleanup` can compute, without ever
-importing pgdevkit itself, which database belongs to which worktree.
+The DB-naming algorithm (`workspace_db_name`, per-branch/per-suffix
+expected-name computation) and the live-worktree-vs-Postgres orphan diff
+used to be reimplemented here so `bdt cleanup` didn't have to import
+pgdevkit. Now that pgdevkit itself exposes `find_orphaned_dbs()` and
+`workspace_db_names()` (see pgdevkit's `testdb/naming.py` and
+`testdb/api.py`), this module just calls into those instead of keeping a
+second copy of the algorithm to drift out of sync.
 
-A few repos layer extra sibling/nested test DBs on top of the one pgdevkit
-creates for the main project (e.g. a second DB for a vendored mock service,
-or a wholly separate DB for a nested sub-project on the same branch).
-pgdevkit has no notion of this, so it's configured per-repo, under
-`[tool.bdt.worktree]` in that repo's own pyproject.toml, rather than baked
-into this shared package as knowledge of specific downstream repos:
+What's still bdt's own concern, because pgdevkit has no notion of it:
+
+- `db_nested_projects` -- a repo may have a wholly separate pgdevkit
+  project nested in a subdirectory sharing the same branch (e.g. MDMApp's
+  `akeneo_editor/`, its own `pyproject.toml`/`[tool.pgdevkit]` section).
+  pgdevkit's `extra_db_suffixes` only covers a literally-suffixed sibling of
+  the *same* project's main DB, not a wholly separate project name -- so
+  bdt calls pgdevkit's per-project functions a second time with
+  `project_root` pointed at each configured nested subdirectory instead.
+  Still configured under `[tool.bdt.worktree]` in the *consuming* repo's
+  pyproject.toml (as opposed to `extra_db_suffixes`, which moved to
+  `[tool.pgdevkit]` in that same file -- see pgdevkit's README).
 
     [tool.bdt.worktree]
-    # "<main_db>_onetrade" is also created alongside the main workspace DB.
-    db_sibling_suffixes = ["_onetrade"]
-    # A wholly separate per-branch DB, named as if "akeneo_editor" were its
-    # own pgdevkit project, also belongs to this worktree.
     db_nested_projects = ["akeneo_editor"]
+
+- `is_caution_db` -- flagging a DB whose suffix looks like a bare branch
+  name (main/test/dev/...) rather than a slugified feature branch, since
+  that might be a standing reference DB rather than an orphaned leftover.
+  pgdevkit's orphan detection has no opinion on this; it's purely a bdt
+  cleanup-command safety heuristic layered on top of pgdevkit's results.
+
+- Actually dropping a database by name via `psql` -- pgdevkit has no public
+  "drop this arbitrary already-known db name" call (`clean_testdb()`
+  resolves its own name internally, and its non-`orphaned`/`all` path
+  doesn't fold in `extra_db_suffixes`), so bdt still shells out to `psql`
+  itself for this, same as before.
 """
 
 from __future__ import annotations
 
-import hashlib
-import re
 import subprocess
-import sys
 import tomllib
 from pathlib import Path
 
+import pgdevkit.testdb as pgdevkit_testdb
+from pgdevkit.testdb.config import load_config
+
 from .bdt_config import load_bdt_table
-from .cli_tools import PSQL_INSTALL_HINT
+from .cli_tools import require_psql
 
-_INVALID_CHARS = re.compile(r"[^a-z0-9_]+")
-_MAX_SLUG_LEN = 30
-
-# A DB name ending in one of these (after stripping any configured sibling
-# suffix) looks like it's named after a bare branch rather than a slugified
-# feature branch -- it might be a standing reference/baseline DB rather than
-# an orphaned per-worktree leftover, so callers should flag it instead of
-# silently treating it as safe to drop.
+# A DB name ending in one of these (after stripping any configured
+# `extra_db_suffixes` entry) looks like it's named after a bare branch
+# rather than a slugified feature branch -- it might be a standing
+# reference/baseline DB rather than an orphaned per-worktree leftover, so
+# callers should flag it instead of silently treating it as safe to drop.
 CAUTION_BRANCH_NAMES = {"main", "test", "dev", "head", "i18n"}
 
 
-def slugify(value: str) -> str:
-    """Mirrors pgdevkit.testdb.naming.slugify exactly: lowercase, collapse
-    runs of non `[a-z0-9_]` chars to a single `_`, strip leading/trailing
-    `_`, and hash-truncate anything over 30 chars so long branch/project
-    names can't collide with Postgres' own identifier length limit."""
-    slug = _INVALID_CHARS.sub("_", value.lower()).strip("_")
-    if not slug:
-        slug = "x"
-    if len(slug) <= _MAX_SLUG_LEN:
-        return slug
-    digest = hashlib.sha256(slug.encode()).hexdigest()[:8]
-    return f"{slug[:_MAX_SLUG_LEN]}_{digest}"
-
-
-def workspace_db_name(project_name: str, branch: str) -> str:
-    """Mirrors pgdevkit.testdb.naming.workspace_db_name exactly."""
-    joined = f"{slugify(project_name)}_{slugify(branch)}"
-    return slugify(joined)
-
-
-def read_pgdevkit_project(repo: Path) -> str | None:
-    """`[tool.pgdevkit].name` from repo's root pyproject.toml, or None if the
-    repo has no pgdevkit-managed Postgres test DB (no section, or a
-    non-postgres engine, e.g. mssql)."""
+def has_pgdevkit_project(repo: Path) -> bool:
+    """Whether `repo` opts into a pgdevkit-managed *Postgres* test DB: a
+    `[tool.pgdevkit]` section in its pyproject.toml with no `engine =
+    "mssql"`. bdt's cleanup commands only know how to list/drop databases
+    via `psql`, so an mssql-engine project (or one with no pgdevkit config
+    at all) is out of scope here -- unlike `pgdevkit.testdb.load_config()`,
+    which always returns *some* config (falling back to the directory
+    name), this distinguishes "not a pgdevkit-postgres project" from "is
+    one, just using defaults"."""
     pyproject = repo / "pyproject.toml"
     if not pyproject.is_file():
-        return None
+        return False
     try:
         data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError):
-        return None
+        return False
     section = data.get("tool", {}).get("pgdevkit")
-    if not section:
-        return None
-    if section.get("engine", "postgres") != "postgres":
-        return None
-    return section.get("name") or repo.name
-
-
-def db_sibling_suffixes(repo: Path) -> list[str]:
-    """`[tool.bdt.worktree].db_sibling_suffixes` -- extra DBs named
-    "<main_db><suffix>" that belong alongside a worktree's main test DB."""
-    raw = load_bdt_table("worktree", repo).get("db_sibling_suffixes", [])
-    return [s for s in raw if isinstance(s, str)] if isinstance(raw, list) else []
+    # `is None` on purpose, not `not section` -- an empty `[tool.pgdevkit]`
+    # (accepting every default) parses to `{}`, which is falsy but very much
+    # still opted in.
+    if section is None:
+        return False
+    return section.get("engine", "postgres") == "postgres"
 
 
 def db_nested_projects(repo: Path) -> list[str]:
-    """`[tool.bdt.worktree].db_nested_projects` -- other pgdevkit project
-    names (as `workspace_db_name` would compute them) that share this
-    worktree's branch but are otherwise unrelated projects."""
+    """`[tool.bdt.worktree].db_nested_projects` -- subdirectory names that
+    are wholly separate pgdevkit projects (their own `[tool.pgdevkit]`
+    section) sharing this worktree's branch."""
     raw = load_bdt_table("worktree", repo).get("db_nested_projects", [])
     return [s for s in raw if isinstance(s, str)] if isinstance(raw, list) else []
 
 
-def expected_db_names(repo: Path, project_name: str, branch: str) -> frozenset[str]:
-    """All DB names a given branch is expected to own for `project_name`:
-    the main workspace DB, any configured sibling DBs, and any
-    nested-project DBs sharing the same branch."""
-    main_db = workspace_db_name(project_name, branch)
-    names = {main_db}
-    for suffix in db_sibling_suffixes(repo):
-        names.add(f"{main_db}{suffix}")
-    for nested in db_nested_projects(repo):
-        names.add(workspace_db_name(nested, branch))
+def project_roots(repo: Path) -> list[Path]:
+    """`repo` itself (if it's a pgdevkit-postgres project), plus every
+    configured `db_nested_projects` subdirectory that exists.
+
+    Unlike `repo` itself, a configured nested project is *not* also gated
+    on `has_pgdevkit_project()` -- being named in `db_nested_projects` at
+    all is the opt-in. pgdevkit's own `load_config()` falls back to the
+    directory name whenever a `[tool.pgdevkit]` section is missing (as long
+    as *some* pyproject.toml exists there), and real nested projects rely
+    on exactly that: MDMApp's actual `akeneo_editor/pyproject.toml` has no
+    `[tool.pgdevkit]` section at all, yet its own tests call
+    `pgdevkit.testdb.ensure_testdb()` directly and it works, resolving to
+    project name "akeneo_editor" via the directory-name fallback. Requiring
+    an explicit section here too would silently exclude it."""
+    roots = [repo] if has_pgdevkit_project(repo) else []
+    roots += [nested_root for nested in db_nested_projects(repo) if (nested_root := repo / nested).is_dir()]
+    return roots
+
+
+def project_name(repo: Path) -> str | None:
+    """This repo's pgdevkit project name, or None if it isn't a
+    pgdevkit-managed Postgres project at all."""
+    if not has_pgdevkit_project(repo):
+        return None
+    return load_config(repo).name
+
+
+def workspace_db_names(repo: Path) -> frozenset[str]:
+    """Every DB name this exact worktree at `repo` owns right now --
+    `repo`'s own main DB plus any configured `extra_db_suffixes` siblings
+    (both resolved by pgdevkit), plus the same for any configured
+    `db_nested_projects`. Requires `repo` to still be a valid git checkout
+    (pgdevkit resolves the current branch from it), so this must be called
+    before the worktree is removed."""
+    names: set[str] = set()
+    for root in project_roots(repo):
+        names |= pgdevkit_testdb.workspace_db_names(project_root=root)
     return frozenset(names)
+
+
+def find_orphaned(repo: Path) -> list[tuple[str, str, bool]]:
+    """(db_name, project_name, caution) for every database with no matching
+    live git worktree, across this repo's own pgdevkit project and any
+    configured nested projects -- delegates the actual diffing entirely to
+    pgdevkit's own `find_orphaned_dbs()`, once per project root; `caution`
+    is bdt's own heuristic on top (see `is_caution_db`)."""
+    results: list[tuple[str, str, bool]] = []
+    for root in project_roots(repo):
+        config = load_config(root)
+        suffixes = list(config.extra_db_suffixes)
+        for name in pgdevkit_testdb.find_orphaned_dbs(project_root=root):
+            results.append((name, config.name, is_caution_db(name, config.name, suffixes)))
+    return results
 
 
 def is_caution_db(db_name: str, project_name: str, sibling_suffixes: list[str]) -> bool:
@@ -126,26 +160,13 @@ def is_caution_db(db_name: str, project_name: str, sibling_suffixes: list[str]) 
 
 
 def _run_psql(args: list[str], pg_port: int, pg_user: str) -> subprocess.CompletedProcess:
-    try:
-        return subprocess.run(
-            ["psql", "-p", str(pg_port), "-U", pg_user, "-d", "postgres", *args],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError:
-        sys.exit(f"'psql' is required for this command but wasn't found on PATH.\n{PSQL_INSTALL_HINT}")
-
-
-def list_databases(pg_port: int, pg_user: str) -> list[str]:
-    result = _run_psql(
-        ["-Atc", "select datname from pg_database where datistemplate = false order by datname"],
-        pg_port,
-        pg_user,
+    psql = require_psql()
+    return subprocess.run(
+        [psql, "-p", str(pg_port), "-U", pg_user, "-d", "postgres", *args],
+        capture_output=True,
+        text=True,
+        check=False,
     )
-    if result.returncode != 0:
-        return []
-    return [line for line in result.stdout.splitlines() if line.strip()]
 
 
 def drop_database(name: str, pg_port: int, pg_user: str) -> subprocess.CompletedProcess:

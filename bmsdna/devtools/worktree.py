@@ -203,7 +203,6 @@ def collect_worktrees(repo: Path, remote: str) -> list[Worktree]:
 
     candidate_refs = [f"{remote}/main", f"{remote}/test", "main", "test"]
     existing_refs = [r for r in candidate_refs if _ref_exists(repo, r)]
-    project_name = testdb.read_pgdevkit_project(repo)
 
     worktrees: list[Worktree] = []
     for i, e in enumerate(entries):
@@ -212,7 +211,12 @@ def collect_worktrees(repo: Path, remote: str) -> list[Worktree]:
         path = Path(e["path"])
         head = e.get("head", "")
         branch = e.get("branch")
-        db_names = testdb.expected_db_names(repo, project_name, branch) if project_name and branch else frozenset()
+        # testdb.workspace_db_names() resolves the project name and current
+        # branch itself from `path`'s own pyproject.toml/git checkout, so
+        # this needs `path` to still exist -- fine here since a worktree
+        # only gets removed (and its DB(s) dropped) later in this same
+        # collect-then-remove flow, well after this runs.
+        db_names = testdb.workspace_db_names(path) if path.exists() else frozenset()
         wt = Worktree(
             repo=repo,
             path=path,
@@ -337,57 +341,38 @@ class OrphanedDb:
     caution: bool
 
 
-def find_orphaned_dbs(by_repo: dict[Path, list[Worktree]], *, pg_port: int, pg_user: str) -> list[OrphanedDb]:
-    """Diff actual Postgres DBs against the DBs every *currently existing*
-    worktree (regardless of merge status) is expected to own. Anything left
-    over belongs to a worktree that's already gone (removed by hand, or
-    before this tool tracked DB cleanup)."""
-    live_expected: set[str] = set()
-    project_names: set[str] = set()
-    sibling_suffixes_by_project: dict[str, list[str]] = {}
-    for repo, worktrees in by_repo.items():
-        project_name = testdb.read_pgdevkit_project(repo)
-        if not project_name:
-            continue
-        project_names.add(project_name)
-        sibling_suffixes_by_project[project_name] = testdb.db_sibling_suffixes(repo)
-        project_names.update(testdb.db_nested_projects(repo))
-        for wt in worktrees:
-            if wt.branch:
-                live_expected |= testdb.expected_db_names(repo, project_name, wt.branch)
-
-    if not project_names:
-        return []
-
-    prefixes = tuple(f"{p}_" for p in project_names)
-    orphaned = []
-    for db in testdb.list_databases(pg_port, pg_user):
-        if not db.startswith(prefixes):
-            continue
-        if db in live_expected:
-            continue
-        owning_project = max((p for p in project_names if db.startswith(f"{p}_")), key=len)
-        siblings = sibling_suffixes_by_project.get(owning_project, [])
-        orphaned.append(OrphanedDb(db, owning_project, testdb.is_caution_db(db, owning_project, siblings)))
+def find_orphaned_dbs(root: Path) -> list[OrphanedDb]:
+    """Sweep every pgdevkit-postgres repo found under `root` (and any
+    `db_nested_projects` it configures) for databases with no matching live
+    git worktree. The actual diffing is entirely pgdevkit's own
+    `find_orphaned_dbs()` (one call per project root) -- this just fans it
+    out across every repo under `root` and layers bdt's own caution-DB
+    heuristic on top (see `testdb.py`'s module docstring)."""
+    orphaned: list[OrphanedDb] = []
+    for repo in sorted(find_repos(root)):
+        orphaned.extend(OrphanedDb(name, project, caution) for name, project, caution in testdb.find_orphaned(repo))
     return orphaned
 
 
-def clean_orphaned_dbs(root: Path, *, remote: str, include_caution: bool, yes: bool, pg_port: int, pg_user: str) -> None:
+def clean_orphaned_dbs(root: Path, *, include_caution: bool, yes: bool, pg_port: int, pg_user: str) -> None:
     """Sweep for pgdevkit test DBs whose worktree no longer exists (e.g.
     removed by hand, or before this tool existed) across every repo found
     under `root`, and drop them -- but only when `yes` is set. DBs whose
     suffix looks like a bare branch name (main/test/dev/...) rather than a
     slugified feature branch are flagged as possibly-standing-reference and
     excluded unless `include_caution` is also set, since those might be
-    intentional baseline DBs rather than orphaned leftovers."""
+    intentional baseline DBs rather than orphaned leftovers.
+
+    Unlike `clean_worktrees`, this has no notion of a `remote` to check
+    "merged into" status against -- pgdevkit's orphan detection only cares
+    whether a live git worktree exists for a branch at all, not whether
+    that branch has been merged anywhere."""
     root = root.resolve()
-    repos = find_repos(root)
-    if not repos:
+    if not find_repos(root):
         print(f"No git repositories found under {root}.")
         return
-    by_repo = {repo: collect_worktrees(repo, remote) for repo in sorted(repos)}
 
-    orphaned = find_orphaned_dbs(by_repo, pg_port=pg_port, pg_user=pg_user)
+    orphaned = find_orphaned_dbs(root)
     if not orphaned:
         print("No orphaned pgdevkit test DBs found.")
         return
