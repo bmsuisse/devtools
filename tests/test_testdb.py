@@ -2,6 +2,7 @@ import subprocess
 from unittest.mock import MagicMock
 
 import pytest
+from pgdevkit.testdb import constants as pgdevkit_constants
 
 from bmsdna.devtools.testdb import (
     db_nested_projects,
@@ -248,6 +249,14 @@ def test_is_caution_db_false_when_project_prefix_does_not_match() -> None:
     assert is_caution_db("mdm_main", "ccmt", []) is False
 
 
+def test_is_caution_db_slugifies_project_name_before_comparing() -> None:
+    # db_name is always pgdevkit's *slugified* name (e.g. "mdmapp_main" for
+    # project name "MDMApp") -- comparing against the raw, unslugified
+    # project name would never match and silently never flag anything.
+    assert is_caution_db("mdmapp_main", "MDMApp", []) is True
+    assert is_caution_db("mdmapp_test", "MDMApp", []) is True
+
+
 # --- drop_database -----------------------------------------------------------
 
 
@@ -262,11 +271,54 @@ def test_drop_database_issues_drop_database_if_exists(monkeypatch) -> None:
 
     monkeypatch.setattr("bmsdna.devtools.testdb.subprocess.run", fake_run)
 
-    drop_database("ccmt_my_feature", pg_port=54322, pg_user="tester")
+    drop_database("ccmt_my_feature", pg_host="localhost", pg_port=54322, pg_user="tester")
 
     assert captured_cmd[0] == "/usr/bin/psql"
+    assert "-h" in captured_cmd
+    assert captured_cmd[captured_cmd.index("-h") + 1] == "localhost"
     assert "-c" in captured_cmd
     assert captured_cmd[captured_cmd.index("-c") + 1] == 'DROP DATABASE IF EXISTS "ccmt_my_feature"'
+
+
+def test_drop_database_authenticates_with_pgdevkits_own_password_over_tcp(monkeypatch) -> None:
+    # No -h means psql defaults to the unix socket (peer auth), which
+    # doesn't match how pgdevkit's own find_orphaned_dbs()/
+    # workspace_db_names() connect (TCP + password) -- so the listing half
+    # and this DROP step could silently target two different Postgres
+    # instances, or fail outright on peer auth.
+    captured_env: dict = {}
+
+    monkeypatch.setattr("bmsdna.devtools.testdb.require_psql", lambda: "/usr/bin/psql")
+
+    def fake_run(cmd, **kwargs):
+        captured_env.update(kwargs.get("env") or {})
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.testdb.subprocess.run", fake_run)
+
+    drop_database("ccmt_my_feature", pg_host="localhost", pg_port=54322, pg_user="tester")
+
+    assert captured_env["PGPASSWORD"] == pgdevkit_constants.PASSWORD
+
+
+def test_drop_database_escapes_embedded_double_quotes_in_db_name(monkeypatch) -> None:
+    # `name` comes from a live pg_database listing, not a bdt-validated
+    # slug -- an unescaped embedded `"` would let it break out of the
+    # quoted identifier and inject a second SQL statement into `psql -c`.
+    captured_cmd: list[str] = []
+
+    monkeypatch.setattr("bmsdna.devtools.testdb.require_psql", lambda: "/usr/bin/psql")
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.testdb.subprocess.run", fake_run)
+
+    drop_database('evil"; drop database postgres; --', pg_host="localhost", pg_port=54322, pg_user="tester")
+
+    dropped_sql = captured_cmd[captured_cmd.index("-c") + 1]
+    assert dropped_sql == 'DROP DATABASE IF EXISTS "evil""; drop database postgres; --"'
 
 
 def test_drop_database_exits_with_a_friendly_message_when_psql_is_missing(monkeypatch) -> None:
@@ -276,4 +328,4 @@ def test_drop_database_exits_with_a_friendly_message_when_psql_is_missing(monkey
     monkeypatch.setattr("bmsdna.devtools.testdb.require_psql", fake_require_psql)
 
     with pytest.raises(SystemExit, match="'psql' is required"):
-        drop_database("ccmt_my_feature", pg_port=54322, pg_user="tester")
+        drop_database("ccmt_my_feature", pg_host="localhost", pg_port=54322, pg_user="tester")

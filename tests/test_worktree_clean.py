@@ -134,7 +134,7 @@ def test_clean_worktrees_without_yes_only_previews(tmp_path, capsys) -> None:
     repo = init_repo(tmp_path / "repo")
     path = add_worktree(repo, "merged-feature")
 
-    clean_worktrees(tmp_path, remote="origin", keep_dbs=False, yes=False, pg_port=54322, pg_user="tester")
+    clean_worktrees(tmp_path, remote="origin", keep_dbs=False, yes=False, pg_host="localhost", pg_port=54322, pg_user="tester")
 
     out = capsys.readouterr().out
     assert str(path) in out
@@ -149,10 +149,10 @@ def test_clean_worktrees_with_yes_removes_merged_worktree_and_drops_its_db(tmp_p
     dropped: list[str] = []
     monkeypatch.setattr(
         "bmsdna.devtools.worktree.testdb.drop_database",
-        lambda name, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
+        lambda name, pg_host, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
     )
 
-    clean_worktrees(tmp_path, remote="origin", keep_dbs=False, yes=True, pg_port=54322, pg_user="tester")
+    clean_worktrees(tmp_path, remote="origin", keep_dbs=False, yes=True, pg_host="localhost", pg_port=54322, pg_user="tester")
 
     out = capsys.readouterr().out
     assert not path.exists()
@@ -167,10 +167,10 @@ def test_clean_worktrees_keep_dbs_skips_db_drop(tmp_path, monkeypatch) -> None:
     dropped: list[str] = []
     monkeypatch.setattr(
         "bmsdna.devtools.worktree.testdb.drop_database",
-        lambda name, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
+        lambda name, pg_host, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
     )
 
-    clean_worktrees(tmp_path, remote="origin", keep_dbs=True, yes=True, pg_port=54322, pg_user="tester")
+    clean_worktrees(tmp_path, remote="origin", keep_dbs=True, yes=True, pg_host="localhost", pg_port=54322, pg_user="tester")
 
     assert dropped == []
 
@@ -182,13 +182,13 @@ def test_clean_worktrees_leaves_unmerged_worktree_alone(tmp_path) -> None:
     _git(["add", "."], cwd=path)
     _git(["commit", "-q", "-m", "wip"], cwd=path)
 
-    clean_worktrees(tmp_path, remote="origin", keep_dbs=False, yes=True, pg_port=54322, pg_user="tester")
+    clean_worktrees(tmp_path, remote="origin", keep_dbs=False, yes=True, pg_host="localhost", pg_port=54322, pg_user="tester")
 
     assert path.exists()
 
 
 def test_clean_worktrees_reports_nothing_to_do_when_no_repos(tmp_path, capsys) -> None:
-    clean_worktrees(tmp_path, remote="origin", keep_dbs=False, yes=True, pg_port=54322, pg_user="tester")
+    clean_worktrees(tmp_path, remote="origin", keep_dbs=False, yes=True, pg_host="localhost", pg_port=54322, pg_user="tester")
 
     assert "No git repositories found" in capsys.readouterr().out
 
@@ -241,10 +241,10 @@ def test_clean_orphaned_dbs_without_yes_only_previews_and_excludes_caution_by_de
     dropped: list[str] = []
     monkeypatch.setattr(
         "bmsdna.devtools.worktree.testdb.drop_database",
-        lambda name, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
+        lambda name, pg_host, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
     )
 
-    clean_orphaned_dbs(tmp_path, include_caution=False, yes=False, pg_port=54322, pg_user="tester")
+    clean_orphaned_dbs(tmp_path, include_caution=False, yes=False, pg_host="localhost", pg_port=54322, pg_user="tester")
 
     out = capsys.readouterr().out
     assert "ccmt_old_removed_feature" in out
@@ -264,10 +264,10 @@ def test_clean_orphaned_dbs_with_yes_drops_only_non_caution_by_default(tmp_path,
     dropped: list[str] = []
     monkeypatch.setattr(
         "bmsdna.devtools.worktree.testdb.drop_database",
-        lambda name, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
+        lambda name, pg_host, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
     )
 
-    clean_orphaned_dbs(tmp_path, include_caution=False, yes=True, pg_port=54322, pg_user="tester")
+    clean_orphaned_dbs(tmp_path, include_caution=False, yes=True, pg_host="localhost", pg_port=54322, pg_user="tester")
 
     assert dropped == ["ccmt_old_removed_feature"]
 
@@ -282,10 +282,10 @@ def test_clean_orphaned_dbs_with_yes_and_include_caution_drops_everything(tmp_pa
     dropped: list[str] = []
     monkeypatch.setattr(
         "bmsdna.devtools.worktree.testdb.drop_database",
-        lambda name, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
+        lambda name, pg_host, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
     )
 
-    clean_orphaned_dbs(tmp_path, include_caution=True, yes=True, pg_port=54322, pg_user="tester")
+    clean_orphaned_dbs(tmp_path, include_caution=True, yes=True, pg_host="localhost", pg_port=54322, pg_user="tester")
 
     assert sorted(dropped) == ["ccmt_dev", "ccmt_old_removed_feature"]
 
@@ -294,7 +294,7 @@ def test_clean_orphaned_dbs_reports_none_found(tmp_path, monkeypatch, capsys) ->
     repo = init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
     monkeypatch.setattr("bmsdna.devtools.worktree.testdb.find_orphaned", _fake_find_orphaned({repo: []}))
 
-    clean_orphaned_dbs(tmp_path, include_caution=False, yes=True, pg_port=54322, pg_user="tester")
+    clean_orphaned_dbs(tmp_path, include_caution=False, yes=True, pg_host="localhost", pg_port=54322, pg_user="tester")
 
     assert "No orphaned pgdevkit test DBs found" in capsys.readouterr().out
 
@@ -303,7 +303,7 @@ def test_clean_orphaned_dbs_reports_no_repos_found_distinctly_from_no_orphans(tm
     """A typo'd/empty root (no repos at all) must be reported distinctly from
     a scan that ran but found nothing -- otherwise a mistaken --root value
     silently looks identical to a clean sweep."""
-    clean_orphaned_dbs(tmp_path, include_caution=False, yes=True, pg_port=54322, pg_user="tester")
+    clean_orphaned_dbs(tmp_path, include_caution=False, yes=True, pg_host="localhost", pg_port=54322, pg_user="tester")
 
     out = capsys.readouterr().out
     assert "No git repositories found" in out

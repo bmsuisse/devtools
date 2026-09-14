@@ -239,7 +239,7 @@ def collect_worktrees(repo: Path, remote: str) -> list[Worktree]:
 # --- `bdt cleanup worktrees` ---------------------------------------------
 
 
-def remove_worktree(wt: Worktree, *, drop_dbs: bool, pg_port: int, pg_user: str) -> tuple[subprocess.CompletedProcess, list[tuple[str, bool]]]:
+def remove_worktree(wt: Worktree, *, drop_dbs: bool, pg_host: str, pg_port: int, pg_user: str) -> tuple[subprocess.CompletedProcess, list[tuple[str, bool]]]:
     """Remove a worktree, retrying with --force if git blocks it solely
     because the worktree contains submodules.
 
@@ -259,12 +259,12 @@ def remove_worktree(wt: Worktree, *, drop_dbs: bool, pg_port: int, pg_user: str)
     db_results: list[tuple[str, bool]] = []
     if drop_dbs and result.returncode == 0:
         for db in sorted(wt.db_names):
-            dr = testdb.drop_database(db, pg_port, pg_user)
+            dr = testdb.drop_database(db, pg_host, pg_port, pg_user)
             db_results.append((db, dr.returncode == 0))
     return result, db_results
 
 
-def clean_worktrees(root: Path, *, remote: str, keep_dbs: bool, yes: bool, pg_port: int, pg_user: str) -> None:
+def clean_worktrees(root: Path, *, remote: str, keep_dbs: bool, yes: bool, pg_host: str, pg_port: int, pg_user: str) -> None:
     """Find every worktree merged into `<remote>/main`/`<remote>/test` (or
     local main/test) across every repo found under `root`, and remove them
     (and, unless `keep_dbs`, their pgdevkit test DB(s)) -- but only when
@@ -318,7 +318,7 @@ def clean_worktrees(root: Path, *, remote: str, keep_dbs: bool, yes: bool, pg_po
 
     touched_repos: set[Path] = set()
     for wt in candidates:
-        result, db_results = remove_worktree(wt, drop_dbs=not keep_dbs, pg_port=pg_port, pg_user=pg_user)
+        result, db_results = remove_worktree(wt, drop_dbs=not keep_dbs, pg_host=pg_host, pg_port=pg_port, pg_user=pg_user)
         if result.returncode == 0:
             print(f"removed {wt.path}")
         else:
@@ -354,7 +354,7 @@ def find_orphaned_dbs(root: Path) -> list[OrphanedDb]:
     return orphaned
 
 
-def clean_orphaned_dbs(root: Path, *, include_caution: bool, yes: bool, pg_port: int, pg_user: str) -> None:
+def clean_orphaned_dbs(root: Path, *, include_caution: bool, yes: bool, pg_host: str, pg_port: int, pg_user: str) -> None:
     """Sweep for pgdevkit test DBs whose worktree no longer exists (e.g.
     removed by hand, or before this tool existed) across every repo found
     under `root`, and drop them -- but only when `yes` is set. DBs whose
@@ -392,7 +392,7 @@ def clean_orphaned_dbs(root: Path, *, include_caution: bool, yes: bool, pg_port:
         return
 
     for o in to_drop:
-        result = testdb.drop_database(o.name, pg_port, pg_user)
+        result = testdb.drop_database(o.name, pg_host, pg_port, pg_user)
         print(f"{'dropped' if result.returncode == 0 else 'FAILED to drop'} db {o.name}")
 
     if skipped:

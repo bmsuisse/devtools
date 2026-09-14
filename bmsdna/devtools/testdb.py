@@ -39,12 +39,15 @@ What's still bdt's own concern, because pgdevkit has no notion of it:
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tomllib
 from pathlib import Path
 
 import pgdevkit.testdb as pgdevkit_testdb
+from pgdevkit.testdb import constants as pgdevkit_constants
 from pgdevkit.testdb.config import load_config
+from pgdevkit.testdb.naming import slugify
 
 from .bdt_config import load_bdt_table
 from .cli_tools import require_psql
@@ -148,8 +151,14 @@ def find_orphaned(repo: Path) -> list[tuple[str, str, bool]]:
 def is_caution_db(db_name: str, project_name: str, sibling_suffixes: list[str]) -> bool:
     """Flag DBs whose suffix is a bare branch name (main/test/dev/...)
     rather than a slugified feature branch -- these may be standing
-    reference DBs, not per-worktree leftovers."""
-    prefix = f"{project_name}_"
+    reference DBs, not per-worktree leftovers.
+
+    `db_name` is always pgdevkit's *slugified* name (lowercased, invalid
+    chars collapsed), so `project_name` must be slugified the same way
+    before comparing -- otherwise a project name with uppercase/special
+    characters (e.g. "MDMApp") never matches its own DBs (e.g.
+    "mdmapp_main"), and this silently never fires."""
+    prefix = f"{slugify(project_name)}_"
     if not db_name.startswith(prefix):
         return False
     tail = db_name[len(prefix) :]
@@ -159,15 +168,28 @@ def is_caution_db(db_name: str, project_name: str, sibling_suffixes: list[str]) 
     return tail in CAUTION_BRANCH_NAMES
 
 
-def _run_psql(args: list[str], pg_port: int, pg_user: str) -> subprocess.CompletedProcess:
+def _run_psql(args: list[str], pg_host: str, pg_port: int, pg_user: str) -> subprocess.CompletedProcess:
+    """Run psql against the given host/port/user, authenticating with
+    pgdevkit's own test-container password over TCP -- matching exactly how
+    pgdevkit's own find_orphaned_dbs()/workspace_db_names() connect, so the
+    listing half and this DROP step can't end up silently targeting two
+    different Postgres instances (no -h means psql defaults to the unix
+    socket, which is peer- not password-authenticated)."""
     psql = require_psql()
+    env = {**os.environ, "PGPASSWORD": pgdevkit_constants.PASSWORD}
     return subprocess.run(
-        [psql, "-p", str(pg_port), "-U", pg_user, "-d", "postgres", *args],
+        [psql, "-h", pg_host, "-p", str(pg_port), "-U", pg_user, "-d", "postgres", *args],
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
 
 
-def drop_database(name: str, pg_port: int, pg_user: str) -> subprocess.CompletedProcess:
-    return _run_psql(["-c", f'DROP DATABASE IF EXISTS "{name}"'], pg_port, pg_user)
+def drop_database(name: str, pg_host: str, pg_port: int, pg_user: str) -> subprocess.CompletedProcess:
+    # Escape embedded `"` by doubling it, per Postgres quoted-identifier
+    # rules -- `name` comes from a live `pg_database` listing (via
+    # pgdevkit), not a bdt-validated slug, so it isn't guaranteed to already
+    # be injection-safe.
+    escaped = name.replace('"', '""')
+    return _run_psql(["-c", f'DROP DATABASE IF EXISTS "{escaped}"'], pg_host, pg_port, pg_user)
