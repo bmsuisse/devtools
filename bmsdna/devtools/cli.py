@@ -66,6 +66,20 @@ issue_app.add_typer(issue_comment_app, name="comment")
 logs_app = typer.Typer(name="logs", help="Application Insights / Log Analytics queries")
 app.add_typer(logs_app, name="logs")
 
+cleanup_app = typer.Typer(
+    name="cleanup",
+    help="Prune merged git worktrees and their orphaned pgdevkit Postgres test databases",
+)
+app.add_typer(cleanup_app, name="cleanup")
+
+# Shared `--pg-port`/`--pg-user` defaults for `bdt cleanup *`: standard Postgres
+# port/no override, then whatever env vars a local pgdevkit test cluster (or
+# the calling user) would already have set.
+_PG_PORT_OPTION = typer.Option(5432, "--pg-port", envvar="PGPORT", help="Postgres port to connect to")
+_PG_USER_OPTION = typer.Option(
+    None, "--pg-user", envvar=["PGUSER", "USER", "LOGNAME"], help="Postgres user to connect as (default: current OS user)"
+)
+
 
 def _resolve_ado_pr(pat: str | None, remote: AdoRemote, source_branch: str, target: str) -> tuple[requests.Session, dict]:
     session = requests.Session()
@@ -563,6 +577,34 @@ def worktree(
     """Create a git worktree under .worktrees/<name>, mirroring the `just worktree` recipe."""
     install_cmd = install.split() if install else None
     worktree_mod.create(name, base=base, env_file=env_file, submodules=submodules, install_cmd=install_cmd)
+
+
+@cleanup_app.command("worktrees")
+def cleanup_worktrees(
+    root: Path = typer.Argument(Path("."), help="Root folder to scan for git repositories (recursively)"),
+    remote: str = typer.Option("origin", "--remote", help="Remote name whose main/test branches count as 'merged into' (falls back to local main/test if no such remote refs exist)"),
+    keep_dbs: bool = typer.Option(False, "--keep-dbs", help="Don't drop a removed worktree's pgdevkit test DB(s) along with it"),
+    yes: bool = typer.Option(False, "--yes", help="Actually remove; without this, only prints what would be removed"),
+    pg_port: int = _PG_PORT_OPTION,
+    pg_user: str | None = _PG_USER_OPTION,
+) -> None:
+    """Find and remove git worktrees fully merged into main/test (and their pgdevkit test DB(s)), across every repo under root."""
+    worktree_mod.clean_worktrees(root, remote=remote, keep_dbs=keep_dbs, yes=yes, pg_port=pg_port, pg_user=pg_user or "postgres")
+
+
+@cleanup_app.command("orphaned-dbs")
+def cleanup_orphaned_dbs(
+    root: Path = typer.Argument(Path("."), help="Root folder to scan for git repositories (recursively)"),
+    remote: str = typer.Option("origin", "--remote", help="Remote name whose main/test branches count as 'merged into' (only affects which repos/branches are discovered, not the orphan diff itself)"),
+    include_caution: bool = typer.Option(
+        False, "--include-caution", help="Also drop DBs flagged as possibly a standing reference DB (verify those first!)"
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Actually drop; without this, only prints what would be dropped"),
+    pg_port: int = _PG_PORT_OPTION,
+    pg_user: str | None = _PG_USER_OPTION,
+) -> None:
+    """Find and drop pgdevkit test DBs whose worktree is already gone (e.g. removed by hand before this command existed)."""
+    worktree_mod.clean_orphaned_dbs(root, remote=remote, include_caution=include_caution, yes=yes, pg_port=pg_port, pg_user=pg_user or "postgres")
 
 
 @app.command()

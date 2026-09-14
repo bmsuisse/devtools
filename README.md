@@ -1,8 +1,9 @@
 # bmsdna-devtools
 
 Shared developer tooling for BMS projects: PR build/check status, PR
-creation, issue/work item creation and comments, git worktrees, a
-commit-and-push helper with pre-flight checks, and Azure log queries.
+creation, issue/work item creation and comments, git worktrees (creation and
+merged-worktree/orphaned-test-DB cleanup), a commit-and-push helper with
+pre-flight checks, and Azure log queries.
 `bdt pr *` and `bdt issue *` auto-detect whether the current repo's `origin`
 remote is Azure DevOps or GitHub and use `az`/`gh` accordingly.
 Consolidates near-duplicate scripts that used to be copy-pasted across
@@ -181,6 +182,53 @@ bdt worktree my-feature [--base dev] [--env-file .local_env] [--no-submodules] [
 Creates `.worktrees/<name>` branched from `--base`, initializes submodules
 (unless `--no-submodules`), and copies an env file into the new worktree as
 `.env` (auto-detects `.local_env` then `.env` if `--env-file` isn't given).
+
+## `bdt cleanup worktrees` / `bdt cleanup orphaned-dbs`
+
+```bash
+bdt cleanup worktrees [root] [--remote origin] [--keep-dbs] [--yes]
+bdt cleanup orphaned-dbs [root] [--remote origin] [--include-caution] [--yes]
+```
+
+Recursively scans every git repo under `root` (default: `.`) for worktrees,
+and prunes the ones fully merged into `<remote>/main`/`<remote>/test`
+(falling back to local `main`/`test` if no such remote refs exist) — e.g. a
+tree of `.worktrees/<branch>` directories accumulated across several repos
+over time. Like `bdt issue delete`, there's no interactive prompt: both
+commands only ever *print* what they would remove/drop; pass `--yes` to
+actually do it.
+
+If a repo's root `pyproject.toml` has a `[tool.pgdevkit].engine = "postgres"`
+(the default once `[tool.pgdevkit]` exists at all), removing one of its
+worktrees also drops the Postgres test database pgdevkit created for that
+branch (`workspace_db_name(project_name, branch)`, reproduced exactly from
+pgdevkit's own naming so no pgdevkit import is needed) — pass `--keep-dbs` to
+skip that. `bdt cleanup orphaned-dbs` runs the same discovery but the other
+way around: it lists every *currently live* worktree's expected DB(s), then
+diffs actual Postgres databases (matching a known project-name prefix)
+against that set — anything left over belonged to a worktree that's already
+gone (removed by hand, or before this command existed). A DB whose name ends
+in a bare branch name (`main`/`test`/`dev`/`head`/`i18n`, rather than a
+slugified feature branch) is flagged `⚠ possibly a standing reference DB` and
+excluded even with `--yes`, since that might be an intentional baseline DB
+rather than an orphaned leftover — pass `--include-caution` too if you've
+verified it really is safe to drop.
+
+A repo can additionally own **sibling** test DBs (e.g. a second DB for a
+vendored mock service) and **nested** ones (an unrelated per-branch DB, under
+a different pgdevkit project name, that happens to share the same branch).
+pgdevkit itself has no notion of either, so they're configured per-repo:
+
+```toml
+[tool.bdt.worktree]
+db_sibling_suffixes = ["_onetrade"]     # "<main_db>_onetrade" also exists
+db_nested_projects = ["akeneo_editor"]  # a wholly separate per-branch DB
+```
+
+`--pg-port`/`--pg-user` (env vars `PGPORT`/`PGUSER`, falling back to `USER`
+then `LOGNAME`) point both commands at the right local Postgres cluster;
+neither defaults to a sandbox-specific port, so pass `--pg-port` explicitly
+if your test cluster isn't on Postgres' standard `5432`.
 
 ## `bdt commit`
 
