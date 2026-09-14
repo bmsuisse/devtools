@@ -7,7 +7,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from bmsdna.devtools.gitrepo import AdoRemote
-from bmsdna.devtools.pr_build import add_attachments, add_files, add_screenshots, comment_with_screenshots, update
+from bmsdna.devtools.pr_build import add_attachments, add_files, add_screenshots, comment_with_screenshots, ensure_session_note, update
 
 REMOTE = AdoRemote(org="myorg", project="MyProj", repo="myrepo")
 PR = {"pullRequestId": 42, "title": "feat: widgets", "description": "existing description"}
@@ -102,6 +102,37 @@ def test_add_attachments_patches_pr_description_once_for_both_kinds(tmp_path) ->
     assert "## Screenshots" in description
     assert "## Attachments" in description
     assert description.index("## Screenshots") < description.index("## Attachments")
+
+
+def test_add_attachments_returns_pr_with_updated_description(tmp_path) -> None:
+    session = make_session()
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"fake-png-bytes")
+
+    updated = add_attachments(session, REMOTE, PR, screenshot_paths=[str(shot)])
+
+    assert updated["pullRequestId"] == PR["pullRequestId"]
+    assert updated["description"] == session.patch.call_args.kwargs["json"]["description"]
+    assert "## Screenshots" in updated["description"]
+
+
+def test_ensure_session_note_appends_when_agent_detected(monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_BRIDGE_SESSION_ID", "session_abc123")
+    session = make_session()
+
+    ensure_session_note(session, REMOTE, PR)
+
+    description = session.patch.call_args.kwargs["json"]["description"]
+    assert description == "existing description\n\nClaude Session: https://claude.ai/code/session_abc123"
+
+
+def test_ensure_session_note_is_a_noop_without_agent() -> None:
+    session = make_session()
+
+    ensure_session_note(session, REMOTE, PR)
+
+    session.patch.assert_not_called()
 
 
 def test_add_screenshots_still_works_unaffected(tmp_path) -> None:

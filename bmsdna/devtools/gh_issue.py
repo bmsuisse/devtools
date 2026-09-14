@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 
 from .bdt_config import load_bdt_table
+from .cli_tools import ensure_agent_session_note
 from .gh_pr import push_assets
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
@@ -143,6 +144,7 @@ def create(
     to query the board's items).
     """
     file_paths = file_paths or []
+    body = ensure_agent_session_note(body, also_check=title)
     args = ["issue", "create", "--title", title, "--body", body or ""]
     for label in labels:
         args += ["--label", label]
@@ -252,7 +254,7 @@ def update(
     if title is not None:
         args += ["--title", title]
     if body is not None:
-        args += ["--body", body]
+        args += ["--body", ensure_agent_session_note(body, also_check=title) or ""]
     for label in add_labels or []:
         args += ["--add-label", label]
     for label in remove_labels or []:
@@ -286,7 +288,7 @@ def comment(
     file_paths = file_paths or []
     images = _screenshot_images(owner, repo, f"issue-{number}", screenshot_paths) if screenshot_paths else []
     files = _file_links(owner, repo, f"issue-{number}", file_paths) if file_paths else []
-    content = build_comment_content(message, images, files)
+    content = ensure_agent_session_note(build_comment_content(message, images, files)) or ""
     url = _run_gh(gh, ["issue", "comment", str(number), "--body", content])
     comment_id = parse_comment_id(url)
     suffix = f" (comment #{comment_id})" if comment_id else ""
