@@ -37,16 +37,5 @@ test = [
     "pytest>=9.1.0",
 ]
 
-# TEMPORARY: pgdevkit 0.7.1 (adding workspace_db_names()) isn't published to
-# PyPI yet -- it's an open, unmerged PR (bmsuisse/pgdevkit#testdb-cli-orphaned-
-# followups). Remove this override once that's merged and 0.7.1 is on PyPI;
-# the >=0.7.1 constraint above is the real, intended one. Pinned to a commit
-# SHA rather than the branch name itself: the branch can be force-pushed,
-# rebased, or deleted (e.g. once its PR merges and it's cleaned up), which
-# would otherwise make `uv sync`/CI installs here fail or silently resolve
-# different code with no way to reproduce what was actually reviewed/tested.
-[tool.uv.sources]
-pgdevkit = { git = "https://github.com/bmsuisse/pgdevkit", rev = "c98219d0cdb96e7f6307b89f249ea32d21c11a0a" }
-
 [tool.pytest.ini_options]
 pythonpath = ["."]

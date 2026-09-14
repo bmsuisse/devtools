@@ -42,7 +42,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "pgdevkit", extras = ["db"], git = "https://github.com/bmsuisse/pgdevkit?rev=c98219d0cdb96e7f6307b89f249ea32d21c11a0a" },
+    { name = "pgdevkit", extras = ["db"], specifier = ">=0.7.1" },
     { name = "requests", specifier = ">=2.32.0" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "typer", specifier = ">=0.26.7" },
@@ -173,11 +173,15 @@ wheels = [
 [[package]]
 name = "pgdevkit"
 version = "0.7.1"
-source = { git = "https://github.com/bmsuisse/pgdevkit?rev=c98219d0cdb96e7f6307b89f249ea32d21c11a0a#c98219d0cdb96e7f6307b89f249ea32d21c11a0a" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "docker" },
     { name = "psycopg", extra = ["binary"] },
     { name = "sqlglot" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6e/9a/df3f1db747280150496b42226b8b2a5312b091eb0bc2487a2f037611f042/pgdevkit-0.7.1.tar.gz", hash = "sha256:eebcffbd65e0747728ed5299af474f6e21551d1f4237e9f7743a894efe3edf64", size = 141700, upload-time = "2026-09-14T18:40:05.642Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2e/b5/4cf4576c1ee096222ba108de9ab5d5c18d4e3f55d69aa04b9dbbf97a6f25/pgdevkit-0.7.1-py3-none-any.whl", hash = "sha256:c1b6b049d7f0ed72c0e94193dc82a729db57ab6d0556353fbb946d88354a44c5", size = 97534, upload-time = "2026-09-14T18:40:04.256Z" },
 ]
 
 [package.optional-dependencies]
