@@ -382,6 +382,9 @@ def clean_orphaned_dbs(root: Path, *, remote: str, include_caution: bool, yes: b
     intentional baseline DBs rather than orphaned leftovers."""
     root = root.resolve()
     repos = find_repos(root)
+    if not repos:
+        print(f"No git repositories found under {root}.")
+        return
     by_repo = {repo: collect_worktrees(repo, remote) for repo in sorted(repos)}
 
     orphaned = find_orphaned_dbs(by_repo, pg_port=pg_port, pg_user=pg_user)

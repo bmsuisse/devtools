@@ -303,3 +303,14 @@ def test_clean_orphaned_dbs_reports_none_found(tmp_path, monkeypatch, capsys) ->
     clean_orphaned_dbs(tmp_path, remote="origin", include_caution=False, yes=True, pg_port=54322, pg_user="tester")
 
     assert "No orphaned pgdevkit test DBs found" in capsys.readouterr().out
+
+
+def test_clean_orphaned_dbs_reports_no_repos_found_distinctly_from_no_orphans(tmp_path, capsys) -> None:
+    """A typo'd/empty root (no repos at all) must be reported distinctly from
+    a scan that ran but found nothing -- otherwise a mistaken --root value
+    silently looks identical to a clean sweep."""
+    clean_orphaned_dbs(tmp_path, remote="origin", include_caution=False, yes=True, pg_port=54322, pg_user="tester")
+
+    out = capsys.readouterr().out
+    assert "No git repositories found" in out
+    assert "No orphaned pgdevkit test DBs found" not in out

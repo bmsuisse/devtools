@@ -1,6 +1,8 @@
 import hashlib
 from unittest.mock import MagicMock
 
+import pytest
+
 from bmsdna.devtools.testdb import (
     db_nested_projects,
     db_sibling_suffixes,
@@ -152,6 +154,16 @@ def test_list_databases_empty_on_psql_failure(monkeypatch) -> None:
         lambda cmd, **kwargs: MagicMock(returncode=1, stdout=""),
     )
     assert list_databases(pg_port=54322, pg_user="tester") == []
+
+
+def test_list_databases_exits_with_a_friendly_message_when_psql_is_missing(monkeypatch) -> None:
+    def fake_run(cmd, **kwargs):
+        raise FileNotFoundError("psql")
+
+    monkeypatch.setattr("bmsdna.devtools.testdb.subprocess.run", fake_run)
+
+    with pytest.raises(SystemExit, match="'psql' is required"):
+        list_databases(pg_port=54322, pg_user="tester")
 
 
 def test_drop_database_issues_drop_database_if_exists(monkeypatch) -> None:

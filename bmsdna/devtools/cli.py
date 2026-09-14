@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import getpass
 import json
 import subprocess
 import sys
@@ -589,7 +590,7 @@ def cleanup_worktrees(
     pg_user: str | None = _PG_USER_OPTION,
 ) -> None:
     """Find and remove git worktrees fully merged into main/test (and their pgdevkit test DB(s)), across every repo under root."""
-    worktree_mod.clean_worktrees(root, remote=remote, keep_dbs=keep_dbs, yes=yes, pg_port=pg_port, pg_user=pg_user or "postgres")
+    worktree_mod.clean_worktrees(root, remote=remote, keep_dbs=keep_dbs, yes=yes, pg_port=pg_port, pg_user=pg_user or getpass.getuser())
 
 
 @cleanup_app.command("orphaned-dbs")
@@ -604,7 +605,7 @@ def cleanup_orphaned_dbs(
     pg_user: str | None = _PG_USER_OPTION,
 ) -> None:
     """Find and drop pgdevkit test DBs whose worktree is already gone (e.g. removed by hand before this command existed)."""
-    worktree_mod.clean_orphaned_dbs(root, remote=remote, include_caution=include_caution, yes=yes, pg_port=pg_port, pg_user=pg_user or "postgres")
+    worktree_mod.clean_orphaned_dbs(root, remote=remote, include_caution=include_caution, yes=yes, pg_port=pg_port, pg_user=pg_user or getpass.getuser())
 
 
 @app.command()

@@ -26,10 +26,12 @@ from __future__ import annotations
 import hashlib
 import re
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
 from .bdt_config import load_bdt_table
+from .cli_tools import PSQL_INSTALL_HINT
 
 _INVALID_CHARS = re.compile(r"[^a-z0-9_]+")
 _MAX_SLUG_LEN = 30
@@ -124,12 +126,15 @@ def is_caution_db(db_name: str, project_name: str, sibling_suffixes: list[str]) 
 
 
 def _run_psql(args: list[str], pg_port: int, pg_user: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["psql", "-p", str(pg_port), "-U", pg_user, "-d", "postgres", *args],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        return subprocess.run(
+            ["psql", "-p", str(pg_port), "-U", pg_user, "-d", "postgres", *args],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        sys.exit(f"'psql' is required for this command but wasn't found on PATH.\n{PSQL_INSTALL_HINT}")
 
 
 def list_databases(pg_port: int, pg_user: str) -> list[str]:
