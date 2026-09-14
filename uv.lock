@@ -42,7 +42,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "pgdevkit", extras = ["db"], git = "https://github.com/bmsuisse/pgdevkit?branch=testdb-cli-orphaned-followups" },
+    { name = "pgdevkit", extras = ["db"], git = "https://github.com/bmsuisse/pgdevkit?rev=c98219d0cdb96e7f6307b89f249ea32d21c11a0a" },
     { name = "requests", specifier = ">=2.32.0" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "typer", specifier = ">=0.26.7" },
@@ -173,7 +173,7 @@ wheels = [
 [[package]]
 name = "pgdevkit"
 version = "0.7.1"
-source = { git = "https://github.com/bmsuisse/pgdevkit?branch=testdb-cli-orphaned-followups#c98219d0cdb96e7f6307b89f249ea32d21c11a0a" }
+source = { git = "https://github.com/bmsuisse/pgdevkit?rev=c98219d0cdb96e7f6307b89f249ea32d21c11a0a#c98219d0cdb96e7f6307b89f249ea32d21c11a0a" }
 dependencies = [
     { name = "docker" },
     { name = "psycopg", extra = ["binary"] },
