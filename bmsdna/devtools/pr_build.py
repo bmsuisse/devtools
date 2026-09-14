@@ -11,7 +11,7 @@ from urllib.parse import quote
 import requests
 
 from .ado_auth import auth_header
-from .cli_tools import is_claude_code
+from .cli_tools import detect_agent_session, ensure_agent_session_note, is_claude_code
 from .gitrepo import AdoRemote, current_branch
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
@@ -201,6 +201,30 @@ def add_attachments(
     print(f"Attached {len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s) to PR #{pr_id}")
 
 
+def ensure_session_note(session: requests.Session, remote: AdoRemote, pr: dict) -> None:
+    """Make sure the PR description records the running agent's session, if any (see
+    `ensure_agent_session_note`) -- e.g. right after `az repos pr create`, whose
+    description usually comes from the source commit rather than a value this module
+    builds itself, so there's nothing to pass the note through beforehand.
+
+    Best-effort: swallows failures (auth, permissions, a stale `pr`, ...) rather than
+    turning a successful PR creation into a failure over a step that's purely
+    nice-to-have. A no-op when no agent is detected, which is the common case
+    running outside one -- callers should still avoid fetching `pr` at all in that
+    case (see `detect_agent_session`) rather than relying on this to skip the patch.
+    """
+    if detect_agent_session() is None:
+        return
+    try:
+        pr_id = pr["pullRequestId"]
+        body = pr.get("description") or ""
+        noted = ensure_agent_session_note(body, also_check=pr.get("title"))
+        if noted != body:
+            _patch_pr(session, remote, pr_id, {"description": noted})
+    except (requests.RequestException, SystemExit, KeyError):
+        pass
+
+
 def add_screenshots(session: requests.Session, remote: AdoRemote, pr: dict, screenshot_paths: list[str]) -> None:
     """Upload each screenshot as a PR attachment and append them to the PR description."""
     add_attachments(session, remote, pr, screenshot_paths=screenshot_paths)
@@ -231,7 +255,7 @@ def update(
             new_description = build_screenshots_section(new_description, _upload_attachments(session, remote, pr_id, screenshot_paths))
         if file_paths:
             new_description = build_attachments_section(new_description, _upload_attachments(session, remote, pr_id, file_paths))
-        fields["description"] = new_description
+        fields["description"] = ensure_agent_session_note(new_description, also_check=title or pr.get("title"))
     if not fields:
         return
     _patch_pr(session, remote, pr_id, fields)
@@ -268,7 +292,7 @@ def comment_with_screenshots(
     file_paths = file_paths or []
     images = _upload_attachments(session, remote, pr_id, screenshot_paths) if screenshot_paths else []
     files = _upload_attachments(session, remote, pr_id, file_paths) if file_paths else []
-    content = build_comment_content(message, images, files)
+    content = ensure_agent_session_note(build_comment_content(message, images, files)) or ""
     add_comment(session, remote, pr_id, content)
     print(f"Added comment ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) to PR #{pr_id}")
 

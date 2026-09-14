@@ -17,7 +17,7 @@ from . import gh_issue, gh_pr
 from . import logs as logs_mod
 from . import pr_build, pr_labels, worktree as worktree_mod
 from .ado_auth import auth_header
-from .cli_tools import require_az, require_gh
+from .cli_tools import detect_agent_session, require_az, require_gh
 from .gitrepo import AdoRemote, GitHubRemote, current_branch, current_remote
 
 # Non-ASCII output (checkmarks, en-dashes in ADO project names, etc.) needs a
@@ -74,8 +74,9 @@ def _resolve_ado_pr(pat: str | None, remote: AdoRemote, source_branch: str, targ
     return session, pr
 
 
-def _attach_assets(attach: Callable[[], None]) -> None:
-    """Run an attach-screenshots/files step without letting its failure mask an already-successful `pr create`.
+def _after_create(step: Callable[[], None], label: str) -> None:
+    """Run a follow-up step (attaching screenshots/files, noting the agent session, ...)
+    without letting its failure mask an already-successful `pr create`.
 
     The PR itself is already live by the time this runs; a transient failure
     here (a rejected push, an attachment upload error, a stale --target not
@@ -83,9 +84,9 @@ def _attach_assets(attach: Callable[[], None]) -> None:
     flip the whole command's exit code or hide the fact that the PR exists.
     """
     try:
-        attach()
+        step()
     except (Exception, SystemExit) as e:
-        print(f"Warning: PR created, but attaching screenshots/files failed: {e}")
+        print(f"Warning: PR created, but {label} failed: {e}")
 
 
 @pr_app.command("create")
@@ -138,7 +139,7 @@ def pr_create(
         returncode, pr_url = gh_pr.create(gh, target, args or [], draft=draft, labels=label)
         build_policy = gh_pr.has_build_policy(gh, target)
         if returncode == 0 and (screenshot or file):
-            _attach_assets(lambda: gh_pr.add_attachments(gh, remote.owner, remote.repo, source_branch, screenshot, file))
+            _after_create(lambda: gh_pr.add_attachments(gh, remote.owner, remote.repo, source_branch, screenshot, file), "attaching screenshots/files")
     else:
         az = require_az()
         cmd = [
@@ -179,12 +180,17 @@ def pr_create(
         session = requests.Session()
         session.headers.update(auth_header(pat))
         build_policy = pr_build.has_build_policy(session, remote, target)
+        if returncode == 0 and detect_agent_session() is not None:
+            _after_create(
+                lambda: pr_build.ensure_session_note(session, remote, pr_build.get_pr(session, remote, source_branch, target)),
+                "noting the agent session",
+            )
         if returncode == 0 and (screenshot or file):
             def _add() -> None:
                 pr = pr_build.get_pr(session, remote, source_branch, target)
                 pr_build.add_attachments(session, remote, pr, screenshot, file)
 
-            _attach_assets(_add)
+            _after_create(_add, "attaching screenshots/files")
 
     if returncode == 0 and pr_url:
         print(f"\n{pr_url}")

@@ -17,7 +17,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from .cli_tools import is_claude_code
+from .cli_tools import detect_agent_session, ensure_agent_session_note, is_claude_code
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 PR_VIEW_FIELDS = "number,title,baseRefName,mergeable,statusCheckRollup,isDraft"
@@ -187,7 +187,32 @@ def create(gh: str, target: str, extra_args: list[str], draft: bool = False, lab
         print(r.stderr.strip(), file=sys.stderr)
     if r.returncode != 0:
         return r.returncode, None
+    ensure_session_note(gh)
     return r.returncode, r.stdout.strip() or None
+
+
+def ensure_session_note(gh: str) -> None:
+    """Make sure the current branch's PR body records the running agent's session, if any
+    (see `ensure_agent_session_note`) -- e.g. right after `create()`, whose body/title
+    come from `--fill`/`extra_args` rather than a value this module builds itself, so
+    there's nothing to pass the note through beforehand.
+
+    Best-effort: swallows failures (a stale view, a rejected edit, ...) rather than
+    turning a successful `pr create`/whatever else called this into a failure over a
+    step that's purely nice-to-have. A no-op (no extra `gh` calls at all) when no
+    agent is detected, which is the common case running outside one.
+    """
+    if detect_agent_session() is None:
+        return
+    try:
+        pr = _run_gh_json(gh, ["pr", "view", "--json", "number,title,body"])
+        body = pr.get("body") or ""
+        noted = ensure_agent_session_note(body, also_check=pr.get("title"))
+        if noted != body:
+            r = subprocess.run([gh, "pr", "edit", str(pr["number"]), "--body", noted or ""], capture_output=True, encoding="utf-8")
+            r.check_returncode()
+    except (subprocess.SubprocessError, SystemExit, json.JSONDecodeError, OSError):
+        pass
 
 
 def publish(gh: str) -> None:
@@ -324,6 +349,7 @@ def update(
             new_body = build_screenshots_section(new_body, _screenshot_images(owner, repo, branch, screenshot_paths))
         if file_paths:
             new_body = build_attachments_section(new_body, _file_links(owner, repo, branch, file_paths))
+        new_body = ensure_agent_session_note(new_body, also_check=title or pr.get("title")) or ""
         args += ["--body", new_body]
     if len(args) == 3:
         return
@@ -346,7 +372,7 @@ def comment_with_screenshots(
     file_paths = file_paths or []
     images = _screenshot_images(owner, repo, branch, screenshot_paths) if screenshot_paths else []
     files = _file_links(owner, repo, branch, file_paths) if file_paths else []
-    content = build_comment_content(message, images, files)
+    content = ensure_agent_session_note(build_comment_content(message, images, files)) or ""
     r = subprocess.run([gh, "pr", "comment", "--body", content], capture_output=True, encoding="utf-8")
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or "`gh pr comment` failed")

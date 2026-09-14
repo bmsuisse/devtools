@@ -309,3 +309,51 @@ def test_comment_with_screenshots_and_files_builds_both_sections(monkeypatch) ->
     assert "Fixed" in body
     assert "## Screenshots" in body
     assert "## Attachments" in body
+
+
+def test_create_appends_agent_session_note_when_detected(monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_BRIDGE_SESSION_ID", "session_abc123")
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/issues/42\n", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
+
+    create("gh", "owner", "repo", "Bug title", "body text", [], [], [])
+
+    body = captured_cmd[captured_cmd.index("--body") + 1]
+    assert body == "body text\n\nClaude Session: https://claude.ai/code/session_abc123"
+
+
+def test_create_without_agent_leaves_body_untouched(monkeypatch) -> None:
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/issues/42\n", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
+
+    create("gh", "owner", "repo", "Bug title", "body text", [], [], [])
+
+    assert captured_cmd[captured_cmd.index("--body") + 1] == "body text"
+
+
+def test_comment_appends_agent_session_note_when_detected(monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_BRIDGE_SESSION_ID", "session_abc123")
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/issues/42#issuecomment-1\n", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
+
+    comment("gh", "owner", "repo", 42, "Fixed", [], [])
+
+    body = captured_cmd[captured_cmd.index("--body") + 1]
+    assert body == "Fixed\n\nClaude Session: https://claude.ai/code/session_abc123"

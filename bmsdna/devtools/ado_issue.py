@@ -47,6 +47,7 @@ from urllib.parse import quote
 import requests
 
 from .bdt_config import load_bdt_table
+from .cli_tools import ensure_agent_session_note
 from .gitrepo import AdoRemote
 from .pr_markdown import build_comment_content_html
 
@@ -315,7 +316,7 @@ def add_attachments(
     files = _upload_attachments(session, remote, file_paths) if file_paths else []
     if images or files:
         link_attachments(session, remote, work_item_id, images + files)
-    content = build_comment_content_html(None, images, files)
+    content = ensure_agent_session_note(build_comment_content_html(None, images, files)) or ""
     comment = add_comment(session, remote, work_item_id, content)
     print(
         f"Attached {len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s) to work item "
@@ -347,7 +348,7 @@ def comment_with_screenshots(
     files = _upload_attachments(session, remote, file_paths) if file_paths else []
     if images or files:
         link_attachments(session, remote, work_item_id, images + files)
-    content = build_comment_content_html(message, images, files)
+    content = ensure_agent_session_note(build_comment_content_html(message, images, files)) or ""
     comment = add_comment(session, remote, work_item_id, content)
     print(
         f"Added comment #{comment['id']} ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) "
@@ -476,6 +477,7 @@ def create(
     file_paths: list[str] | None = None,
 ) -> dict:
     area_path = get_team_area_path(session, remote, board) if board else None
+    description = ensure_agent_session_note(description, also_check=title)
     work_item = create_work_item(session, remote, work_item_type, title, description, area_path, tags)
     work_item_id = work_item["id"]
 
@@ -536,6 +538,9 @@ def update(
             print(f"Work item #{work_item_id}: '{state}' isn't a valid state here — noted in a comment.")
             return None
         sys.exit("Nothing to update — provide at least one of --title, --description, --board, --tag, --state.")
+
+    if description is not None:
+        description = ensure_agent_session_note(description, also_check=title)
 
     work_item = update_work_item(session, remote, work_item_id, title, description, area_path, tags, applied_state)
     print(f"Updated work item #{work_item_id}")

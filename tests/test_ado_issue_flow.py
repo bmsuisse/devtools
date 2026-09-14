@@ -187,6 +187,30 @@ def test_comment_with_screenshots_message_only() -> None:
     session.patch.assert_not_called()
 
 
+def test_comment_with_screenshots_appends_agent_session_note_when_detected(monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_BRIDGE_SESSION_ID", "session_abc123")
+    session = make_session()
+
+    comment_with_screenshots(session, REMOTE, 42, "Looks good", [])
+
+    text = session.post.call_args.kwargs["json"]["text"]
+    assert text == "Looks good\n\nClaude Session: https://claude.ai/code/session_abc123"
+
+
+def test_create_appends_agent_session_note_to_description_when_detected(monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_BRIDGE_SESSION_ID", "session_abc123")
+    session = make_session()
+
+    create(session, REMOTE, "Bug", "Title", "Widget is broken", None, [], [])
+
+    create_kwargs = session.post.call_args_list[0].kwargs
+    ops = create_kwargs["json"]
+    description_op = next(op for op in ops if op["path"] == "/fields/System.Description")
+    assert description_op["value"] == "Widget is broken\n\nClaude Session: https://claude.ai/code/session_abc123"
+
+
 def test_comment_with_screenshots_links_attachments_before_commenting(tmp_path) -> None:
     session = make_session()
     shot = tmp_path / "after.png"

@@ -141,6 +141,40 @@ def test_create_returns_none_url_on_failure(monkeypatch, capsys) -> None:
     assert "not found" in capsys.readouterr().err
 
 
+def test_create_without_agent_makes_no_follow_up_calls(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/pull/7\n", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    create("gh", "main", [])
+
+    assert len(calls) == 1
+
+
+def test_create_appends_agent_session_note_when_detected(monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_BRIDGE_SESSION_ID", "session_abc123")
+    edited_body: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        if "view" in cmd:
+            return MagicMock(returncode=0, stdout='{"number": 7, "title": "Fix bug", "body": "PR body"}', stderr="")
+        if "edit" in cmd:
+            edited_body.append(cmd[cmd.index("--body") + 1])
+            return MagicMock(returncode=0, stdout="", stderr="")
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/pull/7\n", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    create("gh", "main", [])
+
+    assert edited_body == ["PR body\n\nClaude Session: https://claude.ai/code/session_abc123"]
+
+
 def _fake_push_assets(monkeypatch) -> None:
     monkeypatch.setattr(
         "bmsdna.devtools.gh_pr.push_assets",
@@ -229,3 +263,20 @@ def test_comment_with_screenshots_and_files_builds_both_sections(monkeypatch) ->
     assert "Fixed" in body
     assert "## Screenshots" in body
     assert "## Attachments" in body
+
+
+def test_comment_with_screenshots_appends_agent_session_note_when_detected(monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_BRIDGE_SESSION_ID", "session_abc123")
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    comment_with_screenshots("gh", "owner", "repo", "feature-x", "Fixed", [], [])
+
+    body = captured_cmd[captured_cmd.index("--body") + 1]
+    assert body == "Fixed\n\nClaude Session: https://claude.ai/code/session_abc123"
