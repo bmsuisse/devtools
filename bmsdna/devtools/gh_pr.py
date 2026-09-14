@@ -339,7 +339,7 @@ def update(
     file_paths: list[str] | None = None,
 ) -> None:
     """Update a PR's title and/or body, optionally appending screenshots/files to the body."""
-    pr = _run_gh_json(gh, ["pr", "view", "--json", "number,body"])
+    pr = _run_gh_json(gh, ["pr", "view", "--json", "number,title,body"])
     args = [gh, "pr", "edit", str(pr["number"])]
     if title:
         args += ["--title", title]

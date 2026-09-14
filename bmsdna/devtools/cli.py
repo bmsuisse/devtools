@@ -180,17 +180,14 @@ def pr_create(
         session = requests.Session()
         session.headers.update(auth_header(pat))
         build_policy = pr_build.has_build_policy(session, remote, target)
-        if returncode == 0 and detect_agent_session() is not None:
-            _after_create(
-                lambda: pr_build.ensure_session_note(session, remote, pr_build.get_pr(session, remote, source_branch, target)),
-                "noting the agent session",
-            )
-        if returncode == 0 and (screenshot or file):
-            def _add() -> None:
+        if returncode == 0 and (detect_agent_session() is not None or screenshot or file):
+            def _finish() -> None:
                 pr = pr_build.get_pr(session, remote, source_branch, target)
-                pr_build.add_attachments(session, remote, pr, screenshot, file)
+                if screenshot or file:
+                    pr = pr_build.add_attachments(session, remote, pr, screenshot, file)
+                pr_build.ensure_session_note(session, remote, pr)
 
-            _after_create(_add, "attaching screenshots/files")
+            _after_create(_finish, "attaching screenshots/files and/or noting the agent session")
 
     if returncode == 0 and pr_url:
         print(f"\n{pr_url}")

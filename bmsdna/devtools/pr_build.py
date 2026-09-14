@@ -185,9 +185,11 @@ def add_attachments(
     pr: dict,
     screenshot_paths: list[str] | None = None,
     file_paths: list[str] | None = None,
-) -> None:
+) -> dict:
     """Upload screenshots/files as PR attachments and append them to the PR description in a single
-    patch -- whether one or both kinds are given.
+    patch -- whether one or both kinds are given. Returns `pr` with its description updated to match,
+    so a caller chaining another description-touching step (e.g. `ensure_session_note`) right after
+    doesn't need to re-fetch the PR just to see this change.
     """
     screenshot_paths = screenshot_paths or []
     file_paths = file_paths or []
@@ -199,6 +201,7 @@ def add_attachments(
         new_description = build_attachments_section(new_description, _upload_attachments(session, remote, pr_id, file_paths))
     _patch_pr(session, remote, pr_id, {"description": new_description})
     print(f"Attached {len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s) to PR #{pr_id}")
+    return {**pr, "description": new_description}
 
 
 def ensure_session_note(session: requests.Session, remote: AdoRemote, pr: dict) -> None:
