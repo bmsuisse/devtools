@@ -102,6 +102,62 @@ def draft_notice(pr: dict) -> str | None:
     return f"{pr_ref} To publish, use command: `bdt pr publish` (but do an automatic code review first)"
 
 
+def get_workflow_runs_for_branch(gh: str, branch: str, limit: int = 5) -> list[dict]:
+    """Workflow runs triggered directly by a push to `branch` -- e.g. a post-merge/deployment
+    workflow that only runs on the target branch once a PR merges into it -- as opposed to a
+    run some open PR's `pull_request` trigger produced. `event=push` is what distinguishes the
+    two on the same branch name.
+    """
+    r = subprocess.run(
+        [
+            gh, "run", "list",
+            "--branch", branch,
+            "--event", "push",
+            "--limit", str(limit),
+            "--json", "databaseId,name,workflowName,status,conclusion,url,headBranch",
+        ],
+        capture_output=True,
+        encoding="utf-8",
+    )
+    if r.returncode != 0:
+        sys.exit((r.stderr or r.stdout).strip() or "`gh run list` failed")
+    return json.loads(r.stdout)
+
+
+def latest_per_workflow(runs: list[dict]) -> list[dict]:
+    """Reduce a workflow run list to the single latest run per workflow."""
+    latest: dict = {}
+    for r in runs:
+        name = r.get("workflowName") or r.get("name")
+        if name not in latest or r["databaseId"] > latest[name]["databaseId"]:
+            latest[name] = r
+    return sorted(latest.values(), key=lambda r: r["databaseId"], reverse=True)
+
+
+def deploy_run_hint(gh: str, target_branch: str) -> str | None:
+    """Best-effort: None unless a workflow run has already been triggered directly by a push to
+    `target_branch` (as opposed to this PR's own checks) -- e.g. a post-merge deployment
+    workflow. When one exists, a hint suggesting `bdt pr watch-deploy` to watch it.
+
+    Only used to decide whether to print this hint after `bdt pr status` reports success --
+    failures here (auth, permissions, an old `gh` without `run list --json`, malformed output,
+    ...) fail open (return None) rather than blocking or crashing `pr status`, same as
+    `has_build_policy`.
+    """
+    try:
+        runs = get_workflow_runs_for_branch(gh, target_branch, limit=1)
+    except (SystemExit, json.JSONDecodeError):
+        return None
+    if not runs:
+        return None
+    run = runs[0]
+    name = run.get("workflowName") or run.get("name") or "?"
+    return (
+        f"\nA workflow run has already been triggered on '{target_branch}' ({name} #{run.get('databaseId')}) -- "
+        f"probably a post-merge deployment. Run `bdt pr watch-deploy --target-branch {target_branch}` to watch it."
+    )
+
+
 def print_check(check: dict) -> None:
     bucket = check_bucket(check)
     icon = {"pass": "✓", "fail": "✗", "cancel": "⊘"}.get(bucket, "…")
@@ -140,6 +196,12 @@ def run(gh: str, wait: bool) -> None:
         checks = pr.get("statusCheckRollup") or []
         if not checks:
             print(msg + " | no checks found.")
+            # No PR-triggered checks at all is itself a settled state (e.g. this repo's
+            # only workflow triggers on a push to the target branch, not on `pull_request`)
+            # -- exactly when a deploy-build hint is most useful, so still check for one.
+            hint = deploy_run_hint(gh, base)
+            if hint:
+                print(hint)
             return
 
         buckets = [check_bucket(c) for c in checks]
@@ -159,7 +221,84 @@ def run(gh: str, wait: bool) -> None:
 
         if "fail" in buckets:
             sys.exit(1)
+        # Only worth suggesting `pr watch-deploy` once this PR's own checks are actually
+        # settled (not still pending because the caller ran without --wait) -- otherwise
+        # it'd claim a merge/deploy is underway before the PR has even finished its own CI.
+        if "pending" not in buckets:
+            hint = deploy_run_hint(gh, base)
+            if hint:
+                print(hint)
         return
+
+
+def print_failed_step_logs(gh: str, run_id: int) -> None:
+    r = subprocess.run([gh, "run", "view", str(run_id), "--log-failed"], capture_output=True, encoding="utf-8")
+    output = (r.stdout or "").strip()
+    if r.returncode != 0 or not output:
+        print("  (no failed steps with logs)")
+        return
+    print(f"\n--- Failed steps (run {run_id}) ---")
+    print(output)
+
+
+def print_run(gh: str, run: dict) -> None:
+    run_id: int = run["databaseId"]
+    status = run.get("status", "unknown")
+    conclusion = run.get("conclusion") or "—"
+    name = run.get("workflowName") or run.get("name", "?")
+    url = run.get("url", "?")
+
+    icon = {"success": "✓", "failure": "✗", "cancelled": "⊘"}.get(conclusion, "…")
+
+    print(f"\n{'-' * 60}")
+    print(f"Run #{run_id}  [{icon} {conclusion.upper()}]")
+    print(f"  Workflow : {name}")
+    print(f"  Status   : {status}")
+    print(f"  URL      : {url}")
+
+    if status == "completed" and conclusion == "failure":
+        print_failed_step_logs(gh, run_id)
+
+
+def run_watch_deploy(gh: str, target_branch: str, wait: bool) -> None:
+    """Watch the most recent workflow run(s) triggered directly by a push to `target_branch`
+    -- e.g. a post-merge workflow that only runs on the target branch once a PR merges into
+    it, and usually does the actual deployment -- until they complete.
+
+    Mirrors `run()`'s polling/reporting shape, but looks at runs tied to the branch's push
+    event via `get_workflow_runs_for_branch` rather than a PR's `statusCheckRollup`.
+    """
+    last_line = ""
+    while True:
+        runs = get_workflow_runs_for_branch(gh, target_branch)
+        if not runs:
+            print(f"No workflow runs found on '{target_branch}' triggered by a push.")
+            return
+
+        latest_runs = latest_per_workflow(runs)
+        msg = f"\rBranch '{target_branch}' | " + ", ".join(
+            f"{(r.get('workflowName') or r.get('name'))} #{r['databaseId']} {r.get('status')} ({r.get('conclusion') or '—'})"
+            for r in latest_runs
+        )
+
+        all_done = all(r.get("status") == "completed" for r in latest_runs)
+        if all_done or not wait:
+            print(msg)
+            print("\nDetails:")
+            for r in latest_runs:
+                print_run(gh, r)
+
+            if not all_done and not wait:
+                print("\nTip: Use --wait to poll until all workflows are completed.")
+
+            if any(r.get("conclusion") == "failure" for r in latest_runs):
+                sys.exit(1)
+            return
+
+        if msg != last_line:
+            print(msg, end="", flush=True)
+            last_line = msg
+        time.sleep(30)
 
 
 def create(gh: str, target: str, extra_args: list[str], draft: bool = False, labels: list[str] | None = None) -> tuple[int, str | None]:
