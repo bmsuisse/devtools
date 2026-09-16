@@ -455,6 +455,36 @@ def test_run_prints_deploy_hint_after_checks_pass(monkeypatch, capsys) -> None:
     assert "main" in out
 
 
+def test_run_prints_deploy_hint_when_pr_has_no_checks_at_all(monkeypatch, capsys) -> None:
+    """Regression: a PR with no `statusCheckRollup` entries at all (e.g. this repo's only
+    workflow triggers on a push to the target branch, not on `pull_request`) is itself a
+    settled state -- exactly when the hint is most useful -- so it must still be checked,
+    not skipped just because there were no PR-triggered checks to report."""
+    pr_view = {
+        "number": 7,
+        "title": "feat: x",
+        "baseRefName": "main",
+        "mergeable": "MERGEABLE",
+        "statusCheckRollup": [],
+        "isDraft": False,
+    }
+
+    def fake_run(cmd, **kwargs):
+        if "pr" in cmd and "view" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps(pr_view), stderr="")
+        if "run" in cmd and "list" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps([DEPLOY_RUN]), stderr="")
+        raise AssertionError(f"unexpected command {cmd}")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    run("gh", wait=False)
+
+    out = capsys.readouterr().out
+    assert "no checks found" in out
+    assert "bdt pr watch-deploy" in out
+
+
 def test_run_skips_deploy_hint_when_checks_still_pending_without_wait(monkeypatch, capsys) -> None:
     """Regression: without --wait, a still-pending check must not be mistaken for
     'checks succeeded' -- the hint should only ever follow a genuinely settled result."""

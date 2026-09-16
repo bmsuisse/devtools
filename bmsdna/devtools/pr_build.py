@@ -482,6 +482,13 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
             msg += " | No builds found."
             if not wait:
                 print(msg)
+                # No PR-triggered builds at all is itself a settled state (e.g. this
+                # project's only pipeline triggers on a push to the target branch, not
+                # on the PR's own merge/source refs) -- exactly when a deploy-build hint
+                # is most useful, so still check for one.
+                hint = deploy_build_hint(session, remote, target_branch)
+                if hint:
+                    print(hint)
                 return
 
         if msg != last_line:

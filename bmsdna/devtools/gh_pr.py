@@ -196,6 +196,12 @@ def run(gh: str, wait: bool) -> None:
         checks = pr.get("statusCheckRollup") or []
         if not checks:
             print(msg + " | no checks found.")
+            # No PR-triggered checks at all is itself a settled state (e.g. this repo's
+            # only workflow triggers on a push to the target branch, not on `pull_request`)
+            # -- exactly when a deploy-build hint is most useful, so still check for one.
+            hint = deploy_run_hint(gh, base)
+            if hint:
+                print(hint)
             return
 
         buckets = [check_bucket(c) for c in checks]

@@ -266,6 +266,25 @@ def test_run_prints_deploy_hint_after_reporting_pr_success(monkeypatch, capsys) 
     assert "HINT: run `bdt pr watch-deploy`" in capsys.readouterr().out
 
 
+def test_run_prints_deploy_hint_when_pr_has_no_builds_at_all(monkeypatch, capsys) -> None:
+    """Regression: a PR with no builds tied to it at all (e.g. the only pipeline triggers on
+    a push to the target branch, not the PR's own merge/source refs) is itself a settled
+    state -- exactly when the hint is most useful -- so it must still be checked, not skipped
+    just because `get_builds_for_pr` came back empty."""
+    pr = {"pullRequestId": 1, "title": "feat: x", "status": "active", "isDraft": False}
+
+    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock())
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda session, remote, source, target: pr)
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_builds_for_pr", lambda session, remote, source, pr_id: [])
+    monkeypatch.setattr("bmsdna.devtools.pr_build.deploy_build_hint", lambda session, remote, target: "HINT: run `bdt pr watch-deploy`")
+
+    run(REMOTE, "fake-pat", "main", wait=False, source_branch="feature-x")
+
+    out = capsys.readouterr().out
+    assert "No builds found" in out
+    assert "HINT: run `bdt pr watch-deploy`" in out
+
+
 def test_run_skips_deploy_hint_when_pr_build_still_in_progress_without_wait(monkeypatch, capsys) -> None:
     """Regression: without --wait, a still-running pipeline must not be mistaken for
     'the build succeeded' -- the hint should only ever follow a genuinely completed build."""
