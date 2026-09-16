@@ -12,10 +12,13 @@ from bmsdna.devtools.gh_pr import (
     create,
     deploy_run_hint,
     draft_notice,
+    failed_run_ids,
     get_workflow_runs_for_branch,
     latest_per_workflow,
     merge_conflict_message,
     protection_requires_status_checks,
+    retry,
+    retry_hint,
     run,
     run_watch_deploy,
     update,
@@ -36,6 +39,23 @@ COMPLETED_SKIPPED_CHECK_RUN = {
     "conclusion": "SKIPPED",
     "workflowName": "PR Triaging",
 }
+FAILED_CHECK_RUN = {
+    "__typename": "CheckRun",
+    "name": "build (ubuntu-latest)",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE",
+    "workflowName": "Python Test",
+    "detailsUrl": "https://github.com/owner/repo/actions/runs/34882319228/job/104104355022",
+}
+FAILED_CHECK_RUN_SAME_RUN = {
+    "__typename": "CheckRun",
+    "name": "build (windows-latest)",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE",
+    "workflowName": "Python Test",
+    "detailsUrl": "https://github.com/owner/repo/actions/runs/34882319228/job/104104399999",
+}
+FAILED_STATUS_CONTEXT = {"__typename": "StatusContext", "state": "FAILURE", "context": "external-ci"}
 
 
 @pytest.mark.parametrize(
@@ -294,6 +314,101 @@ def test_comment_with_screenshots_and_files_builds_both_sections(monkeypatch) ->
     assert "Fixed" in body
     assert "## Screenshots" in body
     assert "## Attachments" in body
+
+
+def test_failed_run_ids_dedupes_and_ignores_non_failing_checks() -> None:
+    checks = [COMPLETED_SUCCESS_CHECK_RUN, FAILED_CHECK_RUN, FAILED_CHECK_RUN_SAME_RUN]
+    assert failed_run_ids(checks) == [34882319228]
+
+
+def test_failed_run_ids_skips_status_context_with_no_details_url() -> None:
+    assert failed_run_ids([FAILED_STATUS_CONTEXT]) == []
+
+
+def test_failed_run_ids_empty_when_nothing_failed() -> None:
+    assert failed_run_ids([COMPLETED_SUCCESS_CHECK_RUN, COMPLETED_SKIPPED_CHECK_RUN]) == []
+
+
+def test_retry_hint_names_the_command(monkeypatch) -> None:
+    monkeypatch.delenv("CLAUDECODE", raising=False)
+    assert "bdt pr retry" in retry_hint()
+
+
+def test_retry_hint_tells_claude_code_to_run_it(monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDECODE", "1")
+    assert "bdt pr retry" in retry_hint()
+
+
+def test_retry_reruns_each_distinct_failed_run(monkeypatch) -> None:
+    captured_cmds: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmds.append(cmd)
+        if "view" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps({"statusCheckRollup": [FAILED_CHECK_RUN, FAILED_CHECK_RUN_SAME_RUN]}), stderr="")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    retry("gh")
+
+    rerun_cmds = [cmd for cmd in captured_cmds if "rerun" in cmd]
+    assert len(rerun_cmds) == 1
+    assert rerun_cmds[0] == ["gh", "run", "rerun", "34882319228", "--failed"]
+
+
+def test_retry_exits_when_no_failed_run_found(monkeypatch) -> None:
+    def fake_run(cmd, **kwargs):
+        return MagicMock(returncode=0, stdout=json.dumps({"statusCheckRollup": [COMPLETED_SUCCESS_CHECK_RUN]}), stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    with pytest.raises(SystemExit):
+        retry("gh")
+
+
+def test_retry_exits_on_rerun_failure(monkeypatch) -> None:
+    def fake_run(cmd, **kwargs):
+        if "view" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps({"statusCheckRollup": [FAILED_CHECK_RUN]}), stderr="")
+        return MagicMock(returncode=1, stdout="", stderr="run is already in progress")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    with pytest.raises(SystemExit):
+        retry("gh")
+
+
+def test_retry_still_attempts_remaining_runs_after_one_fails(monkeypatch, capsys) -> None:
+    """A failure reranning one run shouldn't stop bdt from attempting the others."""
+    rerun_ids: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        if "view" in cmd:
+            return MagicMock(
+                returncode=0,
+                stdout=json.dumps({"statusCheckRollup": [FAILED_CHECK_RUN, FAILED_CHECK_RUN_SAME_RUN]}),
+                stderr="",
+            )
+        rerun_ids.append(cmd[3])
+        if cmd[3] == "34882319228":
+            return MagicMock(returncode=1, stdout="", stderr="run is already in progress")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    # Make the two failed checks belong to *different* runs so both get a rerun attempt.
+    other_run_check = {**FAILED_CHECK_RUN_SAME_RUN, "detailsUrl": "https://github.com/owner/repo/actions/runs/999/job/1"}
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.get_pr",
+        lambda gh: {"statusCheckRollup": [FAILED_CHECK_RUN, other_run_check]},
+    )
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    with pytest.raises(SystemExit) as exc_info:
+        retry("gh")
+
+    assert rerun_ids == ["34882319228", "999"]
+    assert "999" in capsys.readouterr().out
+    assert "34882319228" in str(exc_info.value)
 
 
 def test_comment_with_screenshots_appends_agent_session_note_when_detected(monkeypatch) -> None:

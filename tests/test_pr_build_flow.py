@@ -18,6 +18,8 @@ from bmsdna.devtools.pr_build import (
     deploy_build_hint,
     ensure_session_note,
     get_builds_for_branch,
+    retry,
+    retry_failed_build,
     run,
     run_watch_deploy,
     update,
@@ -159,6 +161,91 @@ def test_add_screenshots_still_works_unaffected(tmp_path) -> None:
     description = session.patch.call_args.kwargs["json"]["description"]
     assert "## Screenshots" in description
     assert "![shot.png]" in description
+
+
+def test_retry_failed_build_patches_with_retry_true_query_param() -> None:
+    session = make_session()
+
+    retry_failed_build(session, REMOTE, 100)
+
+    session.patch.assert_called_once()
+    call = session.patch.call_args
+    assert call.args[0] == "https://dev.azure.com/myorg/MyProj/_apis/build/builds/100"
+    assert call.kwargs["params"] == {"retry": "true", "api-version": "7.1"}
+
+
+FAILED_BUILD = {"id": 100, "status": "completed", "result": "failed", "definition": {"id": 1, "name": "CI"}}
+SUCCEEDED_BUILD = {"id": 101, "status": "completed", "result": "succeeded", "definition": {"id": 2, "name": "Lint"}}
+IN_PROGRESS_BUILD = {"id": 102, "status": "inProgress", "result": None, "definition": {"id": 3, "name": "Deploy"}}
+
+
+def _patch_retry_plumbing(monkeypatch, builds: list[dict], retried: list[int]) -> None:
+    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock())
+    monkeypatch.setattr("bmsdna.devtools.pr_build.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda session, remote, source, target: PR)
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_builds_for_pr", lambda session, remote, source, pr_id: builds)
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.retry_failed_build", lambda session, remote, build_id: retried.append(build_id)
+    )
+
+
+def test_retry_only_retries_failed_pipelines(monkeypatch, capsys) -> None:
+    retried: list[int] = []
+    _patch_retry_plumbing(monkeypatch, [FAILED_BUILD, SUCCEEDED_BUILD, IN_PROGRESS_BUILD], retried)
+
+    retry(REMOTE, pat="fake-pat", target_branch="main", source_branch="feature-x")
+
+    assert retried == [100]
+    assert "build #100" in capsys.readouterr().out
+
+
+def test_retry_exits_when_no_failed_builds(monkeypatch) -> None:
+    retried: list[int] = []
+    _patch_retry_plumbing(monkeypatch, [SUCCEEDED_BUILD], retried)
+
+    with pytest.raises(SystemExit):
+        retry(REMOTE, pat="fake-pat", target_branch="main", source_branch="feature-x")
+
+    assert retried == []
+
+
+def test_retry_exits_when_no_builds_found(monkeypatch) -> None:
+    retried: list[int] = []
+    _patch_retry_plumbing(monkeypatch, [], retried)
+
+    with pytest.raises(SystemExit):
+        retry(REMOTE, pat="fake-pat", target_branch="main", source_branch="feature-x")
+
+    assert retried == []
+
+
+FAILED_BUILD_2 = {"id": 200, "status": "completed", "result": "failed", "definition": {"id": 4, "name": "E2E"}}
+
+
+def test_retry_still_attempts_remaining_builds_after_one_fails(monkeypatch, capsys) -> None:
+    """A retry failure on one pipeline's build shouldn't stop bdt from attempting the others."""
+    attempted: list[int] = []
+
+    def fake_retry_failed_build(session, remote, build_id):
+        attempted.append(build_id)
+        if build_id == 100:
+            raise requests.HTTPError("HTTP 409")
+
+    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock())
+    monkeypatch.setattr("bmsdna.devtools.pr_build.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda session, remote, source, target: PR)
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_builds_for_pr",
+        lambda session, remote, source, pr_id: [FAILED_BUILD, FAILED_BUILD_2],
+    )
+    monkeypatch.setattr("bmsdna.devtools.pr_build.retry_failed_build", fake_retry_failed_build)
+
+    with pytest.raises(SystemExit) as exc_info:
+        retry(REMOTE, pat="fake-pat", target_branch="main", source_branch="feature-x")
+
+    assert sorted(attempted) == [100, 200]
+    assert "build #200" in capsys.readouterr().out
+    assert "build #100" in str(exc_info.value)
 
 
 def make_builds_session(builds: list[dict]) -> MagicMock:

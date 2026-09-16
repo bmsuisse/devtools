@@ -235,6 +235,26 @@ def pr_status(
     pr_build.run(remote, pat, target_branch, wait)
 
 
+@pr_app.command("retry")
+def pr_retry(
+    target_branch: str = typer.Option("main", "--target-branch", help="Target branch of the PR (Azure DevOps only)"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
+) -> None:
+    """Retry only the failed job(s)/stage(s) of the most recent build/run for the PR opened
+    from the current branch (Azure DevOps or GitHub, auto-detected), instead of a full rerun.
+    """
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh_pr.retry(require_gh())
+        return
+    pr_build.retry(remote, pat, target_branch)
+
+
 @pr_app.command("watch-deploy")
 def pr_watch_deploy(
     target_branch: str = typer.Option("main", "--target-branch", help="Branch to watch for a directly-triggered build/workflow run (e.g. a post-merge deployment pipeline)"),

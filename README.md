@@ -55,6 +55,34 @@ is shown in the output. Check status is computed from
 `gh pr view --json statusCheckRollup` rather than `gh pr checks --json`,
 since the latter flag isn't available in all `gh` releases.
 
+## `bdt pr retry`
+
+Retry only the **failed** job(s)/stage(s) of the most recent build/run for the
+PR opened from the current branch — not a whole new build/run. Whenever `bdt
+pr status` reports a failure, it prints a hint to run this.
+
+```bash
+bdt pr retry [--target-branch main]
+```
+
+No build/run ID needed — like `bdt pr status`, it resolves the PR (and its
+latest build/run per pipeline/workflow) from the current branch.
+
+**Azure DevOps**: uses the `retry=true` query parameter on the "Update
+Build" REST API
+(`PATCH .../_apis/build/builds/{buildId}?retry=true&api-version=7.1`), which
+reschedules whichever stage(s)/job(s) failed on the previous attempt (plus
+anything depending on them) in place — distinct from queuing a brand new
+build. One retry call per pipeline that has a failed build for the PR.
+`--target-branch` selects which PR to look at, same as `bdt pr status`.
+
+**GitHub**: uses `gh run rerun <run-id> --failed`, which reruns only the
+failed job(s) (and their dependents) of a workflow run — the run ID(s) are
+found automatically from the PR's failing checks. Checks that aren't backed
+by a GitHub Actions run (e.g. a legacy commit status from an external CI)
+can't be retried this way and are skipped; if none of the failing checks are
+retryable, the command exits with an error.
+
 ## `bdt pr watch-deploy`
 
 Many pipelines have a second build/stage that only runs on the *target*
