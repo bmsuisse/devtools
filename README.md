@@ -83,6 +83,35 @@ by a GitHub Actions run (e.g. a legacy commit status from an external CI)
 can't be retried this way and are skipped; if none of the failing checks are
 retryable, the command exits with an error.
 
+## `bdt pr watch-deploy`
+
+Many pipelines have a second build/stage that only runs on the *target*
+branch once a PR merges into it, and that's the one that actually deploys.
+`bdt pr status` only watches builds/checks tied to the PR itself (its
+merge/source ref or GitHub's `statusCheckRollup`), so it never sees that
+second build. `bdt pr watch-deploy` does: it finds the most recent build/
+workflow run triggered *directly* on `--target-branch` and reports its
+status the same way `pr status` does (failed steps print their logs inline).
+
+```bash
+bdt pr watch-deploy [--target-branch main] [--wait]
+```
+
+After `bdt pr status` reports the PR's build/checks succeeded, if a build/
+run has already been triggered on the target branch (e.g. the merge already
+kicked one off), it prints a hint suggesting this command. That check is
+best-effort — a failure reading it (auth, permissions, network) is silently
+skipped rather than blocking or crashing `pr status`.
+
+**Azure DevOps**: looks up builds via the same `_apis/build/builds` endpoint
+`pr status` uses, just queried by `branchName=refs/heads/<target-branch>`
+instead of the PR's merge/source ref.
+
+**GitHub**: uses `gh run list --branch <target-branch> --event push`, which
+selects workflow runs triggered by a push to that branch — as opposed to a
+`pull_request`-triggered run for some still-open PR targeting the same
+branch. Failed steps are printed via `gh run view <id> --log-failed`.
+
 ## `bdt pr create`
 
 ```bash

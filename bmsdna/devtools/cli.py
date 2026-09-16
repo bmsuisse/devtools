@@ -255,6 +255,29 @@ def pr_retry(
     pr_build.retry(remote, pat, target_branch)
 
 
+@pr_app.command("watch-deploy")
+def pr_watch_deploy(
+    target_branch: str = typer.Option("main", "--target-branch", help="Branch to watch for a directly-triggered build/workflow run (e.g. a post-merge deployment pipeline)"),
+    wait: bool = typer.Option(False, "--wait", help="Poll until the build/workflow run(s) are completed"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
+) -> None:
+    """Watch the most recent build/workflow run triggered directly on --target-branch -- e.g. a
+    pipeline that only runs on the target branch once a PR merges into it and usually does the
+    actual deployment -- as opposed to `bdt pr status`, which watches builds/checks tied to a PR
+    (Azure DevOps or GitHub, auto-detected).
+    """
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh_pr.run_watch_deploy(require_gh(), target_branch, wait)
+        return
+    pr_build.run_watch_deploy(remote, pat, target_branch, wait)
+
+
 @pr_app.command("update")
 def pr_update(
     title: str | None = typer.Option(None, "--title", help="New PR title"),
