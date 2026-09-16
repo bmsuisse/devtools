@@ -231,7 +231,7 @@ def print_failed_step_logs(gh: str, run_id: int) -> None:
 
 
 def print_run(gh: str, run: dict) -> None:
-    run_id = run.get("databaseId")
+    run_id: int = run["databaseId"]
     status = run.get("status", "unknown")
     conclusion = run.get("conclusion") or "—"
     name = run.get("workflowName") or run.get("name", "?")
