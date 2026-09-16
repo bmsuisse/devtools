@@ -266,6 +266,32 @@ def test_run_prints_deploy_hint_after_reporting_pr_success(monkeypatch, capsys) 
     assert "HINT: run `bdt pr watch-deploy`" in capsys.readouterr().out
 
 
+def test_run_skips_deploy_hint_when_pr_build_still_in_progress_without_wait(monkeypatch, capsys) -> None:
+    """Regression: without --wait, a still-running pipeline must not be mistaken for
+    'the build succeeded' -- the hint should only ever follow a genuinely completed build."""
+    pr = {"pullRequestId": 1, "title": "feat: x", "status": "active", "isDraft": False}
+    # A build still in progress has no "result" yet at all (ADO only sets it once completed),
+    # not a null one -- matches what the real API returns.
+    ci_build = {k: v for k, v in DEPLOY_BUILD.items() if k != "result"}
+    ci_build = {**ci_build, "id": 5, "definition": {"id": 2, "name": "CI"}, "status": "inProgress"}
+    hint_calls: list[str] = []
+
+    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: make_builds_session([]))
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda session, remote, source, target: pr)
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_builds_for_pr", lambda session, remote, source, pr_id: [ci_build])
+
+    def fake_hint(session, remote, target):
+        hint_calls.append(target)
+        return "should not print"
+
+    monkeypatch.setattr("bmsdna.devtools.pr_build.deploy_build_hint", fake_hint)
+
+    run(REMOTE, None, "main", wait=False, source_branch="feature-x")
+
+    assert hint_calls == []
+    assert "should not print" not in capsys.readouterr().out
+
+
 def test_run_skips_deploy_hint_when_pr_build_failed(monkeypatch, capsys) -> None:
     pr = {"pullRequestId": 1, "title": "feat: x", "status": "active", "isDraft": False}
     ci_build = {**DEPLOY_BUILD, "id": 5, "definition": {"id": 2, "name": "CI"}, "result": "failed"}

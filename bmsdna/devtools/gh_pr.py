@@ -140,12 +140,13 @@ def deploy_run_hint(gh: str, target_branch: str) -> str | None:
     workflow. When one exists, a hint suggesting `bdt pr watch-deploy` to watch it.
 
     Only used to decide whether to print this hint after `bdt pr status` reports success --
-    failures here (auth, permissions, an old `gh` without `run list --json`, ...) fail open
-    (return None) rather than blocking or crashing `pr status`, same as `has_build_policy`.
+    failures here (auth, permissions, an old `gh` without `run list --json`, malformed output,
+    ...) fail open (return None) rather than blocking or crashing `pr status`, same as
+    `has_build_policy`.
     """
     try:
         runs = get_workflow_runs_for_branch(gh, target_branch, limit=1)
-    except SystemExit:
+    except (SystemExit, json.JSONDecodeError):
         return None
     if not runs:
         return None
@@ -214,9 +215,13 @@ def run(gh: str, wait: bool) -> None:
 
         if "fail" in buckets:
             sys.exit(1)
-        hint = deploy_run_hint(gh, base)
-        if hint:
-            print(hint)
+        # Only worth suggesting `pr watch-deploy` once this PR's own checks are actually
+        # settled (not still pending because the caller ran without --wait) -- otherwise
+        # it'd claim a merge/deploy is underway before the PR has even finished its own CI.
+        if "pending" not in buckets:
+            hint = deploy_run_hint(gh, base)
+            if hint:
+                print(hint)
         return
 
 

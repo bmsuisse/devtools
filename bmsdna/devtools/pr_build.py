@@ -469,9 +469,14 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
 
                 if any(b.get("result") == "failed" for b in pipeline_builds):
                     sys.exit(1)
-                hint = deploy_build_hint(session, remote, target_branch)
-                if hint:
-                    print(hint)
+                # Only worth suggesting `pr watch-deploy` once this PR's own pipeline(s) have
+                # actually finished (not just because the caller ran without --wait) --
+                # otherwise it'd claim a merge/deploy is underway before the PR's own build
+                # has even completed.
+                if all_done:
+                    hint = deploy_build_hint(session, remote, target_branch)
+                    if hint:
+                        print(hint)
                 return
         else:
             msg += " | No builds found."

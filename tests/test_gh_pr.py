@@ -455,6 +455,36 @@ def test_run_prints_deploy_hint_after_checks_pass(monkeypatch, capsys) -> None:
     assert "main" in out
 
 
+def test_run_skips_deploy_hint_when_checks_still_pending_without_wait(monkeypatch, capsys) -> None:
+    """Regression: without --wait, a still-pending check must not be mistaken for
+    'checks succeeded' -- the hint should only ever follow a genuinely settled result."""
+    pr_view = {
+        "number": 7,
+        "title": "feat: x",
+        "baseRefName": "main",
+        "mergeable": "MERGEABLE",
+        "statusCheckRollup": [{"__typename": "CheckRun", "status": "IN_PROGRESS", "name": "build"}],
+        "isDraft": False,
+    }
+    hint_calls: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        if "pr" in cmd and "view" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps(pr_view), stderr="")
+        raise AssertionError(f"unexpected command {cmd}")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.deploy_run_hint",
+        lambda gh, branch: hint_calls.append(branch) or "should not print",
+    )
+
+    run("gh", wait=False)
+
+    assert hint_calls == []
+    assert "should not print" not in capsys.readouterr().out
+
+
 def test_run_skips_deploy_hint_when_check_failed(monkeypatch, capsys) -> None:
     pr_view = {
         "number": 7,
