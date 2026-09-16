@@ -261,7 +261,7 @@ def test_run_prints_deploy_hint_after_reporting_pr_success(monkeypatch, capsys) 
     monkeypatch.setattr("bmsdna.devtools.pr_build.get_builds_for_pr", lambda session, remote, source, pr_id: [ci_build])
     monkeypatch.setattr("bmsdna.devtools.pr_build.deploy_build_hint", lambda session, remote, target: "HINT: run `bdt pr watch-deploy`")
 
-    run(REMOTE, None, "main", wait=False, source_branch="feature-x")
+    run(REMOTE, "fake-pat", "main", wait=False, source_branch="feature-x")
 
     assert "HINT: run `bdt pr watch-deploy`" in capsys.readouterr().out
 
@@ -286,7 +286,7 @@ def test_run_skips_deploy_hint_when_pr_build_still_in_progress_without_wait(monk
 
     monkeypatch.setattr("bmsdna.devtools.pr_build.deploy_build_hint", fake_hint)
 
-    run(REMOTE, None, "main", wait=False, source_branch="feature-x")
+    run(REMOTE, "fake-pat", "main", wait=False, source_branch="feature-x")
 
     assert hint_calls == []
     assert "should not print" not in capsys.readouterr().out
@@ -308,7 +308,7 @@ def test_run_skips_deploy_hint_when_pr_build_failed(monkeypatch, capsys) -> None
     monkeypatch.setattr("bmsdna.devtools.pr_build.deploy_build_hint", fake_hint)
 
     with pytest.raises(SystemExit):
-        run(REMOTE, None, "main", wait=False, source_branch="feature-x")
+        run(REMOTE, "fake-pat", "main", wait=False, source_branch="feature-x")
 
     assert hint_calls == []
     assert "should not print" not in capsys.readouterr().out
