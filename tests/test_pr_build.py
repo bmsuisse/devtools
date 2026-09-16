@@ -1,7 +1,13 @@
 import pytest
 
 from bmsdna.devtools.gitrepo import AdoRemote
-from bmsdna.devtools.pr_build import draft_notice, merge_conflict_message, policy_configs_include_branch, pr_web_url
+from bmsdna.devtools.pr_build import (
+    draft_notice,
+    merge_conflict_message,
+    policy_configs_include_branch,
+    pr_web_url,
+    retry_hint,
+)
 
 REPO_ID = "0cd3a822-389e-416e-a4fa-b73f988c2930"
 
@@ -83,6 +89,18 @@ def test_draft_notice_tells_claude_code_to_review_first(monkeypatch) -> None:
     assert "PR #42" in msg
     assert "/code-review" in msg
     assert "bdt pr publish" in msg
+
+
+def test_retry_hint_names_the_command(monkeypatch) -> None:
+    monkeypatch.delenv("CLAUDECODE", raising=False)
+    msg = retry_hint()
+    assert "bdt pr retry" in msg
+
+
+def test_retry_hint_tells_claude_code_to_run_it(monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDECODE", "1")
+    msg = retry_hint()
+    assert "bdt pr retry" in msg
 
 
 def test_policy_configs_include_branch_matches_build_policy_on_scoped_branch() -> None:

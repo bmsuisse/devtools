@@ -114,6 +114,15 @@ def draft_notice(pr: dict) -> str | None:
     return f"{pr_ref} To publish, use command: `bdt pr publish` (but do an automatic code review first)"
 
 
+def retry_hint() -> str:
+    """The command to tell someone to run after a failed build, to retry just its failed
+    stage(s)/job(s) instead of queuing a whole new build.
+    """
+    if is_claude_code():
+        return "Run `bdt pr retry` to retry just the failed stage(s)/job(s)."
+    return "Hint: to retry just the failed stage(s)/job(s) instead of queuing a full rerun, run: `bdt pr retry`"
+
+
 def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, target_branch: str) -> dict:
     url = f"{_base_url(remote)}/_apis/git/repositories/{remote.repo}/pullrequests"
     for status in ["active", "completed"]:
@@ -345,6 +354,51 @@ def get_failed_step_logs(session: requests.Session, remote: AdoRemote, build_id:
             print(f"    {TIMESTAMP_RE.sub('', line)}")
 
 
+def retry_failed_build(session: requests.Session, remote: AdoRemote, build_id: int) -> None:
+    """Retry only the failed stage(s)/job(s) of a completed build, in place -- distinct
+    from queuing a brand new build via `Builds - Queue`.
+
+    Uses the `retry=true` query parameter documented on Azure DevOps' "Builds - Update
+    Build" REST API (PATCH .../_apis/build/builds/{buildId}?retry=true&api-version=7.1
+    -- https://learn.microsoft.com/rest/api/azure/devops/build/builds/update-build).
+    Azure DevOps reschedules whichever stages/jobs failed on the previous attempt (plus
+    anything depending on them); stages that already succeeded are left alone. Needs a
+    PAT (or `az` login) with build_execute scope, same as everything else in this module.
+    """
+    r = session.patch(
+        f"{_base_url(remote)}/_apis/build/builds/{build_id}",
+        params={"retry": "true", "api-version": "7.1"},
+        json={},
+    )
+    r.raise_for_status()
+
+
+def retry(remote: AdoRemote, pat: str | None, target_branch: str, source_branch: str | None = None) -> None:
+    """Retry the failed stage(s)/job(s) of the most recent build(s) for the PR opened
+    from the current branch -- one retry call per pipeline that failed, without queuing
+    any brand new builds.
+    """
+    source_branch = source_branch or current_branch()
+    session = requests.Session()
+    session.headers.update(auth_header(pat))
+
+    pr = get_pr(session, remote, source_branch, target_branch)
+    builds = get_builds_for_pr(session, remote, source_branch, pr["pullRequestId"])
+    if not builds:
+        sys.exit(f"No builds found for PR #{pr['pullRequestId']} -- nothing to retry.")
+
+    failed = [b for b in latest_per_pipeline(builds) if b.get("status") == "completed" and b.get("result") == "failed"]
+    if not failed:
+        sys.exit(f"No failed builds to retry for PR #{pr['pullRequestId']}.")
+
+    for b in failed:
+        name = b.get("definition", {}).get("name", "?")
+        retry_failed_build(session, remote, b["id"])
+        print(f"Retrying failed stage(s)/job(s) of build #{b['id']} ({name})")
+
+    print("\nRun `bdt pr status --wait` to watch the retry.")
+
+
 def print_build(session: requests.Session, remote: AdoRemote, build: dict) -> None:
     build_id = build["id"]
     status = build.get("status", "unknown")
@@ -431,6 +485,7 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
                     print("\nTip: Use --wait to poll until all pipelines are completed.")
 
                 if any(b.get("result") == "failed" for b in pipeline_builds):
+                    print(f"\n{retry_hint()}")
                     sys.exit(1)
                 return
         else:

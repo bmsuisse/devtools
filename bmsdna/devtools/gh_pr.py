@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -52,6 +53,12 @@ _STATUS_CONTEXT_BUCKET = {
     "ERROR": "fail",
     "FAILURE": "fail",
 }
+
+
+# A CheckRun's detailsUrl (e.g. https://github.com/{owner}/{repo}/actions/runs/{run_id}/job/{job_id})
+# is the only place `gh pr view`'s statusCheckRollup exposes the backing workflow run id --
+# there's no dedicated "runId" field on the check itself.
+_RUN_ID_RE = re.compile(r"/actions/runs/(\d+)")
 
 
 def _run_gh_json(gh: str, args: list[str]) -> dict:
@@ -100,6 +107,55 @@ def draft_notice(pr: dict) -> str | None:
     if is_claude_code():
         return f"{pr_ref} Run `/code-review` first, then `bdt pr publish`."
     return f"{pr_ref} To publish, use command: `bdt pr publish` (but do an automatic code review first)"
+
+
+def retry_hint() -> str:
+    """The command to tell someone to run after a failed check, to retry just its failed
+    job(s) instead of a full rerun of the whole workflow run.
+    """
+    if is_claude_code():
+        return "Run `bdt pr retry` to retry just the failed job(s)."
+    return "Hint: to retry just the failed job(s) instead of a full rerun, run: `bdt pr retry`"
+
+
+def failed_run_ids(checks: list[dict]) -> list[int]:
+    """Distinct GitHub Actions run IDs backing a failing check in `checks`, in first-seen
+    order. Only `CheckRun` entries (GitHub Actions) carry a `detailsUrl` pointing at a
+    run; legacy `StatusContext` entries (e.g. an external CI reporting a commit status)
+    have nothing `gh run rerun` can act on and are silently skipped.
+    """
+    ids: list[int] = []
+    seen: set[int] = set()
+    for check in checks:
+        if check_bucket(check) != "fail":
+            continue
+        match = _RUN_ID_RE.search(check.get("detailsUrl") or "")
+        if not match:
+            continue
+        run_id = int(match.group(1))
+        if run_id not in seen:
+            seen.add(run_id)
+            ids.append(run_id)
+    return ids
+
+
+def retry(gh: str) -> None:
+    """Rerun only the failed job(s) (and whatever depends on them) of the current
+    branch's PR's failing workflow run(s), via `gh run rerun --failed` -- not a full
+    rerun of the whole run.
+    """
+    pr = get_pr(gh)
+    run_ids = failed_run_ids(pr.get("statusCheckRollup") or [])
+    if not run_ids:
+        sys.exit("No failed GitHub Actions run found on the PR to retry.")
+
+    for run_id in run_ids:
+        r = subprocess.run([gh, "run", "rerun", str(run_id), "--failed"], capture_output=True, encoding="utf-8")
+        if r.returncode != 0:
+            sys.exit((r.stderr or r.stdout).strip() or f"`gh run rerun {run_id} --failed` failed")
+        print(f"Reran failed job(s) of run {run_id}")
+
+    print("\nRun `bdt pr status --wait` to watch the retry.")
 
 
 def print_check(check: dict) -> None:
@@ -158,6 +214,7 @@ def run(gh: str, wait: bool) -> None:
             print_check(c)
 
         if "fail" in buckets:
+            print(f"\n{retry_hint()}")
             sys.exit(1)
         return
 
