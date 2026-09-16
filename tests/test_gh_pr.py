@@ -374,6 +374,38 @@ def test_retry_exits_on_rerun_failure(monkeypatch) -> None:
         retry("gh")
 
 
+def test_retry_still_attempts_remaining_runs_after_one_fails(monkeypatch, capsys) -> None:
+    """A failure reranning one run shouldn't stop bdt from attempting the others."""
+    rerun_ids: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        if "view" in cmd:
+            return MagicMock(
+                returncode=0,
+                stdout=json.dumps({"statusCheckRollup": [FAILED_CHECK_RUN, FAILED_CHECK_RUN_SAME_RUN]}),
+                stderr="",
+            )
+        rerun_ids.append(cmd[3])
+        if cmd[3] == "34882319228":
+            return MagicMock(returncode=1, stdout="", stderr="run is already in progress")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    # Make the two failed checks belong to *different* runs so both get a rerun attempt.
+    other_run_check = {**FAILED_CHECK_RUN_SAME_RUN, "detailsUrl": "https://github.com/owner/repo/actions/runs/999/job/1"}
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.get_pr",
+        lambda gh: {"statusCheckRollup": [FAILED_CHECK_RUN, other_run_check]},
+    )
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    with pytest.raises(SystemExit) as exc_info:
+        retry("gh")
+
+    assert rerun_ids == ["34882319228", "999"]
+    assert "999" in capsys.readouterr().out
+    assert "34882319228" in str(exc_info.value)
+
+
 def test_comment_with_screenshots_appends_agent_session_note_when_detected(monkeypatch) -> None:
     monkeypatch.setenv("CLAUDECODE", "1")
     monkeypatch.setenv("CLAUDE_CODE_BRIDGE_SESSION_ID", "session_abc123")

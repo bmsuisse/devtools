@@ -391,10 +391,21 @@ def retry(remote: AdoRemote, pat: str | None, target_branch: str, source_branch:
     if not failed:
         sys.exit(f"No failed builds to retry for PR #{pr['pullRequestId']}.")
 
+    # Keep going through every failed pipeline even if one retry call fails -- a
+    # transient error retrying one build shouldn't abandon retrying the others, and
+    # the failure summary at the end still surfaces it.
+    errors: list[str] = []
     for b in failed:
         name = b.get("definition", {}).get("name", "?")
-        retry_failed_build(session, remote, b["id"])
+        try:
+            retry_failed_build(session, remote, b["id"])
+        except requests.RequestException as e:
+            errors.append(f"build #{b['id']} ({name}): {e}")
+            continue
         print(f"Retrying failed stage(s)/job(s) of build #{b['id']} ({name})")
+
+    if errors:
+        sys.exit("Failed to retry: " + "; ".join(errors))
 
     print("\nRun `bdt pr status --wait` to watch the retry.")
 

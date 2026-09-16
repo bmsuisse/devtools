@@ -149,11 +149,19 @@ def retry(gh: str) -> None:
     if not run_ids:
         sys.exit("No failed GitHub Actions run found on the PR to retry.")
 
+    # Keep going through every failing run even if one rerun call fails -- a transient
+    # error on one run (e.g. "run is already in progress") shouldn't abandon retrying
+    # the others, and the failure summary at the end still surfaces it.
+    errors: list[str] = []
     for run_id in run_ids:
         r = subprocess.run([gh, "run", "rerun", str(run_id), "--failed"], capture_output=True, encoding="utf-8")
         if r.returncode != 0:
-            sys.exit((r.stderr or r.stdout).strip() or f"`gh run rerun {run_id} --failed` failed")
+            errors.append(f"run {run_id}: {(r.stderr or r.stdout).strip() or 'failed'}")
+            continue
         print(f"Reran failed job(s) of run {run_id}")
+
+    if errors:
+        sys.exit("Failed to retry: " + "; ".join(errors))
 
     print("\nRun `bdt pr status --wait` to watch the retry.")
 
