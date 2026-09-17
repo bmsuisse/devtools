@@ -689,6 +689,26 @@ def cleanup_db(
     )
 
 
+@cleanup_app.command("worktree")
+def cleanup_worktree(
+    path: Path = typer.Argument(Path("."), help="Worktree to remove (default: current directory)"),
+    keep_db: bool = typer.Option(False, "--keep-db", help="Don't drop this worktree's pgdevkit test DB(s) along with it"),
+    confirm: bool = typer.Option(False, "--confirm", help="Remove without an interactive confirmation prompt"),
+    pg_host: str = _PG_HOST_OPTION,
+    pg_port: int = _PG_PORT_OPTION,
+    pg_user: str | None = _PG_USER_OPTION,
+) -> None:
+    """Remove this one worktree (and, unless --keep-db, its pgdevkit test DB(s)) -- regardless of merge status.
+
+    Meant to be run from inside the worktree to remove (default path is '.'). Refuses to touch
+    the main checkout, a protected branch (main/test), a locked worktree, or a dirty one. Always
+    requires an explicit confirmation -- pass --confirm to skip the interactive prompt.
+    """
+    worktree_mod.clean_current_worktree(
+        path, confirm=confirm, keep_db=keep_db, pg_host=pg_host, pg_port=pg_port, pg_user=pg_user or pgdevkit_constants.USER
+    )
+
+
 @app.command()
 def commit(
     message: str,

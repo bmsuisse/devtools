@@ -1,9 +1,11 @@
 """Create a git worktree for a new branch, mirroring the `just worktree`
 recipes -- and, separately, `bdt cleanup worktrees` / `bdt cleanup
-orphaned-dbs` / `bdt cleanup db`: pruning worktrees already merged into
-main/test (and their pgdevkit-managed Postgres test DB(s), see testdb.py),
-sweeping for test DBs whose worktree is already gone some other way, and
-dropping a single still-live worktree's own test DB(s) on demand.
+orphaned-dbs` / `bdt cleanup db` / `bdt cleanup worktree`: pruning worktrees
+already merged into main/test (and their pgdevkit-managed Postgres test
+DB(s), see testdb.py), sweeping for test DBs whose worktree is already gone
+some other way, dropping a single still-live worktree's own test DB(s) on
+demand, and tearing down one specific still-live worktree (regardless of
+merge status) plus its DB(s) in one go.
 
 Every path here that drops a database also runs it past
 `testdb.confirm_remote_host()` first -- an unconditional, un-overridable
@@ -125,6 +127,20 @@ def find_repos(root: Path) -> list[Path]:
             continue
         stack.extend(subdirs)
     return repos
+
+
+def _main_repo_root(worktree_path: Path) -> Path | None:
+    """Resolve the main checkout that owns the (possibly linked) worktree at
+    `worktree_path` -- its parent directory of `--git-common-dir`, which
+    always points at the main repo's `.git`, regardless of which worktree
+    it's queried from. `git worktree remove`/`list` need to run with a cwd
+    inside *some* still-existing worktree of the repo; using the main
+    checkout rather than `worktree_path` itself keeps that true even after
+    `worktree_path` is deleted mid-call."""
+    result = _run_capture(["git", "-C", str(worktree_path), "rev-parse", "--path-format=absolute", "--git-common-dir"])
+    if result.returncode != 0:
+        return None
+    return Path(result.stdout.strip()).parent
 
 
 def _parse_worktree_list(repo: Path) -> list[dict]:
@@ -453,3 +469,88 @@ def clean_current_db(repo: Path, *, confirm: bool, pg_host: str, pg_port: int, p
     for name in sorted(db_names):
         result = testdb.drop_database(name, pg_host, pg_port, pg_user)
         print(f"{'dropped' if result.returncode == 0 else 'FAILED to drop'} db {name}")
+
+
+# --- `bdt cleanup worktree` -------------------------------------------------
+
+
+def clean_current_worktree(path: Path, *, confirm: bool, keep_db: bool, pg_host: str, pg_port: int, pg_user: str) -> None:
+    """Remove the single worktree at `path` (default: the current directory)
+    plus, unless `keep_db`, its own pgdevkit test DB(s) -- meant to be run
+    from inside that worktree, mirroring `clean_current_db`. Unlike
+    `clean_worktrees`, this is an explicit, single-worktree teardown: it
+    doesn't require "merged into main/test" status, only that `path` isn't
+    the main checkout, isn't on a protected branch, and is clean (submodules
+    included -- see `_is_dirty`).
+
+    Removal itself goes through `remove_worktree()`, so a worktree
+    containing submodules is handled the same way as in `clean_worktrees`:
+    git's blanket "working trees containing submodules cannot be moved or
+    removed" refusal is retried once with `--force`, since this worktree
+    has already been verified clean before that point.
+
+    Requires an explicit human confirmation: either `confirm=True` (bdt's
+    `--confirm` flag) or an interactive 'yes' typed at the prompt below. On
+    top of that, dropping its DB(s) on a non-local `--pg-host` additionally
+    requires `testdb.confirm_remote_host()`'s own interactive confirmation,
+    which `confirm=True` does *not* bypass.
+    """
+    path = path.resolve()
+    main_root = _main_repo_root(path)
+    if main_root is None:
+        sys.exit(f"{path} is not inside a git worktree.")
+
+    entries = _parse_worktree_list(main_root)
+    if not entries:
+        sys.exit(f"Could not list worktrees for {main_root}.")
+    if Path(entries[0]["path"]).resolve() == path:
+        sys.exit(f"Refusing to remove the main checkout at {path}.")
+
+    entry = next((e for e in entries if Path(e["path"]).resolve() == path), None)
+    if entry is None:
+        sys.exit(f"{path} is not a registered worktree of {main_root}.")
+
+    branch = entry.get("branch")
+    if branch in PROTECTED_BRANCHES:
+        sys.exit(f"Refusing to remove {path}: branch '{branch}' is protected.")
+    if entry.get("locked"):
+        sys.exit(f"Refusing to remove {path}: it is locked.")
+    if _is_dirty(path):
+        sys.exit(f"Refusing to remove {path}: it has uncommitted changes (submodules included).")
+
+    db_names = frozenset() if keep_db else testdb.workspace_db_names(path)
+    wt = Worktree(
+        repo=main_root,
+        path=path,
+        head=entry.get("head", ""),
+        branch=branch,
+        is_main=False,
+        locked=False,
+        db_names=db_names,
+    )
+
+    print(f"Worktree: {wt.path} (repo: {wt.repo}, branch: {wt.branch})")
+    if db_names:
+        print(f"Test DB(s): {', '.join(sorted(db_names))}")
+
+    if not confirm:
+        suffix = " and its database(s)" if db_names else ""
+        try:
+            answer = input(f"\nRemove the above worktree{suffix}? [y/N]: ")
+        except EOFError:
+            answer = ""
+        if answer.strip().lower() not in ("y", "yes"):
+            print("Aborted.")
+            return
+
+    if db_names and not testdb.confirm_remote_host(pg_host, pg_port):
+        print("Aborted: database host not confirmed.")
+        return
+
+    result, db_results = remove_worktree(wt, drop_dbs=bool(db_names), pg_host=pg_host, pg_port=pg_port, pg_user=pg_user)
+    if result.returncode != 0:
+        sys.exit(f"FAILED to remove {wt.path}: {result.stderr.strip()}")
+    print(f"removed {wt.path}")
+    for db, ok in db_results:
+        print(f"  {'dropped' if ok else 'FAILED to drop'} db {db}")
+    _run_capture(["git", "-C", str(main_root), "worktree", "prune"])

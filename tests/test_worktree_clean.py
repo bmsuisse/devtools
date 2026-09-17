@@ -1,8 +1,11 @@
 import subprocess
 
+import pytest
+
 from bmsdna.devtools.worktree import (
     OrphanedDb,
     clean_current_db,
+    clean_current_worktree,
     clean_orphaned_dbs,
     clean_worktrees,
     collect_worktrees,
@@ -32,6 +35,13 @@ def add_worktree(repo, name, base="main"):
     path = repo / ".worktrees" / name
     _git(["worktree", "add", str(path), "-b", name, base], cwd=repo)
     return path
+
+
+def add_submodule(repo, sub_repo, sub_path="vendor/sub"):
+    """Add `sub_repo` as a submodule of `repo` at `sub_path`, committed on
+    whatever branch is currently checked out in `repo`."""
+    _git(["-c", "protocol.file.allow=always", "submodule", "add", str(sub_repo), sub_path], cwd=repo)
+    _git(["commit", "-q", "-m", "add submodule"], cwd=repo)
 
 
 # --- find_repos -----------------------------------------------------------
@@ -442,3 +452,160 @@ def test_clean_current_db_reports_nothing_to_do_when_no_pgdevkit_config(tmp_path
     clean_current_db(repo, confirm=True, pg_host="localhost", pg_port=54322, pg_user="tester")
 
     assert "No pgdevkit test DB(s) found" in capsys.readouterr().out
+
+
+# --- clean_current_worktree (`bdt cleanup worktree`) ------------------------
+
+
+def test_clean_current_worktree_previews_and_requires_interactive_yes(tmp_path, monkeypatch, capsys) -> None:
+    repo = init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
+    path = add_worktree(repo, "my-feature")
+
+    monkeypatch.setattr("builtins.input", lambda *_: "no")
+
+    clean_current_worktree(path, confirm=False, keep_db=False, pg_host="localhost", pg_port=54322, pg_user="tester")
+
+    out = capsys.readouterr().out
+    assert str(path) in out
+    assert "ccmt_my_feature" in out
+    assert path.exists()
+
+
+def test_clean_current_worktree_removes_worktree_and_drops_db_when_confirmed(tmp_path, monkeypatch) -> None:
+    repo = init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
+    path = add_worktree(repo, "my-feature")
+
+    monkeypatch.setattr("builtins.input", lambda *_: "yes")
+    dropped: list[str] = []
+    monkeypatch.setattr(
+        "bmsdna.devtools.worktree.testdb.drop_database",
+        lambda name, pg_host, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
+    )
+
+    clean_current_worktree(path, confirm=False, keep_db=False, pg_host="localhost", pg_port=54322, pg_user="tester")
+
+    assert not path.exists()
+    assert dropped == ["ccmt_my_feature"]
+
+
+def test_clean_current_worktree_with_confirm_flag_skips_interactive_prompt(tmp_path, monkeypatch) -> None:
+    repo = init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
+    path = add_worktree(repo, "my-feature")
+
+    monkeypatch.setattr("builtins.input", lambda *_: (_ for _ in ()).throw(AssertionError("should not prompt with --confirm")))
+    dropped: list[str] = []
+    monkeypatch.setattr(
+        "bmsdna.devtools.worktree.testdb.drop_database",
+        lambda name, pg_host, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
+    )
+
+    clean_current_worktree(path, confirm=True, keep_db=False, pg_host="localhost", pg_port=54322, pg_user="tester")
+
+    assert not path.exists()
+    assert dropped == ["ccmt_my_feature"]
+
+
+def test_clean_current_worktree_keep_db_skips_db_drop(tmp_path, monkeypatch) -> None:
+    repo = init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
+    path = add_worktree(repo, "my-feature")
+
+    dropped: list[str] = []
+    monkeypatch.setattr(
+        "bmsdna.devtools.worktree.testdb.drop_database",
+        lambda name, pg_host, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
+    )
+
+    clean_current_worktree(path, confirm=True, keep_db=True, pg_host="localhost", pg_port=54322, pg_user="tester")
+
+    assert not path.exists()
+    assert dropped == []
+
+
+def test_clean_current_worktree_confirm_flag_does_not_bypass_remote_host_check(tmp_path, monkeypatch) -> None:
+    repo = init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
+    path = add_worktree(repo, "my-feature")
+
+    monkeypatch.setattr("builtins.input", lambda *_: "no")
+    dropped: list[str] = []
+    monkeypatch.setattr(
+        "bmsdna.devtools.worktree.testdb.drop_database",
+        lambda name, pg_host, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
+    )
+
+    clean_current_worktree(path, confirm=True, keep_db=False, pg_host="db.example.com", pg_port=5432, pg_user="tester")
+
+    assert dropped == []
+    assert path.exists()  # aborted before the worktree removal itself, same as clean_worktrees
+
+
+def test_clean_current_worktree_refuses_the_main_checkout(tmp_path) -> None:
+    repo = init_repo(tmp_path / "repo")
+
+    with pytest.raises(SystemExit, match="main checkout"):
+        clean_current_worktree(repo, confirm=True, keep_db=True, pg_host="localhost", pg_port=54322, pg_user="tester")
+
+    assert repo.exists()
+
+
+def test_clean_current_worktree_refuses_a_protected_branch(tmp_path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    path = add_worktree(repo, "test", base="main")
+
+    with pytest.raises(SystemExit, match="protected"):
+        clean_current_worktree(path, confirm=True, keep_db=True, pg_host="localhost", pg_port=54322, pg_user="tester")
+
+    assert path.exists()
+
+
+def test_clean_current_worktree_refuses_a_dirty_worktree(tmp_path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    path = add_worktree(repo, "my-feature")
+    (path / "uncommitted.txt").write_text("oops")
+
+    with pytest.raises(SystemExit, match="uncommitted changes"):
+        clean_current_worktree(path, confirm=True, keep_db=True, pg_host="localhost", pg_port=54322, pg_user="tester")
+
+    assert path.exists()
+
+
+def test_clean_current_worktree_refuses_a_locked_worktree(tmp_path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    path = add_worktree(repo, "my-feature")
+    _git(["worktree", "lock", str(path)], cwd=repo)
+
+    with pytest.raises(SystemExit, match="locked"):
+        clean_current_worktree(path, confirm=True, keep_db=True, pg_host="localhost", pg_port=54322, pg_user="tester")
+
+    assert path.exists()
+
+
+def test_clean_current_worktree_works_from_any_of_its_own_worktrees_as_cwd_equivalent(tmp_path) -> None:
+    """`clean_current_worktree` resolves the main repo via --git-common-dir
+    rather than assuming `path` itself doubles as a place to run git
+    commands from -- this exercises that resolution directly against a
+    linked worktree path (not the main checkout)."""
+    repo = init_repo(tmp_path / "repo")
+    path = add_worktree(repo, "my-feature")
+
+    clean_current_worktree(path, confirm=True, keep_db=True, pg_host="localhost", pg_port=54322, pg_user="tester")
+
+    assert not path.exists()
+    # git's own bookkeeping (main repo) must still be intact and usable
+    result = _git(["worktree", "list"], cwd=repo)
+    assert str(path) not in result.stdout
+
+
+def test_clean_current_worktree_removes_a_worktree_containing_a_submodule(tmp_path, monkeypatch) -> None:
+    """Git unconditionally refuses `worktree remove` on any worktree with
+    submodules ("fatal: working trees containing submodules cannot be moved
+    or removed"), clean or not -- this exercises the same --force retry
+    `clean_worktrees` relies on (both go through `remove_worktree`)."""
+    sub_repo = init_repo(tmp_path / "sub")
+    repo = init_repo(tmp_path / "repo")
+    add_submodule(repo, sub_repo)
+    path = add_worktree(repo, "feature-with-submodule")
+    _git(["-c", "protocol.file.allow=always", "submodule", "update", "--init"], cwd=path)
+
+    clean_current_worktree(path, confirm=True, keep_db=True, pg_host="localhost", pg_port=54322, pg_user="tester")
+
+    assert not path.exists()
