@@ -265,6 +265,49 @@ def pr_status(
     pr_build.run(remote, pat, target_branch, wait)
 
 
+@pr_app.command("retry")
+def pr_retry(
+    target_branch: str = typer.Option("main", "--target-branch", help="Target branch of the PR (Azure DevOps only)"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
+) -> None:
+    """Retry only the failed job(s)/stage(s) of the most recent build/run for the PR opened
+    from the current branch (Azure DevOps or GitHub, auto-detected), instead of a full rerun.
+    """
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh_pr.retry(require_gh())
+        return
+    pr_build.retry(remote, pat, target_branch)
+
+
+@pr_app.command("watch-deploy")
+def pr_watch_deploy(
+    target_branch: str = typer.Option("main", "--target-branch", help="Branch to watch for a directly-triggered build/workflow run (e.g. a post-merge deployment pipeline)"),
+    wait: bool = typer.Option(False, "--wait", help="Poll until the build/workflow run(s) are completed"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
+) -> None:
+    """Watch the most recent build/workflow run triggered directly on --target-branch -- e.g. a
+    pipeline that only runs on the target branch once a PR merges into it and usually does the
+    actual deployment -- as opposed to `bdt pr status`, which watches builds/checks tied to a PR
+    (Azure DevOps or GitHub, auto-detected).
+    """
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh_pr.run_watch_deploy(require_gh(), target_branch, wait)
+        return
+    pr_build.run_watch_deploy(remote, pat, target_branch, wait)
+
+
 @pr_app.command("update")
 def pr_update(
     title: str | None = typer.Option(None, "--title", help="New PR title"),
