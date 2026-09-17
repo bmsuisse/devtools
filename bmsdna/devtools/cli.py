@@ -10,6 +10,7 @@ from pathlib import Path
 
 import requests
 import typer
+from pgdevkit.testdb import constants as pgdevkit_constants
 
 from . import ado_issue, app_service_logs, commit as commit_mod
 from . import env_config
@@ -65,6 +66,35 @@ issue_app.add_typer(issue_comment_app, name="comment")
 
 logs_app = typer.Typer(name="logs", help="Application Insights / Log Analytics queries")
 app.add_typer(logs_app, name="logs")
+
+cleanup_app = typer.Typer(
+    name="cleanup",
+    help="Prune merged git worktrees and their orphaned pgdevkit Postgres test databases",
+)
+app.add_typer(cleanup_app, name="cleanup")
+
+# Shared `--pg-port`/`--pg-user` defaults for `bdt cleanup *`: pgdevkit's own
+# test-container port/user (its `find_orphaned_dbs()`/`workspace_db_names()`
+# connect via *its* PGDEVKIT_TESTDB_* env vars, not these flags -- these only
+# drive bdt's own `psql`-based DROP DATABASE step, see testdb.py's module
+# docstring -- so defaulting to anything else would make the two halves of
+# `bdt cleanup orphaned-dbs` silently target different Postgres instances).
+_PG_HOST_OPTION = typer.Option(
+    pgdevkit_constants.HOST, "--pg-host", envvar="PGHOST", help="Postgres host to connect to (default: pgdevkit's own test-container host)"
+)
+_PG_PORT_OPTION = typer.Option(
+    pgdevkit_constants.PORT, "--pg-port", envvar="PGPORT", help="Postgres port to connect to (default: pgdevkit's own test-container port)"
+)
+_PG_USER_OPTION = typer.Option(
+    None,
+    "--pg-user",
+    # Deliberately just PGUSER, not also $USER/$LOGNAME: those generic OS
+    # envvars are set on virtually every shell, which would make `pg_user or
+    # pgdevkit_constants.USER`'s fallback never fire and silently connect as
+    # the wrong role on everyone's machine.
+    envvar="PGUSER",
+    help="Postgres user to connect as (default: pgdevkit's own test-container user)",
+)
 
 
 def _resolve_ado_pr(pat: str | None, remote: AdoRemote, source_branch: str, target: str) -> tuple[requests.Session, dict]:
@@ -606,6 +636,77 @@ def worktree(
     """Create a git worktree under .worktrees/<name>, mirroring the `just worktree` recipe."""
     install_cmd = install.split() if install else None
     worktree_mod.create(name, base=base, env_file=env_file, submodules=submodules, install_cmd=install_cmd)
+
+
+@cleanup_app.command("worktrees")
+def cleanup_worktrees(
+    root: Path = typer.Argument(Path("."), help="Root folder to scan for git repositories (recursively)"),
+    remote: str = typer.Option("origin", "--remote", help="Remote name whose main/test branches count as 'merged into' (falls back to local main/test if no such remote refs exist)"),
+    keep_dbs: bool = typer.Option(False, "--keep-dbs", help="Don't drop a removed worktree's pgdevkit test DB(s) along with it"),
+    yes: bool = typer.Option(False, "--yes", help="Actually remove; without this, only prints what would be removed"),
+    pg_host: str = _PG_HOST_OPTION,
+    pg_port: int = _PG_PORT_OPTION,
+    pg_user: str | None = _PG_USER_OPTION,
+) -> None:
+    """Find and remove git worktrees fully merged into main/test (and their pgdevkit test DB(s)), across every repo under root."""
+    worktree_mod.clean_worktrees(
+        root, remote=remote, keep_dbs=keep_dbs, yes=yes, pg_host=pg_host, pg_port=pg_port, pg_user=pg_user or pgdevkit_constants.USER
+    )
+
+
+@cleanup_app.command("orphaned-dbs")
+def cleanup_orphaned_dbs(
+    root: Path = typer.Argument(Path("."), help="Root folder to scan for git repositories (recursively)"),
+    include_caution: bool = typer.Option(
+        False, "--include-caution", help="Also drop DBs flagged as possibly a standing reference DB (verify those first!)"
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Actually drop; without this, only prints what would be dropped"),
+    pg_host: str = _PG_HOST_OPTION,
+    pg_port: int = _PG_PORT_OPTION,
+    pg_user: str | None = _PG_USER_OPTION,
+) -> None:
+    """Find and drop pgdevkit test DBs whose worktree is already gone (e.g. removed by hand before this command existed)."""
+    worktree_mod.clean_orphaned_dbs(
+        root, include_caution=include_caution, yes=yes, pg_host=pg_host, pg_port=pg_port, pg_user=pg_user or pgdevkit_constants.USER
+    )
+
+
+@cleanup_app.command("db")
+def cleanup_db(
+    root: Path = typer.Argument(Path("."), help="Worktree/repo whose own pgdevkit test DB(s) to drop (default: current directory)"),
+    confirm: bool = typer.Option(False, "--confirm", help="Drop without an interactive confirmation prompt"),
+    pg_host: str = _PG_HOST_OPTION,
+    pg_port: int = _PG_PORT_OPTION,
+    pg_user: str | None = _PG_USER_OPTION,
+) -> None:
+    """Drop this worktree's own pgdevkit test DB(s), without touching the worktree itself.
+
+    Meant to be run from inside a worktree (default root is '.'). Always requires an
+    explicit confirmation -- pass --confirm to skip the interactive prompt.
+    """
+    worktree_mod.clean_current_db(
+        root.resolve(), confirm=confirm, pg_host=pg_host, pg_port=pg_port, pg_user=pg_user or pgdevkit_constants.USER
+    )
+
+
+@cleanup_app.command("worktree")
+def cleanup_worktree(
+    path: Path = typer.Argument(Path("."), help="Worktree to remove (default: current directory)"),
+    keep_db: bool = typer.Option(False, "--keep-db", help="Don't drop this worktree's pgdevkit test DB(s) along with it"),
+    confirm: bool = typer.Option(False, "--confirm", help="Remove without an interactive confirmation prompt"),
+    pg_host: str = _PG_HOST_OPTION,
+    pg_port: int = _PG_PORT_OPTION,
+    pg_user: str | None = _PG_USER_OPTION,
+) -> None:
+    """Remove this one worktree (and, unless --keep-db, its pgdevkit test DB(s)) -- regardless of merge status.
+
+    Meant to be run from inside the worktree to remove (default path is '.'). Refuses to touch
+    the main checkout, a protected branch (main/test), a locked worktree, or a dirty one. Always
+    requires an explicit confirmation -- pass --confirm to skip the interactive prompt.
+    """
+    worktree_mod.clean_current_worktree(
+        path, confirm=confirm, keep_db=keep_db, pg_host=pg_host, pg_port=pg_port, pg_user=pg_user or pgdevkit_constants.USER
+    )
 
 
 @app.command()
