@@ -240,15 +240,17 @@ Creates `.worktrees/<name>` branched from `--base`, initializes submodules
 (unless `--no-submodules`), and copies an env file into the new worktree as
 `.env` (auto-detects `.local_env` then `.env` if `--env-file` isn't given).
 
-## `bdt cleanup worktrees` / `bdt cleanup orphaned-dbs`
+## `bdt cleanup worktrees` / `bdt cleanup orphaned-dbs` / `bdt cleanup db` / `bdt cleanup worktree`
 
 ```bash
 bdt cleanup worktrees [root] [--remote origin] [--keep-dbs] [--yes]
 bdt cleanup orphaned-dbs [root] [--include-caution] [--yes]
+bdt cleanup db [path] [--confirm]
+bdt cleanup worktree [path] [--keep-db] [--confirm]
 ```
 
-Recursively scans every git repo under `root` (default: `.`) for worktrees.
-`bdt cleanup worktrees` prunes the ones fully merged into
+The first two recursively scan every git repo under `root` (default: `.`)
+for worktrees. `bdt cleanup worktrees` prunes the ones fully merged into
 `<remote>/main`/`<remote>/test` (falling back to local `main`/`test` if no
 such remote refs exist) — e.g. a tree of `.worktrees/<branch>` directories
 accumulated across several repos over time. `bdt cleanup orphaned-dbs` has no
@@ -257,6 +259,25 @@ no matching *live* git worktree, regardless of whether that worktree was
 ever merged anywhere. Like `bdt issue delete`, neither command has an
 interactive prompt — both only ever *print* what they would remove/drop;
 pass `--yes` to actually do it.
+
+`bdt cleanup db` / `bdt cleanup worktree` instead target one specific,
+still-live worktree — `path` defaults to `.`, so both are meant to be run
+from inside the worktree in question, regardless of its merge status.
+`cleanup db` only drops that worktree's own pgdevkit test DB(s), leaving the
+worktree itself alone; `cleanup worktree` removes the worktree too (and,
+unless `--keep-db`, its DB(s) along with it) — refusing the main checkout, a
+protected branch (`main`/`test`), a locked worktree, or a dirty one
+(submodules included). Since these two act on a single worktree a human
+picked out by hand, rather than scanning for candidates, they default to an
+interactive `y/N` confirmation instead of `--yes`; pass `--confirm` to skip
+it for non-interactive use.
+
+Every one of these four commands, before dropping any database, additionally
+requires typing `yes` at an interactive prompt whenever `--pg-host` isn't
+`localhost`/`127.0.0.1`/`::1` — this specific check has no flag to bypass it
+(not even `--yes`/`--confirm`), so a script or agent can never drop a
+database on a shared/remote Postgres instance without a human confirming it
+directly.
 
 The DB-naming algorithm and orphan detection are entirely
 [pgdevkit](https://github.com/bmsuisse/pgdevkit)'s own
@@ -294,10 +315,12 @@ db_nested_projects = ["akeneo_editor"]  # a wholly separate per-branch DB,
                                          # worktree's branch
 ```
 
-`--pg-port`/`--pg-user` (both commands; env vars `PGPORT`/`PGUSER`, falling
-back to `USER` then `LOGNAME`) default to *pgdevkit's own* test-container
-port/user, not the OS user or Postgres' standard `5432` — `bdt cleanup
-orphaned-dbs`'s listing step always connects via pgdevkit's own
+`--pg-port`/`--pg-user` (all four commands; env vars `PGPORT`/`PGUSER`, no
+fallback to `$USER`/`$LOGNAME` — those are set in virtually every shell,
+which would make the pgdevkit-user default below never fire) default to
+*pgdevkit's own* test-container port/user, not the OS user or Postgres'
+standard `5432` — `bdt cleanup orphaned-dbs`'s listing step always connects
+via pgdevkit's own
 `PGDEVKIT_TESTDB_*`-driven resolution (it's calling straight into pgdevkit),
 so its own `psql`-based DROP step defaults to matching that, rather than
 silently targeting a different Postgres instance than the one that was just
