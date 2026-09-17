@@ -5,11 +5,13 @@ import pytest
 from pgdevkit.testdb import constants as pgdevkit_constants
 
 from bmsdna.devtools.testdb import (
+    confirm_remote_host,
     db_nested_projects,
     drop_database,
     find_orphaned,
     has_pgdevkit_project,
     is_caution_db,
+    is_local_host,
     project_name,
     project_roots,
     workspace_db_names,
@@ -329,3 +331,43 @@ def test_drop_database_exits_with_a_friendly_message_when_psql_is_missing(monkey
 
     with pytest.raises(SystemExit, match="'psql' is required"):
         drop_database("ccmt_my_feature", pg_host="localhost", pg_port=54322, pg_user="tester")
+
+
+# --- is_local_host / confirm_remote_host -------------------------------------
+
+
+@pytest.mark.parametrize("host", ["localhost", "127.0.0.1", "::1"])
+def test_is_local_host_true_for_local_addresses(host: str) -> None:
+    assert is_local_host(host) is True
+
+
+@pytest.mark.parametrize("host", ["db.example.com", "10.0.0.5", "prod-postgres"])
+def test_is_local_host_false_for_non_local_addresses(host: str) -> None:
+    assert is_local_host(host) is False
+
+
+def test_confirm_remote_host_skips_prompt_for_local_host(monkeypatch) -> None:
+    monkeypatch.setattr("builtins.input", lambda *_: (_ for _ in ()).throw(AssertionError("should not prompt for a local host")))
+
+    assert confirm_remote_host("localhost", 54322) is True
+
+
+def test_confirm_remote_host_requires_typed_yes_for_remote_host(monkeypatch) -> None:
+    monkeypatch.setattr("builtins.input", lambda *_: "yes")
+
+    assert confirm_remote_host("db.example.com", 5432) is True
+
+
+def test_confirm_remote_host_rejects_anything_other_than_yes(monkeypatch) -> None:
+    monkeypatch.setattr("builtins.input", lambda *_: "y")
+
+    assert confirm_remote_host("db.example.com", 5432) is False
+
+
+def test_confirm_remote_host_fails_closed_when_input_is_not_interactive(monkeypatch) -> None:
+    def raise_eof(*_):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", raise_eof)
+
+    assert confirm_remote_host("db.example.com", 5432) is False

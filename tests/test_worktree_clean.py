@@ -2,6 +2,7 @@ import subprocess
 
 from bmsdna.devtools.worktree import (
     OrphanedDb,
+    clean_current_db,
     clean_orphaned_dbs,
     clean_worktrees,
     collect_worktrees,
@@ -308,3 +309,136 @@ def test_clean_orphaned_dbs_reports_no_repos_found_distinctly_from_no_orphans(tm
     out = capsys.readouterr().out
     assert "No git repositories found" in out
     assert "No orphaned pgdevkit test DBs found" not in out
+
+
+# --- non-local --pg-host safety net -----------------------------------------
+#
+# --yes alone must never be enough to drop anything on a non-local Postgres
+# host -- testdb.confirm_remote_host() (exercised directly in
+# test_testdb.py) additionally requires an interactive 'yes', which these
+# tests simulate/deny via a monkeypatched builtins.input.
+
+
+def test_clean_worktrees_with_yes_still_requires_interactive_confirmation_for_remote_host(tmp_path, monkeypatch) -> None:
+    repo = init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
+    path = add_worktree(repo, "merged-feature")
+
+    monkeypatch.setattr("builtins.input", lambda *_: "no")
+    dropped: list[str] = []
+    monkeypatch.setattr(
+        "bmsdna.devtools.worktree.testdb.drop_database",
+        lambda name, pg_host, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
+    )
+
+    clean_worktrees(tmp_path, remote="origin", keep_dbs=False, yes=True, pg_host="db.example.com", pg_port=5432, pg_user="tester")
+
+    assert dropped == []
+    assert path.exists()  # the worktree removal itself is gated behind the same abort
+
+
+def test_clean_worktrees_with_yes_proceeds_for_remote_host_once_confirmed(tmp_path, monkeypatch) -> None:
+    repo = init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
+    add_worktree(repo, "merged-feature")
+
+    monkeypatch.setattr("builtins.input", lambda *_: "yes")
+    dropped: list[str] = []
+    monkeypatch.setattr(
+        "bmsdna.devtools.worktree.testdb.drop_database",
+        lambda name, pg_host, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
+    )
+
+    clean_worktrees(tmp_path, remote="origin", keep_dbs=False, yes=True, pg_host="db.example.com", pg_port=5432, pg_user="tester")
+
+    assert dropped == ["ccmt_merged_feature"]
+
+
+def test_clean_orphaned_dbs_with_yes_still_requires_interactive_confirmation_for_remote_host(tmp_path, monkeypatch) -> None:
+    repo = init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
+
+    monkeypatch.setattr(
+        "bmsdna.devtools.worktree.testdb.find_orphaned",
+        _fake_find_orphaned({repo: [("ccmt_old_removed_feature", "ccmt", False)]}),
+    )
+    monkeypatch.setattr("builtins.input", lambda *_: "no")
+    dropped: list[str] = []
+    monkeypatch.setattr(
+        "bmsdna.devtools.worktree.testdb.drop_database",
+        lambda name, pg_host, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
+    )
+
+    clean_orphaned_dbs(tmp_path, include_caution=False, yes=True, pg_host="db.example.com", pg_port=5432, pg_user="tester")
+
+    assert dropped == []
+
+
+# --- clean_current_db (`bdt cleanup db`) ------------------------------------
+
+
+def test_clean_current_db_previews_and_requires_interactive_yes_when_no_confirm_flag(tmp_path, monkeypatch, capsys) -> None:
+    repo = init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
+
+    monkeypatch.setattr("builtins.input", lambda *_: "no")
+    dropped: list[str] = []
+    monkeypatch.setattr(
+        "bmsdna.devtools.worktree.testdb.drop_database",
+        lambda name, pg_host, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
+    )
+
+    clean_current_db(repo, confirm=False, pg_host="localhost", pg_port=54322, pg_user="tester")
+
+    out = capsys.readouterr().out
+    assert "ccmt_main" in out
+    assert dropped == []
+
+
+def test_clean_current_db_drops_when_interactively_confirmed(tmp_path, monkeypatch) -> None:
+    repo = init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
+
+    monkeypatch.setattr("builtins.input", lambda *_: "yes")
+    dropped: list[str] = []
+    monkeypatch.setattr(
+        "bmsdna.devtools.worktree.testdb.drop_database",
+        lambda name, pg_host, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
+    )
+
+    clean_current_db(repo, confirm=False, pg_host="localhost", pg_port=54322, pg_user="tester")
+
+    assert dropped == ["ccmt_main"]
+
+
+def test_clean_current_db_with_confirm_flag_skips_interactive_prompt(tmp_path, monkeypatch) -> None:
+    repo = init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
+
+    monkeypatch.setattr("builtins.input", lambda *_: (_ for _ in ()).throw(AssertionError("should not prompt with --confirm")))
+    dropped: list[str] = []
+    monkeypatch.setattr(
+        "bmsdna.devtools.worktree.testdb.drop_database",
+        lambda name, pg_host, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
+    )
+
+    clean_current_db(repo, confirm=True, pg_host="localhost", pg_port=54322, pg_user="tester")
+
+    assert dropped == ["ccmt_main"]
+
+
+def test_clean_current_db_confirm_flag_does_not_bypass_remote_host_check(tmp_path, monkeypatch) -> None:
+    repo = init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
+
+    monkeypatch.setattr("builtins.input", lambda *_: "no")
+    dropped: list[str] = []
+    monkeypatch.setattr(
+        "bmsdna.devtools.worktree.testdb.drop_database",
+        lambda name, pg_host, pg_port, pg_user: (dropped.append(name), subprocess.CompletedProcess([], 0))[1],
+    )
+
+    clean_current_db(repo, confirm=True, pg_host="db.example.com", pg_port=5432, pg_user="tester")
+
+    assert dropped == []
+
+
+def test_clean_current_db_reports_nothing_to_do_when_no_pgdevkit_config(tmp_path, capsys) -> None:
+    repo = init_repo(tmp_path / "repo")
+
+    clean_current_db(repo, confirm=True, pg_host="localhost", pg_port=54322, pg_user="tester")
+
+    assert "No pgdevkit test DB(s) found" in capsys.readouterr().out

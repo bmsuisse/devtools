@@ -186,6 +186,38 @@ def _run_psql(args: list[str], pg_host: str, pg_port: int, pg_user: str) -> subp
     )
 
 
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def is_local_host(pg_host: str) -> bool:
+    """Whether `pg_host` is the local machine -- the only case where bdt's
+    cleanup commands may drop a database without an explicit, interactive
+    human confirmation (see `confirm_remote_host`)."""
+    return pg_host in _LOCAL_HOSTS
+
+
+def confirm_remote_host(pg_host: str, pg_port: int) -> bool:
+    """Require an interactive yes from a human before any cleanup command
+    drops a database on a non-local Postgres host.
+
+    Deliberately has no --yes/--confirm-style flag to bypass it: pgdevkit's
+    own test-container host is always local, so a non-local --pg-host means
+    someone pointed bdt at a shared/remote Postgres instance, and a
+    script/agent blindly passing --yes must never be able to drop a
+    database there without a human actually reading this prompt. A
+    non-interactive caller (no stdin to read, e.g. CI) safely fails closed
+    instead of hanging or defaulting to "yes".
+    """
+    if is_local_host(pg_host):
+        return True
+    print(f"\npg-host '{pg_host}:{pg_port}' is not localhost -- this may be a shared/remote database.")
+    try:
+        answer = input("Type 'yes' to confirm dropping database(s) on this host: ")
+    except EOFError:
+        return False
+    return answer.strip().lower() == "yes"
+
+
 def drop_database(name: str, pg_host: str, pg_port: int, pg_user: str) -> subprocess.CompletedProcess:
     # Escape embedded `"` by doubling it, per Postgres quoted-identifier
     # rules -- `name` comes from a live `pg_database` listing (via

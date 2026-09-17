@@ -1,8 +1,14 @@
 """Create a git worktree for a new branch, mirroring the `just worktree`
 recipes -- and, separately, `bdt cleanup worktrees` / `bdt cleanup
-orphaned-dbs`: pruning worktrees already merged into main/test (and their
-pgdevkit-managed Postgres test DB(s), see testdb.py), and sweeping for test
-DBs whose worktree is already gone some other way.
+orphaned-dbs` / `bdt cleanup db`: pruning worktrees already merged into
+main/test (and their pgdevkit-managed Postgres test DB(s), see testdb.py),
+sweeping for test DBs whose worktree is already gone some other way, and
+dropping a single still-live worktree's own test DB(s) on demand.
+
+Every path here that drops a database also runs it past
+`testdb.confirm_remote_host()` first -- an unconditional, un-overridable
+interactive check for any non-local `--pg-host` (see that function's
+docstring).
 """
 
 from __future__ import annotations
@@ -316,6 +322,11 @@ def clean_worktrees(root: Path, *, remote: str, keep_dbs: bool, yes: bool, pg_ho
         print("\nPass --yes to remove the above.")
         return
 
+    drop_dbs = not keep_dbs and any(wt.db_names for wt in candidates)
+    if drop_dbs and not testdb.confirm_remote_host(pg_host, pg_port):
+        print("Aborted: database host not confirmed.")
+        return
+
     touched_repos: set[Path] = set()
     for wt in candidates:
         result, db_results = remove_worktree(wt, drop_dbs=not keep_dbs, pg_host=pg_host, pg_port=pg_port, pg_user=pg_user)
@@ -391,9 +402,54 @@ def clean_orphaned_dbs(root: Path, *, include_caution: bool, yes: bool, pg_host:
         print(hint)
         return
 
+    if to_drop and not testdb.confirm_remote_host(pg_host, pg_port):
+        print("Aborted: database host not confirmed.")
+        return
+
     for o in to_drop:
         result = testdb.drop_database(o.name, pg_host, pg_port, pg_user)
         print(f"{'dropped' if result.returncode == 0 else 'FAILED to drop'} db {o.name}")
 
     if skipped:
         print(f"\n{len(skipped)} flagged DB(s) not dropped (pass --include-caution to include them): {', '.join(o.name for o in skipped)}")
+
+
+# --- `bdt cleanup db` ------------------------------------------------------
+
+
+def clean_current_db(repo: Path, *, confirm: bool, pg_host: str, pg_port: int, pg_user: str) -> None:
+    """Drop the pgdevkit test DB(s) owned by `repo` -- meant to be run from
+    inside a live worktree (default `repo` is `.`), unlike `clean_worktrees`
+    this never touches the worktree itself, only its database(s).
+
+    Requires an explicit human confirmation: either `confirm=True` (bdt's
+    `--confirm` flag) or an interactive 'yes' typed at the prompt below. On
+    top of that, dropping anything on a non-local `--pg-host` additionally
+    requires `testdb.confirm_remote_host()`'s own interactive confirmation,
+    which `confirm=True` does *not* bypass.
+    """
+    db_names = testdb.workspace_db_names(repo)
+    if not db_names:
+        print(f"No pgdevkit test DB(s) found for {repo}.")
+        return
+
+    print(f"Test DB(s) for {repo}:")
+    for name in sorted(db_names):
+        print(f"  {name}")
+
+    if not confirm:
+        try:
+            answer = input("\nDrop the above database(s)? [y/N]: ")
+        except EOFError:
+            answer = ""
+        if answer.strip().lower() not in ("y", "yes"):
+            print("Aborted.")
+            return
+
+    if not testdb.confirm_remote_host(pg_host, pg_port):
+        print("Aborted: database host not confirmed.")
+        return
+
+    for name in sorted(db_names):
+        result = testdb.drop_database(name, pg_host, pg_port, pg_user)
+        print(f"{'dropped' if result.returncode == 0 else 'FAILED to drop'} db {name}")

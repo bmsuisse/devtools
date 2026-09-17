@@ -22,7 +22,7 @@ wheels = [
 
 [[package]]
 name = "bmsdna-devtools"
-version = "0.15.0"
+version = "0.17.0"
 source = { editable = "." }
 dependencies = [
     { name = "pgdevkit", extra = ["db"] },

@@ -671,6 +671,24 @@ def cleanup_orphaned_dbs(
     )
 
 
+@cleanup_app.command("db")
+def cleanup_db(
+    root: Path = typer.Argument(Path("."), help="Worktree/repo whose own pgdevkit test DB(s) to drop (default: current directory)"),
+    confirm: bool = typer.Option(False, "--confirm", help="Drop without an interactive confirmation prompt"),
+    pg_host: str = _PG_HOST_OPTION,
+    pg_port: int = _PG_PORT_OPTION,
+    pg_user: str | None = _PG_USER_OPTION,
+) -> None:
+    """Drop this worktree's own pgdevkit test DB(s), without touching the worktree itself.
+
+    Meant to be run from inside a worktree (default root is '.'). Always requires an
+    explicit confirmation -- pass --confirm to skip the interactive prompt.
+    """
+    worktree_mod.clean_current_db(
+        root.resolve(), confirm=confirm, pg_host=pg_host, pg_port=pg_port, pg_user=pg_user or pgdevkit_constants.USER
+    )
+
+
 @app.command()
 def commit(
     message: str,
