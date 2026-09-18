@@ -18,6 +18,13 @@ AZ_INSTALL_HINT = "Install the Azure CLI: https://learn.microsoft.com/cli/azure/
 GH_INSTALL_HINT = "Install the GitHub CLI: https://cli.github.com"
 PSQL_INSTALL_HINT = "Install the PostgreSQL client tools (psql): https://www.postgresql.org/download/"
 
+# `pr status --wait` exits with this code (not 0=success, not 1=CI failure) when it stops
+# because a build/check needs a human to approve it — there's nothing more the CLI can do
+# but wait indefinitely, which defeats the point of --wait. Deliberately not 2: that's
+# Click/Typer's own exit code for a CLI usage error (e.g. typer.BadParameter elsewhere in
+# this tool), and callers branching on exit code shouldn't confuse the two.
+EXIT_NEEDS_APPROVAL = 3
+
 
 def is_claude_code() -> bool:
     """True if this process is running as a subprocess of Claude Code.

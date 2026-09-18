@@ -254,7 +254,7 @@ def pr_publish(
 @pr_app.command("status")
 def pr_status(
     target_branch: str = typer.Option("main", "--target-branch", help="Target branch of the PR (Azure DevOps only — gh has no equivalent filter, it always resolves the PR for the current branch)"),
-    wait: bool = typer.Option(False, "--wait", help="Poll until all pipelines/checks are completed"),
+    wait: bool = typer.Option(False, "--wait", help="Poll until all pipelines/checks are completed; stops early and reports status if one needs manual approval"),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
 ) -> None:
     """Show build/check status for the PR opened from the current branch (Azure DevOps or GitHub, auto-detected)."""
@@ -288,7 +288,7 @@ def pr_retry(
 @pr_app.command("watch-deploy")
 def pr_watch_deploy(
     target_branch: str = typer.Option("main", "--target-branch", help="Branch to watch for a directly-triggered build/workflow run (e.g. a post-merge deployment pipeline)"),
-    wait: bool = typer.Option(False, "--wait", help="Poll until the build/workflow run(s) are completed"),
+    wait: bool = typer.Option(False, "--wait", help="Poll until the build/workflow run(s) are completed; stops early and reports status if one needs manual approval"),
     pat: str | None = typer.Option(
         None,
         "--pat",

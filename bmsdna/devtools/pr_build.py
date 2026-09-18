@@ -11,12 +11,17 @@ from urllib.parse import quote
 import requests
 
 from .ado_auth import auth_header
-from .cli_tools import detect_agent_session, ensure_agent_session_note, is_claude_code
+from .cli_tools import EXIT_NEEDS_APPROVAL, detect_agent_session, ensure_agent_session_note, is_claude_code
 from .gitrepo import AdoRemote, current_branch
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 # Matches an ISO 8601 timestamp at the start of a log line, e.g. 2024-03-21T15:01:23.1234567Z
 TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*")
+
+# Timeline record name for a YAML pipeline stage's manual-approval check. Its `state` stays
+# "inProgress" (like an ordinary running step) until someone approves/rejects it or it times
+# out — indistinguishable from "still building" unless you look at the timeline specifically.
+CHECKPOINT_APPROVAL_NAME = "Checkpoint.Approval"
 
 # GitPullRequest.mergeStatus values (PullRequestAsyncStatus) that mean the PR
 # can't be merged as-is — build status is moot until this is resolved.
@@ -369,6 +374,59 @@ def latest_per_pipeline(builds: list) -> list:
     return sorted(latest.values(), key=lambda b: b["id"], reverse=True)
 
 
+def build_web_url(remote: AdoRemote, build_id: int) -> str:
+    """The browsable web page for a build, where a pending approval can actually be acted on."""
+    return f"{_base_url(remote)}/_build/results?buildId={build_id}&view=results"
+
+
+def get_timeline_records(session: requests.Session, remote: AdoRemote, build_id: int) -> list:
+    r = session.get(f"{_base_url(remote)}/_apis/build/builds/{build_id}/timeline", params={"api-version": "7.1"})
+    r.raise_for_status()
+    return r.json().get("records") or []
+
+
+def pending_approval_records(records: list) -> list:
+    """Timeline records for still-open `Checkpoint.Approval` gates (manual stage approvals)."""
+    return [rec for rec in records if rec.get("state") == "inProgress" and rec.get("name") == CHECKPOINT_APPROVAL_NAME]
+
+
+def approval_stage_name(records: list, approval_record: dict) -> str:
+    """Human-readable stage name for an approval record.
+
+    Resolved by walking the timeline's parent chain: Checkpoint.Approval -> Checkpoint -> Stage.
+    Falls back to the approval record's own name if that chain is missing (unexpected shape).
+    """
+    by_id = {rec.get("id"): rec for rec in records}
+    checkpoint = by_id.get(approval_record.get("parentId"))
+    stage = by_id.get(checkpoint.get("parentId")) if checkpoint else None
+    return (stage or {}).get("name") or approval_record.get("name") or "?"
+
+
+def find_pending_approvals(session: requests.Session, remote: AdoRemote, builds: list) -> list:
+    """(build, timeline records, pending approval records) for each build that's actually
+    blocked on a stage approval, not just still running.
+
+    Only builds with status "inProgress" have a timeline at all — one that's "notStarted"
+    (queued, waiting on agent capacity) or "postponed" gets a 404 from the timeline endpoint,
+    and a Checkpoint.Approval gate can only exist mid-run anyway. A build can also briefly
+    report "inProgress" before its timeline document exists yet -- that 404 (like any other
+    request failure here) fails open rather than crashing the --wait loop over it; the next
+    poll, 30s later, tries again.
+    """
+    result = []
+    for build in builds:
+        if build.get("status") != "inProgress":
+            continue
+        try:
+            records = get_timeline_records(session, remote, build["id"])
+        except requests.RequestException:
+            continue
+        approvals = pending_approval_records(records)
+        if approvals:
+            result.append((build, records, approvals))
+    return result
+
+
 def get_failed_step_logs(session: requests.Session, remote: AdoRemote, build_id: int) -> None:
     r = session.get(f"{_base_url(remote)}/_apis/build/builds/{build_id}/timeline", params={"api-version": "7.1"})
     r.raise_for_status()
@@ -450,7 +508,9 @@ def retry(remote: AdoRemote, pat: str | None, target_branch: str, source_branch:
 def print_build(session: requests.Session, remote: AdoRemote, build: dict) -> None:
     build_id = build["id"]
     status = build.get("status", "unknown")
-    result = build.get("result", "—")
+    # ADO's build resource always includes a `result` key, explicitly `null` (-> None) until
+    # the build completes — `.get(..., "—")`'s default only covers a missing key, not this.
+    result = build.get("result") or "—"
     name = build.get("definition", {}).get("name", "?")
     number = build.get("buildNumber", "?")
     start = build.get("startTime", "?")
@@ -472,21 +532,70 @@ def print_build(session: requests.Session, remote: AdoRemote, build: dict) -> No
         get_failed_step_logs(session, remote, build_id)
 
 
+def exit_if_blocked_on_approval(
+    session: requests.Session,
+    remote: AdoRemote,
+    msg: str,
+    pipeline_builds: list,
+    wait: bool,
+    rerun_cmd: str,
+    show_retry_hint: bool = False,
+) -> None:
+    """If any pipeline is blocked on a stage approval, print details and exit -- it never
+    resolves on its own, so --wait must stop instead of polling forever. If another pipeline
+    has already failed, that's the more urgent, more actionable fact: report it (exit 1, not
+    the approval code) instead of just telling the user to go approve a stage while staying
+    unaware CI already failed elsewhere -- with the same `retry_hint()` a plain failure report
+    would get, when `show_retry_hint` says that applies here (it doesn't for `watch-deploy`,
+    where `bdt pr retry` has nothing to act on -- there's no PR whose checks it retries).
+    A no-op (returns normally) if nothing is blocked.
+    """
+    already_failed = any(b.get("result") == "failed" for b in pipeline_builds)
+    pending_approvals = find_pending_approvals(session, remote, pipeline_builds) if wait else []
+    if not pending_approvals:
+        return
+    print(msg)
+    if already_failed:
+        print("\nNote: another pipeline has already failed — see details below.")
+    print("\nWaiting for approval:")
+    for build, records, approvals in pending_approvals:
+        pipeline_name = build.get("definition", {}).get("name", "?")
+        for rec in approvals:
+            stage = approval_stage_name(records, rec)
+            print(f"  {pipeline_name} #{build['id']}: stage '{stage}' needs approval — {build_web_url(remote, build['id'])}")
+    if already_failed:
+        print("\nDetails:")
+        for b in pipeline_builds:
+            print_build(session, remote, b)
+        if show_retry_hint:
+            print(f"\n{retry_hint()}")
+        sys.exit(1)
+    print(f"\nApprove at the link(s) above, then re-run `{rerun_cmd}`.")
+    sys.exit(EXIT_NEEDS_APPROVAL)
+
+
 def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, source_branch: str | None = None) -> None:
     source_branch = source_branch or current_branch()
     session = requests.Session()
     session.headers.update(auth_header(pat))
 
-    # When waiting, a pipeline's "latest" build may already be a completed run
-    # from before this invocation. Only accept builds newer than whatever was
-    # already there when we started, so --wait actually waits for the build(s)
-    # triggered by the current HEAD instead of immediately reporting a stale result.
-    baseline_ids: dict[int, int] = {}
+    # When waiting, a pipeline's "latest" build may already be a *completed* run from before
+    # this invocation (CI hasn't registered a new build for the current push yet). Only accept
+    # a fresh build in that case, so --wait doesn't immediately report that stale old result.
+    # Only builds already completed at this snapshot go in here -- one that's inProgress here
+    # (whether just-started or long-running) is genuinely the current build for the current
+    # HEAD, not a stale leftover, and must be watched rather than waited past: recording it too
+    # would make the loop below treat "still the same build, same id" as "stale" forever,
+    # since a running build keeps the same id for its whole life -- reintroducing the hang
+    # this function exists to avoid, for any --wait invoked after the build had already started.
+    baseline_completed_ids: dict[int, int] = {}
     if wait:
         pr = get_pr(session, remote, source_branch, target_branch)
         for b in get_builds_for_pr(session, remote, source_branch, pr["pullRequestId"]):
+            if b.get("status") != "completed":
+                continue
             def_id = b.get("definition", {}).get("id")
-            baseline_ids[def_id] = max(baseline_ids.get(def_id, 0), b["id"])
+            baseline_completed_ids[def_id] = max(baseline_completed_ids.get(def_id, 0), b["id"])
 
     draft_notice_shown = False
     last_line = ""
@@ -507,7 +616,7 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
         if builds:
             pipeline_builds = latest_per_pipeline(builds)
             if wait:
-                stale = [b for b in pipeline_builds if b["id"] <= baseline_ids.get(b.get("definition", {}).get("id"), 0)]
+                stale = [b for b in pipeline_builds if b["id"] <= baseline_completed_ids.get(b.get("definition", {}).get("id"), 0)]
                 if stale:
                     msg += " | waiting for new build(s) to start: " + ", ".join(
                         b.get("definition", {}).get("name", "?") for b in stale
@@ -518,9 +627,11 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
                     time.sleep(30)
                     continue
             msg += " | " + ", ".join(
-                f"{b.get('definition', {}).get('name', '?')} #{b['id']} {b.get('status')} ({b.get('result', '—')})"
+                f"{b.get('definition', {}).get('name', '?')} #{b['id']} {b.get('status')} ({b.get('result') or '—'})"
                 for b in pipeline_builds
             )
+
+            exit_if_blocked_on_approval(session, remote, msg, pipeline_builds, wait, "bdt pr status --wait", show_retry_hint=True)
 
             all_done = all(b.get("status") == "completed" for b in pipeline_builds)
             if all_done or not wait:
@@ -586,9 +697,11 @@ def run_watch_deploy(remote: AdoRemote, pat: str | None, target_branch: str, wai
 
         pipeline_builds = latest_per_pipeline(builds)
         msg = f"\rBranch '{target_branch}' | " + ", ".join(
-            f"{b.get('definition', {}).get('name', '?')} #{b['id']} {b.get('status')} ({b.get('result', '—')})"
+            f"{b.get('definition', {}).get('name', '?')} #{b['id']} {b.get('status')} ({b.get('result') or '—'})"
             for b in pipeline_builds
         )
+
+        exit_if_blocked_on_approval(session, remote, msg, pipeline_builds, wait, "bdt pr watch-deploy --wait")
 
         all_done = all(b.get("status") == "completed" for b in pipeline_builds)
         if all_done or not wait:

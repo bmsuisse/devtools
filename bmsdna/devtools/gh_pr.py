@@ -18,7 +18,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from .cli_tools import detect_agent_session, ensure_agent_session_note, is_claude_code
+from .cli_tools import EXIT_NEEDS_APPROVAL, detect_agent_session, ensure_agent_session_note, is_claude_code
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 PR_VIEW_FIELDS = "number,title,baseRefName,mergeable,statusCheckRollup,isDraft"
@@ -78,6 +78,11 @@ def get_pr(gh: str) -> dict:
 def check_bucket(check: dict) -> str:
     if check.get("__typename") == "StatusContext":
         return _STATUS_CONTEXT_BUCKET.get(check.get("state"), "pending")
+    # CheckRun.status "WAITING" is GitHub's distinct state for a run paused on a deployment
+    # protection rule (e.g. a required reviewer on the target environment) — unlike ordinary
+    # "still running" states, nothing here resolves on its own without a human.
+    if check.get("status") == "WAITING":
+        return "waiting_approval"
     if check.get("status") != "COMPLETED":
         return "pending"
     return _CHECK_RUN_BUCKET.get(check.get("conclusion"), "fail")
@@ -224,8 +229,21 @@ def deploy_run_hint(gh: str, target_branch: str) -> str | None:
 
 def print_check(check: dict) -> None:
     bucket = check_bucket(check)
-    icon = {"pass": "✓", "fail": "✗", "cancel": "⊘"}.get(bucket, "…")
+    icon = {"pass": "✓", "fail": "✗", "cancel": "⊘", "waiting_approval": "⏸"}.get(bucket, "…")
     print(f"  [{icon} {bucket.upper()}] {check_label(check)}")
+
+
+def exit_needs_approval(msg: str, item_lines: list[str], rerun_cmd: str) -> None:
+    """Print the "Waiting for approval" report for already-formatted `item_lines` and exit
+    EXIT_NEEDS_APPROVAL -- shared by `run()` and `run_watch_deploy()`, which differ only in
+    what a "blocked" item is (a check vs. a workflow run) and how to label one.
+    """
+    print(msg)
+    print("\nWaiting for approval:")
+    for line in item_lines:
+        print(f"  {line}")
+    print(f"\nApprove at the link(s) above, then re-run `{rerun_cmd}`.")
+    sys.exit(EXIT_NEEDS_APPROVAL)
 
 
 def run(gh: str, wait: bool) -> None:
@@ -271,7 +289,22 @@ def run(gh: str, wait: bool) -> None:
         buckets = [check_bucket(c) for c in checks]
         msg += " | " + ", ".join(f"{check_label(c)}: {check_bucket(c)}" for c in checks)
 
-        if "pending" in buckets and wait:
+        waiting_approval = [c for c, b in zip(checks, buckets) if b == "waiting_approval"]
+        # A failed check anywhere in the PR is reported as such even when another check is
+        # separately waiting on approval — a human shouldn't be sent to go approve a
+        # deployment gate while staying unaware that CI has already failed elsewhere.
+        if wait and waiting_approval and "fail" not in buckets:
+            item_lines = []
+            for c in waiting_approval:
+                details_url = c.get("detailsUrl")
+                suffix = f" — {details_url}" if details_url else ""
+                item_lines.append(f"{check_label(c)} needs a reviewer to approve the deployment{suffix}")
+            exit_needs_approval(msg, item_lines, "bdt pr status --wait")
+
+        # A check waiting on approval never resolves on its own -- if some other still-pending
+        # check only looks pending because it's downstream of that same approval gate, --wait
+        # must not keep polling forever waiting for it to become unstuck.
+        if "pending" in buckets and wait and not waiting_approval:
             if msg != last_line:
                 print(msg, end="", flush=True)
                 last_line = msg
@@ -287,9 +320,10 @@ def run(gh: str, wait: bool) -> None:
             print(f"\n{retry_hint()}")
             sys.exit(1)
         # Only worth suggesting `pr watch-deploy` once this PR's own checks are actually
-        # settled (not still pending because the caller ran without --wait) -- otherwise
-        # it'd claim a merge/deploy is underway before the PR has even finished its own CI.
-        if "pending" not in buckets:
+        # settled (not still pending, and not sitting on an unresolved approval prompt,
+        # because the caller ran without --wait) -- otherwise it'd claim a merge/deploy is
+        # underway before the PR has even finished its own CI.
+        if "pending" not in buckets and "waiting_approval" not in buckets:
             hint = deploy_run_hint(gh, base)
             if hint:
                 print(hint)
@@ -346,7 +380,25 @@ def run_watch_deploy(gh: str, target_branch: str, wait: bool) -> None:
             for r in latest_runs
         )
 
-        all_done = all(r.get("status") == "completed" for r in latest_runs)
+        already_failed = any(r.get("conclusion") == "failure" for r in latest_runs)
+        waiting_approval = [r for r in latest_runs if r.get("status") == "waiting"]
+        # WorkflowRun.status "waiting" is a distinct state for a run paused on a deployment
+        # protection rule (e.g. a required reviewer on the target environment) -- unlike
+        # ordinary in-progress runs, nothing here resolves on its own without a human. A run
+        # that's already failed elsewhere is reported as such (exit 1) instead, same priority
+        # as `run()` -- a human shouldn't be sent to go approve a deployment while staying
+        # unaware CI already failed.
+        if wait and waiting_approval and not already_failed:
+            item_lines = [
+                f"{r.get('workflowName') or r.get('name') or '?'} #{r['databaseId']} needs a reviewer to approve the deployment — {r.get('url', '?')}"
+                for r in waiting_approval
+            ]
+            exit_needs_approval(msg, item_lines, "bdt pr watch-deploy --wait")
+
+        # A run stuck on approval must not be treated as "still in progress" once something
+        # else has already failed -- otherwise --wait would poll forever for a run that can
+        # never resolve on its own instead of reporting the failure.
+        all_done = already_failed or all(r.get("status") == "completed" for r in latest_runs)
         if all_done or not wait:
             print(msg)
             print("\nDetails:")

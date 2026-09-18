@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from bmsdna.devtools.cli_tools import EXIT_NEEDS_APPROVAL
 from bmsdna.devtools.gh_pr import (
     add_attachments,
     add_files,
@@ -65,6 +66,7 @@ FAILED_STATUS_CONTEXT = {"__typename": "StatusContext", "state": "FAILURE", "con
         (COMPLETED_SKIPPED_CHECK_RUN, "skipping"),
         ({"__typename": "CheckRun", "status": "IN_PROGRESS"}, "pending"),
         ({"__typename": "CheckRun", "status": "QUEUED"}, "pending"),
+        ({"__typename": "CheckRun", "status": "WAITING"}, "waiting_approval"),
         ({"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "FAILURE"}, "fail"),
         ({"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "TIMED_OUT"}, "fail"),
         ({"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "CANCELLED"}, "cancel"),
@@ -76,6 +78,56 @@ FAILED_STATUS_CONTEXT = {"__typename": "StatusContext", "state": "FAILURE", "con
 )
 def test_check_bucket(check: dict, expected_bucket: str) -> None:
     assert check_bucket(check) == expected_bucket
+
+
+def test_run_wait_exits_1_not_2_when_a_check_already_failed_and_another_needs_approval(monkeypatch) -> None:
+    """Regression: an already-failed check elsewhere in the PR must still end --wait even when
+    another check is separately waiting on a deployment approval — must report the failure
+    (exit 1), not silently prioritize the approval prompt (exit 2) or hang forever.
+    """
+    pr = {
+        "number": 42,
+        "title": "feat: widgets",
+        "baseRefName": "main",
+        "mergeable": "MERGEABLE",
+        "isDraft": False,
+        "statusCheckRollup": [
+            {"__typename": "CheckRun", "name": "deploy", "status": "WAITING", "workflowName": "Deploy"},
+            {"__typename": "CheckRun", "name": "build", "status": "COMPLETED", "conclusion": "FAILURE", "workflowName": "CI"},
+        ],
+    }
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh: pr)
+
+    with pytest.raises(SystemExit) as exc_info:
+        run("gh", wait=True)
+
+    assert exc_info.value.code == 1
+
+
+def test_run_wait_does_not_hang_when_a_stuck_pending_check_also_exists(monkeypatch) -> None:
+    """Regression: a genuinely-stuck pending check (e.g. downstream of the blocked deployment
+    gate, so it can never leave "pending" on its own) combined with an already-failed check
+    and a waiting-approval check must not send --wait into an infinite poll loop.
+    """
+    pr = {
+        "number": 42,
+        "title": "feat: widgets",
+        "baseRefName": "main",
+        "mergeable": "MERGEABLE",
+        "isDraft": False,
+        "statusCheckRollup": [
+            {"__typename": "CheckRun", "name": "deploy", "status": "WAITING", "workflowName": "Deploy"},
+            {"__typename": "CheckRun", "name": "build", "status": "COMPLETED", "conclusion": "FAILURE", "workflowName": "CI"},
+            {"__typename": "CheckRun", "name": "downstream", "status": "QUEUED", "workflowName": "CI"},
+        ],
+    }
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh: pr)
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.time.sleep", lambda s: pytest.fail("must not poll — would hang --wait forever"))
+
+    with pytest.raises(SystemExit) as exc_info:
+        run("gh", wait=True)
+
+    assert exc_info.value.code == 1
 
 
 def test_check_label_prefixes_workflow_when_distinct() -> None:
@@ -540,6 +592,32 @@ def test_run_watch_deploy_exits_1_on_failed_run(monkeypatch) -> None:
 
     with pytest.raises(SystemExit) as exc_info:
         run_watch_deploy("gh", "main", wait=False)
+
+    assert exc_info.value.code == 1
+
+
+def test_run_watch_deploy_wait_stops_and_reports_pending_approval(monkeypatch, capsys) -> None:
+    """--wait must not poll forever when the only deploy workflow run is paused on a
+    deployment protection rule (status "waiting") -- it never completes on its own.
+    """
+    waiting_run = {**DEPLOY_RUN, "databaseId": 557, "status": "waiting", "conclusion": None}
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", _fake_run_and_view([waiting_run]))
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_watch_deploy("gh", "main", wait=True)
+
+    assert exc_info.value.code == EXIT_NEEDS_APPROVAL
+    assert "needs a reviewer" in capsys.readouterr().out
+
+
+def test_run_watch_deploy_wait_exits_1_not_2_when_another_run_already_failed(monkeypatch) -> None:
+    """A run stuck on approval must not mask an already-failed run in the same batch."""
+    failed_run = {**DEPLOY_RUN, "databaseId": 556, "workflowName": "CI", "conclusion": "failure"}
+    waiting_run = {**DEPLOY_RUN, "databaseId": 557, "workflowName": "Deploy", "status": "waiting", "conclusion": None}
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", _fake_run_and_view([failed_run, waiting_run]))
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_watch_deploy("gh", "main", wait=True)
 
     assert exc_info.value.code == 1
 
