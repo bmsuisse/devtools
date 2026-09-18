@@ -330,12 +330,16 @@ def approval_stage_name(records: list, approval_record: dict) -> str:
 
 
 def find_pending_approvals(session: requests.Session, remote: AdoRemote, builds: list) -> list:
-    """(build, timeline records, pending approval records) for each not-yet-completed build
-    that's actually blocked on a stage approval, not just still running.
+    """(build, timeline records, pending approval records) for each build that's actually
+    blocked on a stage approval, not just still running.
+
+    Only builds with status "inProgress" have a timeline at all — one that's "notStarted"
+    (queued, waiting on agent capacity) or "postponed" gets a 404 from the timeline endpoint,
+    and a Checkpoint.Approval gate can only exist mid-run anyway.
     """
     result = []
     for build in builds:
-        if build.get("status") == "completed":
+        if build.get("status") != "inProgress":
             continue
         records = get_timeline_records(session, remote, build["id"])
         approvals = pending_approval_records(records)
@@ -441,18 +445,30 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
                 for b in pipeline_builds
             )
 
-            if wait:
-                pending_approvals = find_pending_approvals(session, remote, pipeline_builds)
-                if pending_approvals:
-                    print(msg)
-                    print("\nWaiting for approval:")
-                    for build, records, approvals in pending_approvals:
-                        pipeline_name = build.get("definition", {}).get("name", "?")
-                        for rec in approvals:
-                            stage = approval_stage_name(records, rec)
-                            print(f"  {pipeline_name} #{build['id']}: stage '{stage}' needs approval — {build_web_url(remote, build['id'])}")
-                    print("\nApprove at the link(s) above, then re-run `bdt pr status --wait`.")
-                    sys.exit(EXIT_NEEDS_APPROVAL)
+            # A pipeline stuck on approval might never resolve on its own, so it has to end
+            # the --wait loop the same way a completed pipeline would — but if another
+            # pipeline has already failed, that's the more urgent, more actionable fact:
+            # report it (and exit 1, not the approval code) instead of just telling the user
+            # to go approve a stage while staying unaware CI already failed elsewhere.
+            already_failed = any(b.get("result") == "failed" for b in pipeline_builds)
+            pending_approvals = find_pending_approvals(session, remote, pipeline_builds) if wait else []
+            if pending_approvals:
+                print(msg)
+                if already_failed:
+                    print("\nNote: another pipeline in this PR has already failed — see details below.")
+                print("\nWaiting for approval:")
+                for build, records, approvals in pending_approvals:
+                    pipeline_name = build.get("definition", {}).get("name", "?")
+                    for rec in approvals:
+                        stage = approval_stage_name(records, rec)
+                        print(f"  {pipeline_name} #{build['id']}: stage '{stage}' needs approval — {build_web_url(remote, build['id'])}")
+                if already_failed:
+                    print("\nDetails:")
+                    for b in pipeline_builds:
+                        print_build(session, remote, b)
+                    sys.exit(1)
+                print("\nApprove at the link(s) above, then re-run `bdt pr status --wait`.")
+                sys.exit(EXIT_NEEDS_APPROVAL)
 
             all_done = all(b.get("status") == "completed" for b in pipeline_builds)
             if all_done or not wait:

@@ -12,6 +12,7 @@ from bmsdna.devtools.gh_pr import (
     draft_notice,
     merge_conflict_message,
     protection_requires_status_checks,
+    run,
     update,
 )
 
@@ -51,6 +52,30 @@ COMPLETED_SKIPPED_CHECK_RUN = {
 )
 def test_check_bucket(check: dict, expected_bucket: str) -> None:
     assert check_bucket(check) == expected_bucket
+
+
+def test_run_wait_exits_1_not_2_when_a_check_already_failed_and_another_needs_approval(monkeypatch) -> None:
+    """Regression: an already-failed check elsewhere in the PR must still end --wait even when
+    another check is separately waiting on a deployment approval — must report the failure
+    (exit 1), not silently prioritize the approval prompt (exit 2) or hang forever.
+    """
+    pr = {
+        "number": 42,
+        "title": "feat: widgets",
+        "baseRefName": "main",
+        "mergeable": "MERGEABLE",
+        "isDraft": False,
+        "statusCheckRollup": [
+            {"__typename": "CheckRun", "name": "deploy", "status": "WAITING", "workflowName": "Deploy"},
+            {"__typename": "CheckRun", "name": "build", "status": "COMPLETED", "conclusion": "FAILURE", "workflowName": "CI"},
+        ],
+    }
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh: pr)
+
+    with pytest.raises(SystemExit) as exc_info:
+        run("gh", wait=True)
+
+    assert exc_info.value.code == 1
 
 
 def test_check_label_prefixes_workflow_when_distinct() -> None:

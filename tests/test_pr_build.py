@@ -12,6 +12,7 @@ from bmsdna.devtools.pr_build import (
     pending_approval_records,
     policy_configs_include_branch,
     pr_web_url,
+    run,
 )
 
 REPO_ID = "0cd3a822-389e-416e-a4fa-b73f988c2930"
@@ -206,6 +207,19 @@ def test_find_pending_approvals_skips_completed_builds() -> None:
     session.get.assert_not_called()
 
 
+@pytest.mark.parametrize("status", ["notStarted", "postponed", "none"])
+def test_find_pending_approvals_skips_builds_with_no_timeline_yet(status: str) -> None:
+    """A build that hasn't started running yet has no timeline — fetching it would 404."""
+    remote = AdoRemote("myorg", "MyProj", "myrepo")
+    session = MagicMock()
+    session.get.return_value = FakeTimelineResponse([PENDING_APPROVAL_RECORD])
+
+    result = find_pending_approvals(session, remote, [{"id": 1, "status": status}])
+
+    assert result == []
+    session.get.assert_not_called()
+
+
 def test_find_pending_approvals_reports_blocked_build() -> None:
     remote = AdoRemote("myorg", "MyProj", "myrepo")
     session = MagicMock()
@@ -219,3 +233,49 @@ def test_find_pending_approvals_reports_blocked_build() -> None:
     assert found_build is build
     assert approvals == [PENDING_APPROVAL_RECORD]
     assert approval_stage_name(records, approvals[0]) == "Deploy to Production"
+
+
+class _BuildsSequence:
+    """First call (baseline, before the polling loop starts) returns builds one id behind the
+    ones returned on every later call — so `run()`'s staleness check ("only accept builds newer
+    than baseline") doesn't itself treat the loop's builds as stale and keep --wait spinning.
+    """
+
+    def __init__(self, baseline: list, polled: list) -> None:
+        self._baseline = baseline
+        self._polled = polled
+        self._calls = 0
+
+    def __call__(self, *args, **kwargs) -> list:
+        self._calls += 1
+        return self._baseline if self._calls == 1 else self._polled
+
+
+def test_run_wait_exits_1_not_2_when_a_pipeline_already_failed_and_another_needs_approval(monkeypatch) -> None:
+    """Regression: an already-failed pipeline elsewhere in the PR must still end --wait even
+    when another pipeline is separately blocked on approval — and must report the failure
+    (exit 1), not silently prioritize the approval prompt (exit 2) or hang waiting for the
+    blocked pipeline to complete on its own (which it never will without a human).
+    """
+    remote = AdoRemote("myorg", "MyProj", "myrepo")
+    pr = {"pullRequestId": 42, "title": "feat: widgets", "status": "active", "isDraft": False}
+    failed_build = {"id": 100, "status": "completed", "result": "failed", "definition": {"id": 1, "name": "build"}}
+    blocked_build = {"id": 200, "status": "inProgress", "result": None, "definition": {"id": 2, "name": "deploy"}}
+
+    monkeypatch.setattr("bmsdna.devtools.pr_build.current_branch", lambda: "feature-x")
+    monkeypatch.setattr("bmsdna.devtools.pr_build.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda *a, **k: pr)
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_builds_for_pr",
+        _BuildsSequence(baseline=[{**failed_build, "id": 99}, {**blocked_build, "id": 199}], polled=[failed_build, blocked_build]),
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.find_pending_approvals",
+        lambda session, remote, builds: [(blocked_build, [PENDING_APPROVAL_RECORD], [PENDING_APPROVAL_RECORD])],
+    )
+    monkeypatch.setattr("bmsdna.devtools.pr_build.print_build", lambda session, remote, build: None)
+
+    with pytest.raises(SystemExit) as exc_info:
+        run(remote, pat=None, target_branch="main", wait=True)
+
+    assert exc_info.value.code == 1

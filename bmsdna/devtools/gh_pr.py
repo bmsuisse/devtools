@@ -150,7 +150,10 @@ def run(gh: str, wait: bool) -> None:
         buckets = [check_bucket(c) for c in checks]
         msg += " | " + ", ".join(f"{check_label(c)}: {check_bucket(c)}" for c in checks)
 
-        waiting_approval = [c for c, b in zip(checks, buckets) if b == "waiting_approval"] if wait else []
+        # A failed check anywhere in the PR is reported as such even when another check is
+        # separately waiting on approval — a human shouldn't be sent to go approve a
+        # deployment gate while staying unaware that CI has already failed elsewhere.
+        waiting_approval = [c for c, b in zip(checks, buckets) if b == "waiting_approval"] if wait and "fail" not in buckets else []
         if waiting_approval:
             print(msg)
             print("\nWaiting for approval:")
