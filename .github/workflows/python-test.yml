@@ -14,7 +14,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        # pgdevkit (a real dependency as of `bdt cleanup orphaned-dbs`'s
+        # pgdevkit delegation) requires Python >=3.14.
+        python-version: ["3.14"]
 
     steps:
       - uses: actions/checkout@v4

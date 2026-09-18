@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
 
-from .cli_tools import EXIT_NEEDS_APPROVAL, is_claude_code
+from .cli_tools import EXIT_NEEDS_APPROVAL, detect_agent_session, ensure_agent_session_note, is_claude_code
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 PR_VIEW_FIELDS = "number,title,baseRefName,mergeable,statusCheckRollup,isDraft"
@@ -52,6 +53,12 @@ _STATUS_CONTEXT_BUCKET = {
     "ERROR": "fail",
     "FAILURE": "fail",
 }
+
+
+# A CheckRun's detailsUrl (e.g. https://github.com/{owner}/{repo}/actions/runs/{run_id}/job/{job_id})
+# is the only place `gh pr view`'s statusCheckRollup exposes the backing workflow run id --
+# there's no dedicated "runId" field on the check itself.
+_RUN_ID_RE = re.compile(r"/actions/runs/(\d+)")
 
 
 def _run_gh_json(gh: str, args: list[str]) -> dict:
@@ -107,10 +114,136 @@ def draft_notice(pr: dict) -> str | None:
     return f"{pr_ref} To publish, use command: `bdt pr publish` (but do an automatic code review first)"
 
 
+def retry_hint() -> str:
+    """The command to tell someone to run after a failed check, to retry just its failed
+    job(s) instead of a full rerun of the whole workflow run.
+    """
+    if is_claude_code():
+        return "Run `bdt pr retry` to retry just the failed job(s)."
+    return "Hint: to retry just the failed job(s) instead of a full rerun, run: `bdt pr retry`"
+
+
+def failed_run_ids(checks: list[dict]) -> list[int]:
+    """Distinct GitHub Actions run IDs backing a failing check in `checks`, in first-seen
+    order. Only `CheckRun` entries (GitHub Actions) carry a `detailsUrl` pointing at a
+    run; legacy `StatusContext` entries (e.g. an external CI reporting a commit status)
+    have nothing `gh run rerun` can act on and are silently skipped.
+    """
+    ids: list[int] = []
+    seen: set[int] = set()
+    for check in checks:
+        if check_bucket(check) != "fail":
+            continue
+        match = _RUN_ID_RE.search(check.get("detailsUrl") or "")
+        if not match:
+            continue
+        run_id = int(match.group(1))
+        if run_id not in seen:
+            seen.add(run_id)
+            ids.append(run_id)
+    return ids
+
+
+def retry(gh: str) -> None:
+    """Rerun only the failed job(s) (and whatever depends on them) of the current
+    branch's PR's failing workflow run(s), via `gh run rerun --failed` -- not a full
+    rerun of the whole run.
+    """
+    pr = get_pr(gh)
+    run_ids = failed_run_ids(pr.get("statusCheckRollup") or [])
+    if not run_ids:
+        sys.exit("No failed GitHub Actions run found on the PR to retry.")
+
+    # Keep going through every failing run even if one rerun call fails -- a transient
+    # error on one run (e.g. "run is already in progress") shouldn't abandon retrying
+    # the others, and the failure summary at the end still surfaces it.
+    errors: list[str] = []
+    for run_id in run_ids:
+        r = subprocess.run([gh, "run", "rerun", str(run_id), "--failed"], capture_output=True, encoding="utf-8")
+        if r.returncode != 0:
+            errors.append(f"run {run_id}: {(r.stderr or r.stdout).strip() or 'failed'}")
+            continue
+        print(f"Reran failed job(s) of run {run_id}")
+
+    if errors:
+        sys.exit("Failed to retry: " + "; ".join(errors))
+
+    print("\nRun `bdt pr status --wait` to watch the retry.")
+
+
+def get_workflow_runs_for_branch(gh: str, branch: str, limit: int = 5) -> list[dict]:
+    """Workflow runs triggered directly by a push to `branch` -- e.g. a post-merge/deployment
+    workflow that only runs on the target branch once a PR merges into it -- as opposed to a
+    run some open PR's `pull_request` trigger produced. `event=push` is what distinguishes the
+    two on the same branch name.
+    """
+    r = subprocess.run(
+        [
+            gh, "run", "list",
+            "--branch", branch,
+            "--event", "push",
+            "--limit", str(limit),
+            "--json", "databaseId,name,workflowName,status,conclusion,url,headBranch",
+        ],
+        capture_output=True,
+        encoding="utf-8",
+    )
+    if r.returncode != 0:
+        sys.exit((r.stderr or r.stdout).strip() or "`gh run list` failed")
+    return json.loads(r.stdout)
+
+
+def latest_per_workflow(runs: list[dict]) -> list[dict]:
+    """Reduce a workflow run list to the single latest run per workflow."""
+    latest: dict = {}
+    for r in runs:
+        name = r.get("workflowName") or r.get("name")
+        if name not in latest or r["databaseId"] > latest[name]["databaseId"]:
+            latest[name] = r
+    return sorted(latest.values(), key=lambda r: r["databaseId"], reverse=True)
+
+
+def deploy_run_hint(gh: str, target_branch: str) -> str | None:
+    """Best-effort: None unless a workflow run has already been triggered directly by a push to
+    `target_branch` (as opposed to this PR's own checks) -- e.g. a post-merge deployment
+    workflow. When one exists, a hint suggesting `bdt pr watch-deploy` to watch it.
+
+    Only used to decide whether to print this hint after `bdt pr status` reports success --
+    failures here (auth, permissions, an old `gh` without `run list --json`, malformed output,
+    ...) fail open (return None) rather than blocking or crashing `pr status`, same as
+    `has_build_policy`.
+    """
+    try:
+        runs = get_workflow_runs_for_branch(gh, target_branch, limit=1)
+    except (SystemExit, json.JSONDecodeError):
+        return None
+    if not runs:
+        return None
+    run = runs[0]
+    name = run.get("workflowName") or run.get("name") or "?"
+    return (
+        f"\nA workflow run has already been triggered on '{target_branch}' ({name} #{run.get('databaseId')}) -- "
+        f"probably a post-merge deployment. Run `bdt pr watch-deploy --target-branch {target_branch}` to watch it."
+    )
+
+
 def print_check(check: dict) -> None:
     bucket = check_bucket(check)
-    icon = {"pass": "✓", "fail": "✗", "cancel": "⊘"}.get(bucket, "…")
+    icon = {"pass": "✓", "fail": "✗", "cancel": "⊘", "waiting_approval": "⏸"}.get(bucket, "…")
     print(f"  [{icon} {bucket.upper()}] {check_label(check)}")
+
+
+def exit_needs_approval(msg: str, item_lines: list[str], rerun_cmd: str) -> None:
+    """Print the "Waiting for approval" report for already-formatted `item_lines` and exit
+    EXIT_NEEDS_APPROVAL -- shared by `run()` and `run_watch_deploy()`, which differ only in
+    what a "blocked" item is (a check vs. a workflow run) and how to label one.
+    """
+    print(msg)
+    print("\nWaiting for approval:")
+    for line in item_lines:
+        print(f"  {line}")
+    print(f"\nApprove at the link(s) above, then re-run `{rerun_cmd}`.")
+    sys.exit(EXIT_NEEDS_APPROVAL)
 
 
 def run(gh: str, wait: bool) -> None:
@@ -145,26 +278,33 @@ def run(gh: str, wait: bool) -> None:
         checks = pr.get("statusCheckRollup") or []
         if not checks:
             print(msg + " | no checks found.")
+            # No PR-triggered checks at all is itself a settled state (e.g. this repo's
+            # only workflow triggers on a push to the target branch, not on `pull_request`)
+            # -- exactly when a deploy-build hint is most useful, so still check for one.
+            hint = deploy_run_hint(gh, base)
+            if hint:
+                print(hint)
             return
 
         buckets = [check_bucket(c) for c in checks]
         msg += " | " + ", ".join(f"{check_label(c)}: {check_bucket(c)}" for c in checks)
 
+        waiting_approval = [c for c, b in zip(checks, buckets) if b == "waiting_approval"]
         # A failed check anywhere in the PR is reported as such even when another check is
         # separately waiting on approval — a human shouldn't be sent to go approve a
         # deployment gate while staying unaware that CI has already failed elsewhere.
-        waiting_approval = [c for c, b in zip(checks, buckets) if b == "waiting_approval"] if wait and "fail" not in buckets else []
-        if waiting_approval:
-            print(msg)
-            print("\nWaiting for approval:")
+        if wait and waiting_approval and "fail" not in buckets:
+            item_lines = []
             for c in waiting_approval:
                 details_url = c.get("detailsUrl")
                 suffix = f" — {details_url}" if details_url else ""
-                print(f"  {check_label(c)} needs a reviewer to approve the deployment{suffix}")
-            print("\nApprove at the link(s) above, then re-run `bdt pr status --wait`.")
-            sys.exit(EXIT_NEEDS_APPROVAL)
+                item_lines.append(f"{check_label(c)} needs a reviewer to approve the deployment{suffix}")
+            exit_needs_approval(msg, item_lines, "bdt pr status --wait")
 
-        if "pending" in buckets and wait:
+        # A check waiting on approval never resolves on its own -- if some other still-pending
+        # check only looks pending because it's downstream of that same approval gate, --wait
+        # must not keep polling forever waiting for it to become unstuck.
+        if "pending" in buckets and wait and not waiting_approval:
             if msg != last_line:
                 print(msg, end="", flush=True)
                 last_line = msg
@@ -177,8 +317,105 @@ def run(gh: str, wait: bool) -> None:
             print_check(c)
 
         if "fail" in buckets:
+            print(f"\n{retry_hint()}")
             sys.exit(1)
+        # Only worth suggesting `pr watch-deploy` once this PR's own checks are actually
+        # settled (not still pending, and not sitting on an unresolved approval prompt,
+        # because the caller ran without --wait) -- otherwise it'd claim a merge/deploy is
+        # underway before the PR has even finished its own CI.
+        if "pending" not in buckets and "waiting_approval" not in buckets:
+            hint = deploy_run_hint(gh, base)
+            if hint:
+                print(hint)
         return
+
+
+def print_failed_step_logs(gh: str, run_id: int) -> None:
+    r = subprocess.run([gh, "run", "view", str(run_id), "--log-failed"], capture_output=True, encoding="utf-8")
+    output = (r.stdout or "").strip()
+    if r.returncode != 0 or not output:
+        print("  (no failed steps with logs)")
+        return
+    print(f"\n--- Failed steps (run {run_id}) ---")
+    print(output)
+
+
+def print_run(gh: str, run: dict) -> None:
+    run_id: int = run["databaseId"]
+    status = run.get("status", "unknown")
+    conclusion = run.get("conclusion") or "—"
+    name = run.get("workflowName") or run.get("name", "?")
+    url = run.get("url", "?")
+
+    icon = {"success": "✓", "failure": "✗", "cancelled": "⊘"}.get(conclusion, "…")
+
+    print(f"\n{'-' * 60}")
+    print(f"Run #{run_id}  [{icon} {conclusion.upper()}]")
+    print(f"  Workflow : {name}")
+    print(f"  Status   : {status}")
+    print(f"  URL      : {url}")
+
+    if status == "completed" and conclusion == "failure":
+        print_failed_step_logs(gh, run_id)
+
+
+def run_watch_deploy(gh: str, target_branch: str, wait: bool) -> None:
+    """Watch the most recent workflow run(s) triggered directly by a push to `target_branch`
+    -- e.g. a post-merge workflow that only runs on the target branch once a PR merges into
+    it, and usually does the actual deployment -- until they complete.
+
+    Mirrors `run()`'s polling/reporting shape, but looks at runs tied to the branch's push
+    event via `get_workflow_runs_for_branch` rather than a PR's `statusCheckRollup`.
+    """
+    last_line = ""
+    while True:
+        runs = get_workflow_runs_for_branch(gh, target_branch)
+        if not runs:
+            print(f"No workflow runs found on '{target_branch}' triggered by a push.")
+            return
+
+        latest_runs = latest_per_workflow(runs)
+        msg = f"\rBranch '{target_branch}' | " + ", ".join(
+            f"{(r.get('workflowName') or r.get('name'))} #{r['databaseId']} {r.get('status')} ({r.get('conclusion') or '—'})"
+            for r in latest_runs
+        )
+
+        already_failed = any(r.get("conclusion") == "failure" for r in latest_runs)
+        waiting_approval = [r for r in latest_runs if r.get("status") == "waiting"]
+        # WorkflowRun.status "waiting" is a distinct state for a run paused on a deployment
+        # protection rule (e.g. a required reviewer on the target environment) -- unlike
+        # ordinary in-progress runs, nothing here resolves on its own without a human. A run
+        # that's already failed elsewhere is reported as such (exit 1) instead, same priority
+        # as `run()` -- a human shouldn't be sent to go approve a deployment while staying
+        # unaware CI already failed.
+        if wait and waiting_approval and not already_failed:
+            item_lines = [
+                f"{r.get('workflowName') or r.get('name') or '?'} #{r['databaseId']} needs a reviewer to approve the deployment — {r.get('url', '?')}"
+                for r in waiting_approval
+            ]
+            exit_needs_approval(msg, item_lines, "bdt pr watch-deploy --wait")
+
+        # A run stuck on approval must not be treated as "still in progress" once something
+        # else has already failed -- otherwise --wait would poll forever for a run that can
+        # never resolve on its own instead of reporting the failure.
+        all_done = already_failed or all(r.get("status") == "completed" for r in latest_runs)
+        if all_done or not wait:
+            print(msg)
+            print("\nDetails:")
+            for r in latest_runs:
+                print_run(gh, r)
+
+            if not all_done and not wait:
+                print("\nTip: Use --wait to poll until all workflows are completed.")
+
+            if any(r.get("conclusion") == "failure" for r in latest_runs):
+                sys.exit(1)
+            return
+
+        if msg != last_line:
+            print(msg, end="", flush=True)
+            last_line = msg
+        time.sleep(30)
 
 
 def create(gh: str, target: str, extra_args: list[str], draft: bool = False, labels: list[str] | None = None) -> tuple[int, str | None]:
@@ -206,7 +443,32 @@ def create(gh: str, target: str, extra_args: list[str], draft: bool = False, lab
         print(r.stderr.strip(), file=sys.stderr)
     if r.returncode != 0:
         return r.returncode, None
+    ensure_session_note(gh)
     return r.returncode, r.stdout.strip() or None
+
+
+def ensure_session_note(gh: str) -> None:
+    """Make sure the current branch's PR body records the running agent's session, if any
+    (see `ensure_agent_session_note`) -- e.g. right after `create()`, whose body/title
+    come from `--fill`/`extra_args` rather than a value this module builds itself, so
+    there's nothing to pass the note through beforehand.
+
+    Best-effort: swallows failures (a stale view, a rejected edit, ...) rather than
+    turning a successful `pr create`/whatever else called this into a failure over a
+    step that's purely nice-to-have. A no-op (no extra `gh` calls at all) when no
+    agent is detected, which is the common case running outside one.
+    """
+    if detect_agent_session() is None:
+        return
+    try:
+        pr = _run_gh_json(gh, ["pr", "view", "--json", "number,title,body"])
+        body = pr.get("body") or ""
+        noted = ensure_agent_session_note(body, also_check=pr.get("title"))
+        if noted != body:
+            r = subprocess.run([gh, "pr", "edit", str(pr["number"]), "--body", noted or ""], capture_output=True, encoding="utf-8")
+            r.check_returncode()
+    except (subprocess.SubprocessError, SystemExit, json.JSONDecodeError, OSError):
+        pass
 
 
 def publish(gh: str) -> None:
@@ -333,7 +595,7 @@ def update(
     file_paths: list[str] | None = None,
 ) -> None:
     """Update a PR's title and/or body, optionally appending screenshots/files to the body."""
-    pr = _run_gh_json(gh, ["pr", "view", "--json", "number,body"])
+    pr = _run_gh_json(gh, ["pr", "view", "--json", "number,title,body"])
     args = [gh, "pr", "edit", str(pr["number"])]
     if title:
         args += ["--title", title]
@@ -343,6 +605,7 @@ def update(
             new_body = build_screenshots_section(new_body, _screenshot_images(owner, repo, branch, screenshot_paths))
         if file_paths:
             new_body = build_attachments_section(new_body, _file_links(owner, repo, branch, file_paths))
+        new_body = ensure_agent_session_note(new_body, also_check=title or pr.get("title")) or ""
         args += ["--body", new_body]
     if len(args) == 3:
         return
@@ -365,7 +628,7 @@ def comment_with_screenshots(
     file_paths = file_paths or []
     images = _screenshot_images(owner, repo, branch, screenshot_paths) if screenshot_paths else []
     files = _file_links(owner, repo, branch, file_paths) if file_paths else []
-    content = build_comment_content(message, images, files)
+    content = ensure_agent_session_note(build_comment_content(message, images, files)) or ""
     r = subprocess.run([gh, "pr", "comment", "--body", content], capture_output=True, encoding="utf-8")
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or "`gh pr comment` failed")

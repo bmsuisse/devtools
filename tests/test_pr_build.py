@@ -1,7 +1,9 @@
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 
+from bmsdna.devtools.cli_tools import EXIT_NEEDS_APPROVAL
 from bmsdna.devtools.gitrepo import AdoRemote
 from bmsdna.devtools.pr_build import (
     approval_stage_name,
@@ -12,6 +14,7 @@ from bmsdna.devtools.pr_build import (
     pending_approval_records,
     policy_configs_include_branch,
     pr_web_url,
+    retry_hint,
     run,
 )
 
@@ -95,6 +98,18 @@ def test_draft_notice_tells_claude_code_to_review_first(monkeypatch) -> None:
     assert "PR #42" in msg
     assert "/code-review" in msg
     assert "bdt pr publish" in msg
+
+
+def test_retry_hint_names_the_command(monkeypatch) -> None:
+    monkeypatch.delenv("CLAUDECODE", raising=False)
+    msg = retry_hint()
+    assert "bdt pr retry" in msg
+
+
+def test_retry_hint_tells_claude_code_to_run_it(monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDECODE", "1")
+    msg = retry_hint()
+    assert "bdt pr retry" in msg
 
 
 def test_policy_configs_include_branch_matches_build_policy_on_scoped_branch() -> None:
@@ -235,6 +250,20 @@ def test_find_pending_approvals_reports_blocked_build() -> None:
     assert approval_stage_name(records, approvals[0]) == "Deploy to Production"
 
 
+def test_find_pending_approvals_fails_open_on_404_from_timeline_not_ready_yet() -> None:
+    """A build can briefly report "inProgress" before Azure DevOps has created its timeline
+    document yet -- that request failure must not crash --wait, just skip this build for now.
+    """
+    remote = AdoRemote("myorg", "MyProj", "myrepo")
+    session = MagicMock()
+    session.get.side_effect = requests.HTTPError("404 Not Found")
+
+    build = {"id": 1, "status": "inProgress", "definition": {"name": "deploy"}}
+    result = find_pending_approvals(session, remote, [build])
+
+    assert result == []
+
+
 class _BuildsSequence:
     """First call (baseline, before the polling loop starts) returns builds one id behind the
     ones returned on every later call — so `run()`'s staleness check ("only accept builds newer
@@ -251,7 +280,35 @@ class _BuildsSequence:
         return self._baseline if self._calls == 1 else self._polled
 
 
-def test_run_wait_exits_1_not_2_when_a_pipeline_already_failed_and_another_needs_approval(monkeypatch) -> None:
+def test_run_wait_detects_approval_when_build_was_already_in_progress_at_invocation(monkeypatch) -> None:
+    """Regression: if the pipeline was already inProgress (and blocked on approval) *before*
+    `--wait` was invoked -- not just-started -- the baseline snapshot sees that same build,
+    still inProgress, and must not treat it as "stale, waiting for a new build to start": a
+    running build keeps the same id for its whole life, so that would make the staleness gate
+    block forever, never reaching the approval check at all.
+    """
+    remote = AdoRemote("myorg", "MyProj", "myrepo")
+    pr = {"pullRequestId": 42, "title": "feat: widgets", "status": "active", "isDraft": False}
+    blocked_build = {"id": 200, "status": "inProgress", "result": None, "definition": {"id": 2, "name": "deploy"}}
+
+    monkeypatch.setattr("bmsdna.devtools.pr_build.current_branch", lambda: "feature-x")
+    monkeypatch.setattr("bmsdna.devtools.pr_build.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda *a, **k: pr)
+    # Same build, same id, on every call -- baseline capture and every poll iteration alike.
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_builds_for_pr", lambda *a, **k: [blocked_build])
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.find_pending_approvals",
+        lambda session, remote, builds: [(blocked_build, [PENDING_APPROVAL_RECORD], [PENDING_APPROVAL_RECORD])],
+    )
+    monkeypatch.setattr("bmsdna.devtools.pr_build.time.sleep", lambda s: pytest.fail("must not poll — would hang --wait forever"))
+
+    with pytest.raises(SystemExit) as exc_info:
+        run(remote, pat=None, target_branch="main", wait=True)
+
+    assert exc_info.value.code == EXIT_NEEDS_APPROVAL
+
+
+def test_run_wait_exits_1_not_2_when_a_pipeline_already_failed_and_another_needs_approval(monkeypatch, capsys) -> None:
     """Regression: an already-failed pipeline elsewhere in the PR must still end --wait even
     when another pipeline is separately blocked on approval — and must report the failure
     (exit 1), not silently prioritize the approval prompt (exit 2) or hang waiting for the
@@ -279,3 +336,4 @@ def test_run_wait_exits_1_not_2_when_a_pipeline_already_failed_and_another_needs
         run(remote, pat=None, target_branch="main", wait=True)
 
     assert exc_info.value.code == 1
+    assert "bdt pr retry" in capsys.readouterr().out

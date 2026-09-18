@@ -10,14 +10,19 @@ packages = ["bmsdna"]
 
 [project]
 name = "bmsdna-devtools"
-version = "0.14.0"
+version = "0.17.0"
 description = "Shared Azure DevOps / GitHub / git / Azure Monitor developer tooling for BMS projects"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.14"  # pgdevkit>=0.7.1 requires 3.14; was >=3.11 before adding it as a dependency
 dependencies = [
     "requests>=2.32.0",
     "typer>=0.26.7",
     "rich>=13.0.0",
+    # [db] extra: pgdevkit.testdb unconditionally imports pgdevkit.db.complex_types
+    # (schema-apply machinery), which needs psycopg-pool/pydantic -- plain
+    # `pgdevkit` alone fails to import pgdevkit.testdb. Possibly worth reporting
+    # upstream, but harmless to depend on here either way.
+    "pgdevkit[db]>=0.7.1",
 ]
 
 [project.scripts]

@@ -11,7 +11,7 @@ from urllib.parse import quote
 import requests
 
 from .ado_auth import auth_header
-from .cli_tools import EXIT_NEEDS_APPROVAL, is_claude_code
+from .cli_tools import EXIT_NEEDS_APPROVAL, detect_agent_session, ensure_agent_session_note, is_claude_code
 from .gitrepo import AdoRemote, current_branch
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
@@ -119,6 +119,15 @@ def draft_notice(pr: dict) -> str | None:
     return f"{pr_ref} To publish, use command: `bdt pr publish` (but do an automatic code review first)"
 
 
+def retry_hint() -> str:
+    """The command to tell someone to run after a failed build, to retry just its failed
+    stage(s)/job(s) instead of queuing a whole new build.
+    """
+    if is_claude_code():
+        return "Run `bdt pr retry` to retry just the failed stage(s)/job(s)."
+    return "Hint: to retry just the failed stage(s)/job(s) instead of queuing a full rerun, run: `bdt pr retry`"
+
+
 def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, target_branch: str) -> dict:
     url = f"{_base_url(remote)}/_apis/git/repositories/{remote.repo}/pullrequests"
     for status in ["active", "completed"]:
@@ -190,9 +199,11 @@ def add_attachments(
     pr: dict,
     screenshot_paths: list[str] | None = None,
     file_paths: list[str] | None = None,
-) -> None:
+) -> dict:
     """Upload screenshots/files as PR attachments and append them to the PR description in a single
-    patch -- whether one or both kinds are given.
+    patch -- whether one or both kinds are given. Returns `pr` with its description updated to match,
+    so a caller chaining another description-touching step (e.g. `ensure_session_note`) right after
+    doesn't need to re-fetch the PR just to see this change.
     """
     screenshot_paths = screenshot_paths or []
     file_paths = file_paths or []
@@ -204,6 +215,31 @@ def add_attachments(
         new_description = build_attachments_section(new_description, _upload_attachments(session, remote, pr_id, file_paths))
     _patch_pr(session, remote, pr_id, {"description": new_description})
     print(f"Attached {len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s) to PR #{pr_id}")
+    return {**pr, "description": new_description}
+
+
+def ensure_session_note(session: requests.Session, remote: AdoRemote, pr: dict) -> None:
+    """Make sure the PR description records the running agent's session, if any (see
+    `ensure_agent_session_note`) -- e.g. right after `az repos pr create`, whose
+    description usually comes from the source commit rather than a value this module
+    builds itself, so there's nothing to pass the note through beforehand.
+
+    Best-effort: swallows failures (auth, permissions, a stale `pr`, ...) rather than
+    turning a successful PR creation into a failure over a step that's purely
+    nice-to-have. A no-op when no agent is detected, which is the common case
+    running outside one -- callers should still avoid fetching `pr` at all in that
+    case (see `detect_agent_session`) rather than relying on this to skip the patch.
+    """
+    if detect_agent_session() is None:
+        return
+    try:
+        pr_id = pr["pullRequestId"]
+        body = pr.get("description") or ""
+        noted = ensure_agent_session_note(body, also_check=pr.get("title"))
+        if noted != body:
+            _patch_pr(session, remote, pr_id, {"description": noted})
+    except (requests.RequestException, SystemExit, KeyError):
+        pass
 
 
 def add_screenshots(session: requests.Session, remote: AdoRemote, pr: dict, screenshot_paths: list[str]) -> None:
@@ -236,7 +272,7 @@ def update(
             new_description = build_screenshots_section(new_description, _upload_attachments(session, remote, pr_id, screenshot_paths))
         if file_paths:
             new_description = build_attachments_section(new_description, _upload_attachments(session, remote, pr_id, file_paths))
-        fields["description"] = new_description
+        fields["description"] = ensure_agent_session_note(new_description, also_check=title or pr.get("title"))
     if not fields:
         return
     _patch_pr(session, remote, pr_id, fields)
@@ -273,7 +309,7 @@ def comment_with_screenshots(
     file_paths = file_paths or []
     images = _upload_attachments(session, remote, pr_id, screenshot_paths) if screenshot_paths else []
     files = _upload_attachments(session, remote, pr_id, file_paths) if file_paths else []
-    content = build_comment_content(message, images, files)
+    content = ensure_agent_session_note(build_comment_content(message, images, files)) or ""
     add_comment(session, remote, pr_id, content)
     print(f"Added comment ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) to PR #{pr_id}")
 
@@ -289,6 +325,43 @@ def get_builds_for_pr(session: requests.Session, remote: AdoRemote, source_branc
     if builds:
         builds.sort(key=lambda b: b["id"], reverse=True)
     return builds
+
+
+def get_builds_for_branch(session: requests.Session, remote: AdoRemote, branch: str, top: int = 5) -> list:
+    """Builds triggered directly on `branch` -- e.g. a post-merge/deployment pipeline that
+    only runs on the target branch once a PR merges into it -- as opposed to
+    `get_builds_for_pr`, which looks at the PR's own merge/source refs. Same shape of call,
+    just a different `branchName` ref.
+    """
+    url = f"{_base_url(remote)}/_apis/build/builds"
+    r = session.get(url, params={"branchName": f"refs/heads/{branch}", "$top": top, "api-version": "7.1"})
+    r.raise_for_status()
+    builds = r.json().get("value", [])
+    builds.sort(key=lambda b: b["id"], reverse=True)
+    return builds
+
+
+def deploy_build_hint(session: requests.Session, remote: AdoRemote, target_branch: str) -> str | None:
+    """Best-effort: None unless a build has already been triggered directly on `target_branch`
+    (as opposed to this PR's own merge/source refs) -- e.g. a post-merge pipeline that deploys.
+    When one exists, a hint suggesting `bdt pr watch-deploy` to watch it.
+
+    Only used to decide whether to print this hint after `bdt pr status` reports success --
+    failures here (auth, permissions, network) fail open (return None) rather than blocking
+    or crashing `pr status` over a step that's purely nice-to-have, same as `has_build_policy`.
+    """
+    try:
+        builds = get_builds_for_branch(session, remote, target_branch, top=1)
+    except requests.RequestException:
+        return None
+    if not builds:
+        return None
+    build = builds[0]
+    name = build.get("definition", {}).get("name", "?")
+    return (
+        f"\nA build has already been triggered on '{target_branch}' ({name} #{build['id']}) -- "
+        f"probably a post-merge deployment. Run `bdt pr watch-deploy --target-branch {target_branch}` to watch it."
+    )
 
 
 def latest_per_pipeline(builds: list) -> list:
@@ -335,13 +408,19 @@ def find_pending_approvals(session: requests.Session, remote: AdoRemote, builds:
 
     Only builds with status "inProgress" have a timeline at all — one that's "notStarted"
     (queued, waiting on agent capacity) or "postponed" gets a 404 from the timeline endpoint,
-    and a Checkpoint.Approval gate can only exist mid-run anyway.
+    and a Checkpoint.Approval gate can only exist mid-run anyway. A build can also briefly
+    report "inProgress" before its timeline document exists yet -- that 404 (like any other
+    request failure here) fails open rather than crashing the --wait loop over it; the next
+    poll, 30s later, tries again.
     """
     result = []
     for build in builds:
         if build.get("status") != "inProgress":
             continue
-        records = get_timeline_records(session, remote, build["id"])
+        try:
+            records = get_timeline_records(session, remote, build["id"])
+        except requests.RequestException:
+            continue
         approvals = pending_approval_records(records)
         if approvals:
             result.append((build, records, approvals))
@@ -370,10 +449,68 @@ def get_failed_step_logs(session: requests.Session, remote: AdoRemote, build_id:
             print(f"    {TIMESTAMP_RE.sub('', line)}")
 
 
+def retry_failed_build(session: requests.Session, remote: AdoRemote, build_id: int) -> None:
+    """Retry only the failed stage(s)/job(s) of a completed build, in place -- distinct
+    from queuing a brand new build via `Builds - Queue`.
+
+    Uses the `retry=true` query parameter documented on Azure DevOps' "Builds - Update
+    Build" REST API (PATCH .../_apis/build/builds/{buildId}?retry=true&api-version=7.1
+    -- https://learn.microsoft.com/rest/api/azure/devops/build/builds/update-build).
+    Azure DevOps reschedules whichever stages/jobs failed on the previous attempt (plus
+    anything depending on them); stages that already succeeded are left alone. Needs a
+    PAT (or `az` login) with build_execute scope, same as everything else in this module.
+    """
+    r = session.patch(
+        f"{_base_url(remote)}/_apis/build/builds/{build_id}",
+        params={"retry": "true", "api-version": "7.1"},
+        json={},
+    )
+    r.raise_for_status()
+
+
+def retry(remote: AdoRemote, pat: str | None, target_branch: str, source_branch: str | None = None) -> None:
+    """Retry the failed stage(s)/job(s) of the most recent build(s) for the PR opened
+    from the current branch -- one retry call per pipeline that failed, without queuing
+    any brand new builds.
+    """
+    source_branch = source_branch or current_branch()
+    session = requests.Session()
+    session.headers.update(auth_header(pat))
+
+    pr = get_pr(session, remote, source_branch, target_branch)
+    builds = get_builds_for_pr(session, remote, source_branch, pr["pullRequestId"])
+    if not builds:
+        sys.exit(f"No builds found for PR #{pr['pullRequestId']} -- nothing to retry.")
+
+    failed = [b for b in latest_per_pipeline(builds) if b.get("status") == "completed" and b.get("result") == "failed"]
+    if not failed:
+        sys.exit(f"No failed builds to retry for PR #{pr['pullRequestId']}.")
+
+    # Keep going through every failed pipeline even if one retry call fails -- a
+    # transient error retrying one build shouldn't abandon retrying the others, and
+    # the failure summary at the end still surfaces it.
+    errors: list[str] = []
+    for b in failed:
+        name = b.get("definition", {}).get("name", "?")
+        try:
+            retry_failed_build(session, remote, b["id"])
+        except requests.RequestException as e:
+            errors.append(f"build #{b['id']} ({name}): {e}")
+            continue
+        print(f"Retrying failed stage(s)/job(s) of build #{b['id']} ({name})")
+
+    if errors:
+        sys.exit("Failed to retry: " + "; ".join(errors))
+
+    print("\nRun `bdt pr status --wait` to watch the retry.")
+
+
 def print_build(session: requests.Session, remote: AdoRemote, build: dict) -> None:
     build_id = build["id"]
     status = build.get("status", "unknown")
-    result = build.get("result", "—")
+    # ADO's build resource always includes a `result` key, explicitly `null` (-> None) until
+    # the build completes — `.get(..., "—")`'s default only covers a missing key, not this.
+    result = build.get("result") or "—"
     name = build.get("definition", {}).get("name", "?")
     number = build.get("buildNumber", "?")
     start = build.get("startTime", "?")
@@ -395,21 +532,70 @@ def print_build(session: requests.Session, remote: AdoRemote, build: dict) -> No
         get_failed_step_logs(session, remote, build_id)
 
 
+def exit_if_blocked_on_approval(
+    session: requests.Session,
+    remote: AdoRemote,
+    msg: str,
+    pipeline_builds: list,
+    wait: bool,
+    rerun_cmd: str,
+    show_retry_hint: bool = False,
+) -> None:
+    """If any pipeline is blocked on a stage approval, print details and exit -- it never
+    resolves on its own, so --wait must stop instead of polling forever. If another pipeline
+    has already failed, that's the more urgent, more actionable fact: report it (exit 1, not
+    the approval code) instead of just telling the user to go approve a stage while staying
+    unaware CI already failed elsewhere -- with the same `retry_hint()` a plain failure report
+    would get, when `show_retry_hint` says that applies here (it doesn't for `watch-deploy`,
+    where `bdt pr retry` has nothing to act on -- there's no PR whose checks it retries).
+    A no-op (returns normally) if nothing is blocked.
+    """
+    already_failed = any(b.get("result") == "failed" for b in pipeline_builds)
+    pending_approvals = find_pending_approvals(session, remote, pipeline_builds) if wait else []
+    if not pending_approvals:
+        return
+    print(msg)
+    if already_failed:
+        print("\nNote: another pipeline has already failed — see details below.")
+    print("\nWaiting for approval:")
+    for build, records, approvals in pending_approvals:
+        pipeline_name = build.get("definition", {}).get("name", "?")
+        for rec in approvals:
+            stage = approval_stage_name(records, rec)
+            print(f"  {pipeline_name} #{build['id']}: stage '{stage}' needs approval — {build_web_url(remote, build['id'])}")
+    if already_failed:
+        print("\nDetails:")
+        for b in pipeline_builds:
+            print_build(session, remote, b)
+        if show_retry_hint:
+            print(f"\n{retry_hint()}")
+        sys.exit(1)
+    print(f"\nApprove at the link(s) above, then re-run `{rerun_cmd}`.")
+    sys.exit(EXIT_NEEDS_APPROVAL)
+
+
 def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, source_branch: str | None = None) -> None:
     source_branch = source_branch or current_branch()
     session = requests.Session()
     session.headers.update(auth_header(pat))
 
-    # When waiting, a pipeline's "latest" build may already be a completed run
-    # from before this invocation. Only accept builds newer than whatever was
-    # already there when we started, so --wait actually waits for the build(s)
-    # triggered by the current HEAD instead of immediately reporting a stale result.
-    baseline_ids: dict[int, int] = {}
+    # When waiting, a pipeline's "latest" build may already be a *completed* run from before
+    # this invocation (CI hasn't registered a new build for the current push yet). Only accept
+    # a fresh build in that case, so --wait doesn't immediately report that stale old result.
+    # Only builds already completed at this snapshot go in here -- one that's inProgress here
+    # (whether just-started or long-running) is genuinely the current build for the current
+    # HEAD, not a stale leftover, and must be watched rather than waited past: recording it too
+    # would make the loop below treat "still the same build, same id" as "stale" forever,
+    # since a running build keeps the same id for its whole life -- reintroducing the hang
+    # this function exists to avoid, for any --wait invoked after the build had already started.
+    baseline_completed_ids: dict[int, int] = {}
     if wait:
         pr = get_pr(session, remote, source_branch, target_branch)
         for b in get_builds_for_pr(session, remote, source_branch, pr["pullRequestId"]):
+            if b.get("status") != "completed":
+                continue
             def_id = b.get("definition", {}).get("id")
-            baseline_ids[def_id] = max(baseline_ids.get(def_id, 0), b["id"])
+            baseline_completed_ids[def_id] = max(baseline_completed_ids.get(def_id, 0), b["id"])
 
     draft_notice_shown = False
     last_line = ""
@@ -430,7 +616,7 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
         if builds:
             pipeline_builds = latest_per_pipeline(builds)
             if wait:
-                stale = [b for b in pipeline_builds if b["id"] <= baseline_ids.get(b.get("definition", {}).get("id"), 0)]
+                stale = [b for b in pipeline_builds if b["id"] <= baseline_completed_ids.get(b.get("definition", {}).get("id"), 0)]
                 if stale:
                     msg += " | waiting for new build(s) to start: " + ", ".join(
                         b.get("definition", {}).get("name", "?") for b in stale
@@ -441,34 +627,11 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
                     time.sleep(30)
                     continue
             msg += " | " + ", ".join(
-                f"{b.get('definition', {}).get('name', '?')} #{b['id']} {b.get('status')} ({b.get('result', '—')})"
+                f"{b.get('definition', {}).get('name', '?')} #{b['id']} {b.get('status')} ({b.get('result') or '—'})"
                 for b in pipeline_builds
             )
 
-            # A pipeline stuck on approval might never resolve on its own, so it has to end
-            # the --wait loop the same way a completed pipeline would — but if another
-            # pipeline has already failed, that's the more urgent, more actionable fact:
-            # report it (and exit 1, not the approval code) instead of just telling the user
-            # to go approve a stage while staying unaware CI already failed elsewhere.
-            already_failed = any(b.get("result") == "failed" for b in pipeline_builds)
-            pending_approvals = find_pending_approvals(session, remote, pipeline_builds) if wait else []
-            if pending_approvals:
-                print(msg)
-                if already_failed:
-                    print("\nNote: another pipeline in this PR has already failed — see details below.")
-                print("\nWaiting for approval:")
-                for build, records, approvals in pending_approvals:
-                    pipeline_name = build.get("definition", {}).get("name", "?")
-                    for rec in approvals:
-                        stage = approval_stage_name(records, rec)
-                        print(f"  {pipeline_name} #{build['id']}: stage '{stage}' needs approval — {build_web_url(remote, build['id'])}")
-                if already_failed:
-                    print("\nDetails:")
-                    for b in pipeline_builds:
-                        print_build(session, remote, b)
-                    sys.exit(1)
-                print("\nApprove at the link(s) above, then re-run `bdt pr status --wait`.")
-                sys.exit(EXIT_NEEDS_APPROVAL)
+            exit_if_blocked_on_approval(session, remote, msg, pipeline_builds, wait, "bdt pr status --wait", show_retry_hint=True)
 
             all_done = all(b.get("status") == "completed" for b in pipeline_builds)
             if all_done or not wait:
@@ -481,12 +644,28 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
                     print("\nTip: Use --wait to poll until all pipelines are completed.")
 
                 if any(b.get("result") == "failed" for b in pipeline_builds):
+                    print(f"\n{retry_hint()}")
                     sys.exit(1)
+                # Only worth suggesting `pr watch-deploy` once this PR's own pipeline(s) have
+                # actually finished (not just because the caller ran without --wait) --
+                # otherwise it'd claim a merge/deploy is underway before the PR's own build
+                # has even completed.
+                if all_done:
+                    hint = deploy_build_hint(session, remote, target_branch)
+                    if hint:
+                        print(hint)
                 return
         else:
             msg += " | No builds found."
             if not wait:
                 print(msg)
+                # No PR-triggered builds at all is itself a settled state (e.g. this
+                # project's only pipeline triggers on a push to the target branch, not
+                # on the PR's own merge/source refs) -- exactly when a deploy-build hint
+                # is most useful, so still check for one.
+                hint = deploy_build_hint(session, remote, target_branch)
+                if hint:
+                    print(hint)
                 return
 
         if msg != last_line:
@@ -495,3 +674,50 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
 
         if wait:
             time.sleep(30)
+
+
+def run_watch_deploy(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool) -> None:
+    """Watch the most recent build(s) triggered directly on `target_branch` -- e.g. a
+    post-merge pipeline that only runs on the target branch once a PR merges into it, and
+    usually does the actual deployment -- until they complete.
+
+    Mirrors `run()`'s polling/reporting shape (same `latest_per_pipeline`/`print_build`
+    helpers), but looks at builds tied to the branch itself via `get_builds_for_branch`
+    rather than a specific PR's merge/source refs.
+    """
+    session = requests.Session()
+    session.headers.update(auth_header(pat))
+
+    last_line = ""
+    while True:
+        builds = get_builds_for_branch(session, remote, target_branch)
+        if not builds:
+            print(f"No builds found on '{target_branch}'.")
+            return
+
+        pipeline_builds = latest_per_pipeline(builds)
+        msg = f"\rBranch '{target_branch}' | " + ", ".join(
+            f"{b.get('definition', {}).get('name', '?')} #{b['id']} {b.get('status')} ({b.get('result') or '—'})"
+            for b in pipeline_builds
+        )
+
+        exit_if_blocked_on_approval(session, remote, msg, pipeline_builds, wait, "bdt pr watch-deploy --wait")
+
+        all_done = all(b.get("status") == "completed" for b in pipeline_builds)
+        if all_done or not wait:
+            print(msg)
+            print("\nDetails:")
+            for b in pipeline_builds:
+                print_build(session, remote, b)
+
+            if not all_done and not wait:
+                print("\nTip: Use --wait to poll until all pipelines are completed.")
+
+            if any(b.get("result") == "failed" for b in pipeline_builds):
+                sys.exit(1)
+            return
+
+        if msg != last_line:
+            print(msg, end="", flush=True)
+            last_line = msg
+        time.sleep(30)
