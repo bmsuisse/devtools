@@ -17,7 +17,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from .cli_tools import is_claude_code
+from .cli_tools import EXIT_NEEDS_APPROVAL, is_claude_code
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 PR_VIEW_FIELDS = "number,title,baseRefName,mergeable,statusCheckRollup,isDraft"
@@ -71,6 +71,11 @@ def get_pr(gh: str) -> dict:
 def check_bucket(check: dict) -> str:
     if check.get("__typename") == "StatusContext":
         return _STATUS_CONTEXT_BUCKET.get(check.get("state"), "pending")
+    # CheckRun.status "WAITING" is GitHub's distinct state for a run paused on a deployment
+    # protection rule (e.g. a required reviewer on the target environment) — unlike ordinary
+    # "still running" states, nothing here resolves on its own without a human.
+    if check.get("status") == "WAITING":
+        return "waiting_approval"
     if check.get("status") != "COMPLETED":
         return "pending"
     return _CHECK_RUN_BUCKET.get(check.get("conclusion"), "fail")
@@ -144,6 +149,17 @@ def run(gh: str, wait: bool) -> None:
 
         buckets = [check_bucket(c) for c in checks]
         msg += " | " + ", ".join(f"{check_label(c)}: {check_bucket(c)}" for c in checks)
+
+        waiting_approval = [c for c, b in zip(checks, buckets) if b == "waiting_approval"] if wait else []
+        if waiting_approval:
+            print(msg)
+            print("\nWaiting for approval:")
+            for c in waiting_approval:
+                details_url = c.get("detailsUrl")
+                suffix = f" — {details_url}" if details_url else ""
+                print(f"  {check_label(c)} needs a reviewer to approve the deployment{suffix}")
+            print("\nApprove at the link(s) above, then re-run `bdt pr status --wait`.")
+            sys.exit(EXIT_NEEDS_APPROVAL)
 
         if "pending" in buckets and wait:
             if msg != last_line:

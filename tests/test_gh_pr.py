@@ -39,6 +39,7 @@ COMPLETED_SKIPPED_CHECK_RUN = {
         (COMPLETED_SKIPPED_CHECK_RUN, "skipping"),
         ({"__typename": "CheckRun", "status": "IN_PROGRESS"}, "pending"),
         ({"__typename": "CheckRun", "status": "QUEUED"}, "pending"),
+        ({"__typename": "CheckRun", "status": "WAITING"}, "waiting_approval"),
         ({"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "FAILURE"}, "fail"),
         ({"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "TIMED_OUT"}, "fail"),
         ({"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "CANCELLED"}, "cancel"),
