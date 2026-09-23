@@ -16,9 +16,11 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
+from .ado_auth import auth_header
 from .cli_tools import require_az
 from .worktree import find_repos
 
@@ -30,12 +32,6 @@ def work_dir() -> Path:
     if os.name == "nt":
         return Path("C:/Projects")
     return Path("~/projects").expanduser()
-
-
-def resolve_org(cli_org: str | None) -> str | None:
-    if cli_org:
-        return cli_org
-    return os.environ.get("AZDO_ORG") or os.environ.get("BMS_ORG")
 
 
 def find_local(name: str, root: Path) -> list[Path]:
@@ -59,11 +55,17 @@ class RemoteRepo:
     remote_url: str
 
 
-def _az(az: str, *args: str) -> str:
+def _az(az: str, *args: str) -> tuple[bool, str]:
+    """Non-fatal `az ... -o json` run: (ok, stdout-on-success | stderr-on-failure).
+
+    Deliberately not one of the existing `run_az`/`_run_gh_json` helpers
+    elsewhere in this codebase -- those either exit on any failure or merge
+    stdout+stderr into one string, neither of which works for `find_remote`'s
+    per-project fan-out below, where one project failing (e.g. no access)
+    must not abort the whole org search, and stdout has to stay pure JSON.
+    """
     result = subprocess.run([az, *args, "-o", "json"], capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        sys.exit(f"az {' '.join(args)} failed: {result.stderr.strip()}")
-    return result.stdout
+    return result.returncode == 0, result.stdout if result.returncode == 0 else result.stderr
 
 
 def find_remote(az: str, org: str, name: str) -> list[RemoteRepo]:
@@ -72,15 +74,26 @@ def find_remote(az: str, org: str, name: str) -> list[RemoteRepo]:
 
     Azure DevOps has no "search repos by name across the whole org" API, so
     (as the old skill's script did) this lists every project and then every
-    project's repos -- there's no cheaper way to do it.
+    project's repos -- there's no cheaper way to do it. The per-project calls
+    run concurrently (each is just an `az` subprocess waiting on network I/O)
+    since with dozens of projects a serial fan-out is the dominant cost.
     """
-    projects = json.loads(_az(az, "devops", "project", "list", "--org", f"https://dev.azure.com/{org}"))["value"]
+    ok, out = _az(az, "devops", "project", "list", "--org", f"https://dev.azure.com/{org}")
+    if not ok:
+        sys.exit(f"az devops project list failed (try `az login`?):\n{out.strip()}")
+    projects = json.loads(out)["value"]
+
+    def repos_for(project: dict) -> list[RemoteRepo]:
+        ok, out = _az(az, "repos", "list", "--org", f"https://dev.azure.com/{org}", "--project", project["name"])
+        if not ok:
+            print(f"warning: couldn't list repos for project '{project['name']}': {out.strip()}", file=sys.stderr)
+            return []
+        return [RemoteRepo(project["name"], r["name"], r["remoteUrl"]) for r in json.loads(out)]
 
     all_repos: list[RemoteRepo] = []
-    for project in projects:
-        repos = json.loads(_az(az, "repos", "list", "--org", f"https://dev.azure.com/{org}", "--project", project["name"]))
-        for r in repos:
-            all_repos.append(RemoteRepo(project["name"], r["name"], r["remoteUrl"]))
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for repos in pool.map(repos_for, projects):
+            all_repos.extend(repos)
 
     exact = [r for r in all_repos if r.name.lower() == name.lower()]
     if exact:
@@ -88,14 +101,29 @@ def find_remote(az: str, org: str, name: str) -> list[RemoteRepo]:
     return [r for r in all_repos if name.lower() in r.name.lower()]
 
 
-def clone(remote_url: str, dest: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "clone", remote_url, str(dest)], check=False)
+def clone(remote_url: str, dest: Path, auth: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+    """Clone `remote_url` (an HTTPS Azure DevOps URL) into `dest`.
+
+    `auth` (from `ado_auth.auth_header`) is passed to git as an HTTP
+    Authorization header via `GIT_CONFIG_*` env vars rather than a
+    `-c http.extraheader=...` CLI argument -- the latter would leak the PAT
+    to anyone able to see this process's argv (`ps aux`, /proc/<pid>/cmdline).
+    """
+    env = os.environ.copy()
+    if auth:
+        env["GIT_CONFIG_COUNT"] = "1"
+        env["GIT_CONFIG_KEY_0"] = "http.extraheader"
+        env["GIT_CONFIG_VALUE_0"] = f"AUTHORIZATION: {auth['Authorization']}"
+    try:
+        return subprocess.run(["git", "clone", remote_url, str(dest)], env=env, check=False)
+    except FileNotFoundError:
+        sys.exit("'git' is required for this command but wasn't found on PATH.")
 
 
-def run(name: str, *, root: Path | None, org: str | None, yes: bool) -> None:
+def run(name: str, *, root: Path | None, org: str | None, yes: bool, pat: str | None = None) -> None:
     """`bdt find-repo <name>`: search `root` (default `work_dir()`) for a local
     match, then -- if there isn't one -- `org`'s Azure DevOps repos, offering
-    to clone a single remote-only match into `root`.
+    to clone a single remote-only match into `root/<project>/<repo>`.
     """
     search_root = root or work_dir()
     if not search_root.is_dir():
@@ -128,16 +156,22 @@ def run(name: str, *, root: Path | None, org: str | None, yes: bool) -> None:
         sys.exit("\nMultiple matches -- narrow the name or clone manually.")
 
     match = remote_matches[0]
-    dest = search_root / match.name
+    dest = search_root / match.project / match.name
+    if dest.exists():
+        sys.exit(f"{dest} already exists -- remove it or clone manually.")
+
     if not yes:
-        try:
-            answer = input(f"\nNot found locally. Clone into {dest}? [y/N]: ")
-        except EOFError:
-            answer = ""
+        # Non-interactive callers (CI, an AI-agent caller, stdin piped/closed)
+        # never get an input() prompt -- that would just hang or silently
+        # eat piped data. They see the match above and can pass --yes.
+        if not sys.stdin.isatty():
+            print(f"\nNot found locally. Pass --yes to clone into {dest}.")
+            return
+        answer = input(f"\nNot found locally. Clone into {dest}? [y/N]: ")
         if answer.strip().lower() not in ("y", "yes"):
             print("Not cloned.")
             return
 
-    result = clone(match.remote_url, dest)
+    result = clone(match.remote_url, dest, auth_header(pat))
     if result.returncode != 0:
         raise SystemExit(result.returncode)
