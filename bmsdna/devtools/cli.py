@@ -14,6 +14,7 @@ from pgdevkit.testdb import constants as pgdevkit_constants
 
 from . import ado_issue, app_service_logs, commit as commit_mod
 from . import env_config
+from . import find_repo as find_repo_mod
 from . import gh_issue, gh_pr
 from . import logs as logs_mod
 from . import pr_build, pr_labels, worktree as worktree_mod
@@ -636,6 +637,34 @@ def worktree(
     """Create a git worktree under .worktrees/<name>, mirroring the `just worktree` recipe."""
     install_cmd = install.split() if install else None
     worktree_mod.create(name, base=base, env_file=env_file, submodules=submodules, install_cmd=install_cmd)
+
+
+@app.command("find-repo")
+def find_repo_cmd(
+    name: str,
+    root: Path | None = typer.Option(
+        None,
+        "--root",
+        help="Local work dir to search (default: $AZDO_WORK_DIR/$BMS_WORK_DIR, falling back to ~/projects, or C:/Projects on Windows)",
+    ),
+    org: str | None = typer.Option(
+        None, "--org", envvar=["AZDO_ORG", "BMS_ORG"], help="Azure DevOps org to search when there's no local match"
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Clone a remote-only match without an interactive confirmation prompt"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT for cloning over HTTPS (else falls back to `az` login)",
+    ),
+) -> None:
+    """Find a repo by name: locally first, then in an Azure DevOps org if there's no local match -- offering to clone it.
+
+    Replaces the `cross-repo-discovery` skill's full `ALL_REPOS.md` org sync with a
+    single-name lookup; it reads the same AZDO_WORK_DIR/BMS_WORK_DIR and AZDO_ORG/BMS_ORG
+    env vars that skill used, so switching over needs no reconfiguration.
+    """
+    find_repo_mod.run(name, root=root, org=org, yes=yes, pat=pat)
 
 
 @cleanup_app.command("worktrees")
