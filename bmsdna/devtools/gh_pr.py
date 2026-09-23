@@ -29,6 +29,12 @@ PR_VIEW_FIELDS = "number,title,baseRefName,mergeable,statusCheckRollup,isDraft"
 # source branch, and link to them with a raw blob URL.
 SCREENSHOTS_BRANCH = "pr-assets"
 
+# `CLI_TIMEOUT_SECS` is generous for a plain `gh`/`git` metadata call, but too tight for
+# fetching/pushing actual screenshot/attachment blob content on `SCREENSHOTS_BRANCH` --
+# give those more room instead of aborting an otherwise-fine transfer just because it's
+# slower than a metadata call.
+CLI_UPLOAD_TIMEOUT_SECS = CLI_TIMEOUT_SECS * 4
+
 # PullRequest.mergeable (GraphQL MergeableState).
 CONFLICTING = "CONFLICTING"
 UNKNOWN_MERGEABLE = "UNKNOWN"
@@ -61,18 +67,21 @@ _STATUS_CONTEXT_BUCKET = {
 _RUN_ID_RE = re.compile(r"/actions/runs/(\d+)")
 
 
-def _run(args: list[str], **kwargs) -> subprocess.CompletedProcess:
-    """`subprocess.run` bounded by `CLI_TIMEOUT_SECS` -- every `gh`/`git` call in this
-    module goes through this instead of calling `subprocess.run` directly, so a stalled
-    network call or `gh`/`git` blocking on an interactive prompt (e.g. an expired login)
-    can't hang the caller forever. Converts a timeout into the same kind of clear,
-    exit-with-message failure callers already get from a non-zero return code, rather
-    than an uncaught `TimeoutExpired` traceback.
+def _run(args: list[str], *, timeout: float = CLI_TIMEOUT_SECS, **kwargs) -> subprocess.CompletedProcess:
+    """`subprocess.run` bounded by `timeout` (defaults to `CLI_TIMEOUT_SECS`) -- every
+    `gh`/`git` call in this module goes through this instead of calling `subprocess.run`
+    directly, so a stalled network call or `gh`/`git` blocking on an interactive prompt
+    (e.g. an expired login) can't hang the caller forever. Converts a timeout into the
+    same kind of clear, exit-with-message failure callers already get from a non-zero
+    return code, rather than an uncaught `TimeoutExpired` traceback.
+
+    A caller pushing/fetching actual payload (screenshot blobs, not just metadata) should
+    pass a longer `timeout` -- see `CLI_UPLOAD_TIMEOUT_SECS`.
     """
     try:
-        return subprocess.run(args, timeout=CLI_TIMEOUT_SECS, **kwargs)
+        return subprocess.run(args, timeout=timeout, **kwargs)
     except subprocess.TimeoutExpired:
-        sys.exit(f"`{' '.join(args)}` timed out after {CLI_TIMEOUT_SECS:.0f}s -- stalled network, or needs an interactive login?")
+        sys.exit(f"`{' '.join(args)}` timed out after {timeout:.0f}s -- stalled network, or needs an interactive login?")
 
 
 def _run_gh_json(gh: str, args: list[str]) -> dict:
@@ -490,8 +499,8 @@ def publish(gh: str) -> None:
     print("\nRun `bdt pr status --wait` to watch the PR's CI.")
 
 
-def _git(args: list[str], env: dict[str, str] | None = None) -> str:
-    r = _run(["git", *args], capture_output=True, encoding="utf-8", env=env)
+def _git(args: list[str], env: dict[str, str] | None = None, *, timeout: float = CLI_TIMEOUT_SECS) -> str:
+    r = _run(["git", *args], capture_output=True, encoding="utf-8", env=env, timeout=timeout)
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or f"`git {' '.join(args)}` failed")
     return r.stdout.strip()
@@ -519,7 +528,7 @@ def push_assets(owner: str, repo: str, branch: str, paths: list[str], max_attemp
         with tempfile.TemporaryDirectory() as tmp:
             env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
             if parent:
-                _git(["fetch", "origin", SCREENSHOTS_BRANCH], env=env)
+                _git(["fetch", "origin", SCREENSHOTS_BRANCH], env=env, timeout=CLI_UPLOAD_TIMEOUT_SECS)
                 _git(["read-tree", parent], env=env)
 
             urls = []
@@ -540,6 +549,7 @@ def push_assets(owner: str, repo: str, branch: str, paths: list[str], max_attemp
             ["git", "push", "origin", f"{commit_sha}:refs/heads/{SCREENSHOTS_BRANCH}"],
             capture_output=True,
             encoding="utf-8",
+            timeout=CLI_UPLOAD_TIMEOUT_SECS,
         )
         if push.returncode == 0:
             return urls

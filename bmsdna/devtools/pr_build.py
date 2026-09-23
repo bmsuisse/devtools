@@ -41,6 +41,23 @@ def _base_url(remote: AdoRemote) -> str:
     return f"https://dev.azure.com/{remote.org}/{quote(remote.project, safe='')}"
 
 
+def _poll_or_exit(fn, *args, **kwargs):
+    """Calls `fn(*args, **kwargs)`, converting a network/timeout failure into a clear exit
+    message instead of an uncaught `requests` traceback -- for the calls a `--wait` poll
+    loop (`run`/`run_watch_deploy`) makes every 30s, where a bare `raise` would otherwise
+    surface as a raw stack trace the first time a request stalls or the connection drops.
+
+    Deliberately not baked into `get_pr`/`get_builds_for_pr`/`get_builds_for_branch`
+    themselves -- several best-effort callers (`has_build_policy`, `deploy_build_hint`,
+    `find_pending_approvals`) already wrap those in their own `except requests.RequestException`
+    to fail open, and converting the exception to `SystemExit` at the source would break that.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except requests.exceptions.RequestException as e:
+        sys.exit(f"Azure DevOps request failed or timed out: {e}")
+
+
 def pr_web_url(remote: AdoRemote, pr_id: int) -> str:
     """The browsable web page for a PR, as opposed to its REST API URL (which is all the
     `az repos pr create` JSON response otherwise gives you).
@@ -601,8 +618,8 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
     # this function exists to avoid, for any --wait invoked after the build had already started.
     baseline_completed_ids: dict[int, int] = {}
     if wait:
-        pr = get_pr(session, remote, source_branch, target_branch)
-        for b in get_builds_for_pr(session, remote, source_branch, pr["pullRequestId"]):
+        pr = _poll_or_exit(get_pr, session, remote, source_branch, target_branch)
+        for b in _poll_or_exit(get_builds_for_pr, session, remote, source_branch, pr["pullRequestId"]):
             if b.get("status") != "completed":
                 continue
             def_id = b.get("definition", {}).get("id")
@@ -611,7 +628,7 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
     draft_notice_shown = False
     heartbeat = PollHeartbeat()
     while True:
-        pr = get_pr(session, remote, source_branch, target_branch)
+        pr = _poll_or_exit(get_pr, session, remote, source_branch, target_branch)
         if not draft_notice_shown:
             draft_msg = draft_notice(pr)
             if draft_msg:
@@ -623,7 +640,7 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
 
         msg = f"\rPR #{pr_id}: {pr_title} ({pr_status})"
 
-        builds = get_builds_for_pr(session, remote, source_branch, pr_id)
+        builds = _poll_or_exit(get_builds_for_pr, session, remote, source_branch, pr_id)
         if builds:
             pipeline_builds = latest_per_pipeline(builds)
             if wait:
@@ -697,7 +714,7 @@ def run_watch_deploy(remote: AdoRemote, pat: str | None, target_branch: str, wai
 
     heartbeat = PollHeartbeat()
     while True:
-        builds = get_builds_for_branch(session, remote, target_branch)
+        builds = _poll_or_exit(get_builds_for_branch, session, remote, target_branch)
         if not builds:
             print(f"No builds found on '{target_branch}'.")
             return

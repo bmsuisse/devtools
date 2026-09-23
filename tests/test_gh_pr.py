@@ -6,6 +6,7 @@ import pytest
 
 from bmsdna.devtools.cli_tools import CLI_TIMEOUT_SECS, EXIT_NEEDS_APPROVAL
 from bmsdna.devtools.gh_pr import (
+    CLI_UPLOAD_TIMEOUT_SECS,
     add_attachments,
     add_files,
     check_bucket,
@@ -21,6 +22,7 @@ from bmsdna.devtools.gh_pr import (
     latest_per_workflow,
     merge_conflict_message,
     protection_requires_status_checks,
+    push_assets,
     retry,
     retry_hint,
     run,
@@ -768,3 +770,36 @@ def test_has_build_policy_fails_open_on_timeout(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
 
     assert has_build_policy("gh", "main") is False
+
+
+def test_push_assets_bounds_fetch_and_push_with_a_longer_upload_timeout(monkeypatch) -> None:
+    """Regression: `git fetch`/`git push` of actual screenshot blob content on the
+    `pr-assets` branch must get more time than a plain metadata call (CLI_UPLOAD_TIMEOUT_SECS,
+    not the tighter CLI_TIMEOUT_SECS) -- a large/slow transfer shouldn't be aborted just
+    because it's slower than a `gh pr view`.
+    """
+    calls: list[tuple[list[str], dict]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        if cmd[:2] == ["git", "ls-remote"]:
+            return MagicMock(returncode=0, stdout="abc123\trefs/heads/pr-assets\n", stderr="")
+        if cmd[:2] == ["git", "hash-object"]:
+            return MagicMock(returncode=0, stdout="blobsha\n", stderr="")
+        if cmd[:2] == ["git", "write-tree"]:
+            return MagicMock(returncode=0, stdout="treesha\n", stderr="")
+        if cmd[:2] == ["git", "commit-tree"]:
+            return MagicMock(returncode=0, stdout="commitsha\n", stderr="")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    push_assets("owner", "repo", "feature-x", ["/tmp/shot.png"])
+
+    fetch_kwargs = next(kwargs for cmd, kwargs in calls if cmd[:2] == ["git", "fetch"])
+    push_kwargs = next(kwargs for cmd, kwargs in calls if cmd[:2] == ["git", "push"])
+    ls_remote_kwargs = next(kwargs for cmd, kwargs in calls if cmd[:2] == ["git", "ls-remote"])
+
+    assert fetch_kwargs["timeout"] == CLI_UPLOAD_TIMEOUT_SECS
+    assert push_kwargs["timeout"] == CLI_UPLOAD_TIMEOUT_SECS
+    assert ls_remote_kwargs["timeout"] == CLI_TIMEOUT_SECS
