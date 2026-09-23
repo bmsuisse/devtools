@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import time
 from dataclasses import dataclass
 
 AZ_INSTALL_HINT = "Install the Azure CLI: https://learn.microsoft.com/cli/azure/install-azure-cli"
@@ -24,6 +25,43 @@ PSQL_INSTALL_HINT = "Install the PostgreSQL client tools (psql): https://www.pos
 # Click/Typer's own exit code for a CLI usage error (e.g. typer.BadParameter elsewhere in
 # this tool), and callers branching on exit code shouldn't confuse the two.
 EXIT_NEEDS_APPROVAL = 3
+
+# How long a `--wait` poll loop may go without printing anything before `PollHeartbeat`
+# forces a line out anyway. Every `--wait` loop in this tool polls every 30s but used to
+# print only when the status text changed -- for a check/build that sits in the same
+# state for a long CI run, that meant long stretches of complete silence, indistinguishable
+# from a hang. 10 minutes is short enough to reassure someone watching it live, long enough
+# not to spam a captured log.
+POLL_HEARTBEAT_SECS = 600.0
+
+
+class PollHeartbeat:
+    """Tracks a repeatedly-polled status line for a `--wait` loop and decides when to
+    (re)print it: on every change, as before, plus at least once every `heartbeat_secs`
+    even when the status hasn't changed -- so the loop can never go silent long enough to
+    look stuck.
+
+    An unchanged status reprints as a fresh, timestamped line rather than the plain
+    `\\r`-prefixed overwrite a real change gets: overwriting the same line in place would
+    be invisible on both a live terminal (nothing looks different) and a captured log
+    (the `\\r` produces no new line at all), defeating the point of a heartbeat.
+    """
+
+    def __init__(self, heartbeat_secs: float = POLL_HEARTBEAT_SECS) -> None:
+        self._heartbeat_secs = heartbeat_secs
+        self._last_line = ""
+        self._last_print: float | None = None
+
+    def show(self, msg: str) -> None:
+        now = time.monotonic()
+        if msg == self._last_line and self._last_print is not None and now - self._last_print < self._heartbeat_secs:
+            return
+        if msg != self._last_line:
+            print(msg, end="", flush=True)
+        else:
+            print(f"\n[{time.strftime('%H:%M:%S')}] still waiting: {msg.lstrip(chr(13))}", flush=True)
+        self._last_line = msg
+        self._last_print = now
 
 
 def is_claude_code() -> bool:

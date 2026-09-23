@@ -18,7 +18,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from .cli_tools import EXIT_NEEDS_APPROVAL, detect_agent_session, ensure_agent_session_note, is_claude_code
+from .cli_tools import EXIT_NEEDS_APPROVAL, PollHeartbeat, detect_agent_session, ensure_agent_session_note, is_claude_code
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 PR_VIEW_FIELDS = "number,title,baseRefName,mergeable,statusCheckRollup,isDraft"
@@ -247,7 +247,7 @@ def exit_needs_approval(msg: str, item_lines: list[str], rerun_cmd: str) -> None
 
 
 def run(gh: str, wait: bool) -> None:
-    last_line = ""
+    heartbeat = PollHeartbeat()
     draft_notice_shown = False
     while True:
         pr = get_pr(gh)
@@ -305,9 +305,7 @@ def run(gh: str, wait: bool) -> None:
         # check only looks pending because it's downstream of that same approval gate, --wait
         # must not keep polling forever waiting for it to become unstuck.
         if "pending" in buckets and wait and not waiting_approval:
-            if msg != last_line:
-                print(msg, end="", flush=True)
-                last_line = msg
+            heartbeat.show(msg)
             time.sleep(30)
             continue
 
@@ -367,7 +365,7 @@ def run_watch_deploy(gh: str, target_branch: str, wait: bool) -> None:
     Mirrors `run()`'s polling/reporting shape, but looks at runs tied to the branch's push
     event via `get_workflow_runs_for_branch` rather than a PR's `statusCheckRollup`.
     """
-    last_line = ""
+    heartbeat = PollHeartbeat()
     while True:
         runs = get_workflow_runs_for_branch(gh, target_branch)
         if not runs:
@@ -412,9 +410,7 @@ def run_watch_deploy(gh: str, target_branch: str, wait: bool) -> None:
                 sys.exit(1)
             return
 
-        if msg != last_line:
-            print(msg, end="", flush=True)
-            last_line = msg
+        heartbeat.show(msg)
         time.sleep(30)
 
 

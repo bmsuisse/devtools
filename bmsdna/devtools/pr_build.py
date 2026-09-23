@@ -11,7 +11,7 @@ from urllib.parse import quote
 import requests
 
 from .ado_auth import auth_header
-from .cli_tools import EXIT_NEEDS_APPROVAL, detect_agent_session, ensure_agent_session_note, is_claude_code
+from .cli_tools import EXIT_NEEDS_APPROVAL, PollHeartbeat, detect_agent_session, ensure_agent_session_note, is_claude_code
 from .gitrepo import AdoRemote, current_branch
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
@@ -598,7 +598,7 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
             baseline_completed_ids[def_id] = max(baseline_completed_ids.get(def_id, 0), b["id"])
 
     draft_notice_shown = False
-    last_line = ""
+    heartbeat = PollHeartbeat()
     while True:
         pr = get_pr(session, remote, source_branch, target_branch)
         if not draft_notice_shown:
@@ -621,9 +621,7 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
                     msg += " | waiting for new build(s) to start: " + ", ".join(
                         b.get("definition", {}).get("name", "?") for b in stale
                     )
-                    if msg != last_line:
-                        print(msg, end="", flush=True)
-                        last_line = msg
+                    heartbeat.show(msg)
                     time.sleep(30)
                     continue
             msg += " | " + ", ".join(
@@ -668,9 +666,7 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
                     print(hint)
                 return
 
-        if msg != last_line:
-            print(msg, end="", flush=True)
-            last_line = msg
+        heartbeat.show(msg)
 
         if wait:
             time.sleep(30)
@@ -688,7 +684,7 @@ def run_watch_deploy(remote: AdoRemote, pat: str | None, target_branch: str, wai
     session = requests.Session()
     session.headers.update(auth_header(pat))
 
-    last_line = ""
+    heartbeat = PollHeartbeat()
     while True:
         builds = get_builds_for_branch(session, remote, target_branch)
         if not builds:
@@ -717,7 +713,5 @@ def run_watch_deploy(remote: AdoRemote, pat: str | None, target_branch: str, wai
                 sys.exit(1)
             return
 
-        if msg != last_line:
-            print(msg, end="", flush=True)
-            last_line = msg
+        heartbeat.show(msg)
         time.sleep(30)
