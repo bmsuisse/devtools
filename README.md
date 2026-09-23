@@ -42,6 +42,14 @@ for builds/checks that will never run — e.g. on Azure DevOps:
 on GitHub: `PR #42 ('feat: widgets') has merge conflicts with 'main' (mergeable=CONFLICTING)`.
 Exit code 1 either way.
 
+With `--wait`, a build/check that's paused on a manual approval (an Azure
+Pipelines stage's Checkpoint.Approval, or a GitHub Actions deployment
+protection rule) ends the wait instead of polling forever — it prints which
+stage/check needs a reviewer plus a link to act on it, and exits **3**
+(`bdt pr watch-deploy --wait`, below, behaves the same way). If another
+build/check has already failed, that's reported instead (exit 1) even when
+one is also waiting on approval.
+
 **Azure DevOps**: org/project/repo are auto-detected from
 `git remote get-url origin` (handles SSH, `dev.azure.com` HTTPS, and
 `*.visualstudio.com` HTTPS forms). Auth is an explicit PAT (`--pat` or

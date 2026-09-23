@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 import requests
 
+from bmsdna.devtools.cli_tools import EXIT_NEEDS_APPROVAL
 from bmsdna.devtools.gitrepo import AdoRemote
 from bmsdna.devtools.pr_build import (
     add_attachments,
@@ -24,6 +25,7 @@ from bmsdna.devtools.pr_build import (
     run_watch_deploy,
     update,
 )
+from tests.test_pr_build import CHECKPOINT_RECORD, PENDING_APPROVAL_RECORD, STAGE_RECORD
 
 REMOTE = AdoRemote(org="myorg", project="MyProj", repo="myrepo")
 PR = {"pullRequestId": 42, "title": "feat: widgets", "description": "existing description"}
@@ -337,6 +339,54 @@ def test_run_watch_deploy_exits_1_on_failed_build(monkeypatch) -> None:
         run_watch_deploy(REMOTE, "fake-pat", "main", wait=False)
 
     assert exc_info.value.code == 1
+
+
+def make_builds_session_with_timeline(builds: list[dict], timeline_records: list[dict]) -> MagicMock:
+    session = MagicMock()
+
+    def fake_get(url, params=None, **kwargs):
+        if url.endswith("/_apis/build/builds"):
+            return FakeResponse({"value": builds})
+        if "/timeline" in url:
+            return FakeResponse({"records": timeline_records})
+        raise AssertionError(f"unexpected GET {url}")
+
+    session.get.side_effect = fake_get
+    return session
+
+
+def test_run_watch_deploy_wait_stops_and_reports_pending_approval(monkeypatch, capsys) -> None:
+    """--wait must not poll forever when the only deploy pipeline is paused on a stage
+    approval -- it never completes on its own.
+    """
+    blocked_build = {**DEPLOY_BUILD, "id": 200, "status": "inProgress", "result": None}
+    session = make_builds_session_with_timeline([blocked_build], [STAGE_RECORD, CHECKPOINT_RECORD, PENDING_APPROVAL_RECORD])
+    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: session)
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_watch_deploy(REMOTE, "fake-pat", "main", wait=True)
+
+    assert exc_info.value.code == EXIT_NEEDS_APPROVAL
+    out = capsys.readouterr().out
+    assert "Deploy to Production" in out
+
+
+def test_run_watch_deploy_wait_exits_1_not_2_when_another_pipeline_already_failed(monkeypatch, capsys) -> None:
+    """A pipeline stuck on approval must not mask an already-failed pipeline in the same batch.
+
+    Unlike `run()`, no `bdt pr retry` hint here -- watch-deploy isn't watching a PR's own
+    retryable checks, so that command has nothing to act on.
+    """
+    failed_build = {**DEPLOY_BUILD, "id": 100, "definition": {"id": 1, "name": "CI"}, "result": "failed"}
+    blocked_build = {**DEPLOY_BUILD, "id": 200, "definition": {"id": 2, "name": "Deploy"}, "status": "inProgress", "result": None}
+    session = make_builds_session_with_timeline([failed_build, blocked_build], [STAGE_RECORD, CHECKPOINT_RECORD, PENDING_APPROVAL_RECORD])
+    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: session)
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_watch_deploy(REMOTE, "fake-pat", "main", wait=True)
+
+    assert exc_info.value.code == 1
+    assert "bdt pr retry" not in capsys.readouterr().out
 
 
 def test_run_prints_deploy_hint_after_reporting_pr_success(monkeypatch, capsys) -> None:
