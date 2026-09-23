@@ -18,7 +18,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from .cli_tools import EXIT_NEEDS_APPROVAL, detect_agent_session, ensure_agent_session_note, is_claude_code
+from .cli_tools import CLI_TIMEOUT_SECS, EXIT_NEEDS_APPROVAL, PollHeartbeat, detect_agent_session, ensure_agent_session_note, is_claude_code
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 PR_VIEW_FIELDS = "number,title,baseRefName,mergeable,statusCheckRollup,isDraft"
@@ -28,6 +28,12 @@ PR_VIEW_FIELDS = "number,title,baseRefName,mergeable,statusCheckRollup,isDraft"
 # workaround: keep screenshots on their own orphan branch, one folder per
 # source branch, and link to them with a raw blob URL.
 SCREENSHOTS_BRANCH = "pr-assets"
+
+# `CLI_TIMEOUT_SECS` is generous for a plain `gh`/`git` metadata call, but too tight for
+# fetching/pushing actual screenshot/attachment blob content on `SCREENSHOTS_BRANCH` --
+# give those more room instead of aborting an otherwise-fine transfer just because it's
+# slower than a metadata call.
+CLI_UPLOAD_TIMEOUT_SECS = CLI_TIMEOUT_SECS * 4
 
 # PullRequest.mergeable (GraphQL MergeableState).
 CONFLICTING = "CONFLICTING"
@@ -61,8 +67,25 @@ _STATUS_CONTEXT_BUCKET = {
 _RUN_ID_RE = re.compile(r"/actions/runs/(\d+)")
 
 
+def _run(args: list[str], *, timeout: float = CLI_TIMEOUT_SECS, **kwargs) -> subprocess.CompletedProcess:
+    """`subprocess.run` bounded by `timeout` (defaults to `CLI_TIMEOUT_SECS`) -- every
+    `gh`/`git` call in this module goes through this instead of calling `subprocess.run`
+    directly, so a stalled network call or `gh`/`git` blocking on an interactive prompt
+    (e.g. an expired login) can't hang the caller forever. Converts a timeout into the
+    same kind of clear, exit-with-message failure callers already get from a non-zero
+    return code, rather than an uncaught `TimeoutExpired` traceback.
+
+    A caller pushing/fetching actual payload (screenshot blobs, not just metadata) should
+    pass a longer `timeout` -- see `CLI_UPLOAD_TIMEOUT_SECS`.
+    """
+    try:
+        return subprocess.run(args, timeout=timeout, **kwargs)
+    except subprocess.TimeoutExpired:
+        sys.exit(f"`{' '.join(args)}` timed out after {timeout:.0f}s -- stalled network, or needs an interactive login?")
+
+
 def _run_gh_json(gh: str, args: list[str]) -> dict:
-    r = subprocess.run([gh, *args], capture_output=True, encoding="utf-8")
+    r = _run([gh, *args], capture_output=True, encoding="utf-8")
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or f"`gh {' '.join(args)}` failed")
     return json.loads(r.stdout)
@@ -159,7 +182,7 @@ def retry(gh: str) -> None:
     # the others, and the failure summary at the end still surfaces it.
     errors: list[str] = []
     for run_id in run_ids:
-        r = subprocess.run([gh, "run", "rerun", str(run_id), "--failed"], capture_output=True, encoding="utf-8")
+        r = _run([gh, "run", "rerun", str(run_id), "--failed"], capture_output=True, encoding="utf-8")
         if r.returncode != 0:
             errors.append(f"run {run_id}: {(r.stderr or r.stdout).strip() or 'failed'}")
             continue
@@ -177,7 +200,7 @@ def get_workflow_runs_for_branch(gh: str, branch: str, limit: int = 5) -> list[d
     run some open PR's `pull_request` trigger produced. `event=push` is what distinguishes the
     two on the same branch name.
     """
-    r = subprocess.run(
+    r = _run(
         [
             gh, "run", "list",
             "--branch", branch,
@@ -247,7 +270,7 @@ def exit_needs_approval(msg: str, item_lines: list[str], rerun_cmd: str) -> None
 
 
 def run(gh: str, wait: bool) -> None:
-    last_line = ""
+    heartbeat = PollHeartbeat()
     draft_notice_shown = False
     while True:
         pr = get_pr(gh)
@@ -305,9 +328,7 @@ def run(gh: str, wait: bool) -> None:
         # check only looks pending because it's downstream of that same approval gate, --wait
         # must not keep polling forever waiting for it to become unstuck.
         if "pending" in buckets and wait and not waiting_approval:
-            if msg != last_line:
-                print(msg, end="", flush=True)
-                last_line = msg
+            heartbeat.show(msg)
             time.sleep(30)
             continue
 
@@ -331,7 +352,7 @@ def run(gh: str, wait: bool) -> None:
 
 
 def print_failed_step_logs(gh: str, run_id: int) -> None:
-    r = subprocess.run([gh, "run", "view", str(run_id), "--log-failed"], capture_output=True, encoding="utf-8")
+    r = _run([gh, "run", "view", str(run_id), "--log-failed"], capture_output=True, encoding="utf-8")
     output = (r.stdout or "").strip()
     if r.returncode != 0 or not output:
         print("  (no failed steps with logs)")
@@ -367,7 +388,7 @@ def run_watch_deploy(gh: str, target_branch: str, wait: bool) -> None:
     Mirrors `run()`'s polling/reporting shape, but looks at runs tied to the branch's push
     event via `get_workflow_runs_for_branch` rather than a PR's `statusCheckRollup`.
     """
-    last_line = ""
+    heartbeat = PollHeartbeat()
     while True:
         runs = get_workflow_runs_for_branch(gh, target_branch)
         if not runs:
@@ -412,9 +433,7 @@ def run_watch_deploy(gh: str, target_branch: str, wait: bool) -> None:
                 sys.exit(1)
             return
 
-        if msg != last_line:
-            print(msg, end="", flush=True)
-            last_line = msg
+        heartbeat.show(msg)
         time.sleep(30)
 
 
@@ -438,7 +457,7 @@ def create(gh: str, target: str, extra_args: list[str], draft: bool = False, lab
     for label in labels or []:
         cmd += ["--label", label]
     cmd += extra_args
-    r = subprocess.run(cmd, capture_output=True, encoding="utf-8")
+    r = _run(cmd, capture_output=True, encoding="utf-8")
     if r.stderr:
         print(r.stderr.strip(), file=sys.stderr)
     if r.returncode != 0:
@@ -465,7 +484,7 @@ def ensure_session_note(gh: str) -> None:
         body = pr.get("body") or ""
         noted = ensure_agent_session_note(body, also_check=pr.get("title"))
         if noted != body:
-            r = subprocess.run([gh, "pr", "edit", str(pr["number"]), "--body", noted or ""], capture_output=True, encoding="utf-8")
+            r = _run([gh, "pr", "edit", str(pr["number"]), "--body", noted or ""], capture_output=True, encoding="utf-8")
             r.check_returncode()
     except (subprocess.SubprocessError, SystemExit, json.JSONDecodeError, OSError):
         pass
@@ -473,15 +492,15 @@ def ensure_session_note(gh: str) -> None:
 
 def publish(gh: str) -> None:
     """Mark the current branch's draft PR as ready for review."""
-    r = subprocess.run([gh, "pr", "ready"], capture_output=True, encoding="utf-8")
+    r = _run([gh, "pr", "ready"], capture_output=True, encoding="utf-8")
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or "`gh pr ready` failed")
     print("Marked PR as ready for review")
     print("\nRun `bdt pr status --wait` to watch the PR's CI.")
 
 
-def _git(args: list[str], env: dict[str, str] | None = None) -> str:
-    r = subprocess.run(["git", *args], capture_output=True, encoding="utf-8", env=env)
+def _git(args: list[str], env: dict[str, str] | None = None, *, timeout: float = CLI_TIMEOUT_SECS) -> str:
+    r = _run(["git", *args], capture_output=True, encoding="utf-8", env=env, timeout=timeout)
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or f"`git {' '.join(args)}` failed")
     return r.stdout.strip()
@@ -501,7 +520,7 @@ def push_assets(owner: str, repo: str, branch: str, paths: list[str], max_attemp
     tip and rebuilding the commit on top of it.
     """
     for attempt in range(1, max_attempts + 1):
-        remote_ref = subprocess.run(
+        remote_ref = _run(
             ["git", "ls-remote", "origin", f"refs/heads/{SCREENSHOTS_BRANCH}"], capture_output=True, encoding="utf-8"
         ).stdout.split()
         parent = remote_ref[0] if remote_ref else None
@@ -509,7 +528,7 @@ def push_assets(owner: str, repo: str, branch: str, paths: list[str], max_attemp
         with tempfile.TemporaryDirectory() as tmp:
             env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
             if parent:
-                _git(["fetch", "origin", SCREENSHOTS_BRANCH], env=env)
+                _git(["fetch", "origin", SCREENSHOTS_BRANCH], env=env, timeout=CLI_UPLOAD_TIMEOUT_SECS)
                 _git(["read-tree", parent], env=env)
 
             urls = []
@@ -526,10 +545,11 @@ def push_assets(owner: str, repo: str, branch: str, paths: list[str], max_attemp
             commit_args += ["-p", parent]
         commit_sha = _git(commit_args)
 
-        push = subprocess.run(
+        push = _run(
             ["git", "push", "origin", f"{commit_sha}:refs/heads/{SCREENSHOTS_BRANCH}"],
             capture_output=True,
             encoding="utf-8",
+            timeout=CLI_UPLOAD_TIMEOUT_SECS,
         )
         if push.returncode == 0:
             return urls
@@ -568,7 +588,7 @@ def add_attachments(
         body = build_screenshots_section(body, _screenshot_images(owner, repo, branch, screenshot_paths))
     if file_paths:
         body = build_attachments_section(body, _file_links(owner, repo, branch, file_paths))
-    r = subprocess.run([gh, "pr", "edit", str(pr["number"]), "--body", body], capture_output=True, encoding="utf-8")
+    r = _run([gh, "pr", "edit", str(pr["number"]), "--body", body], capture_output=True, encoding="utf-8")
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or "`gh pr edit` failed")
     print(f"Attached {len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s) to PR #{pr['number']}")
@@ -609,7 +629,7 @@ def update(
         args += ["--body", new_body]
     if len(args) == 3:
         return
-    r = subprocess.run(args, capture_output=True, encoding="utf-8")
+    r = _run(args, capture_output=True, encoding="utf-8")
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or "`gh pr edit` failed")
     print(f"Updated PR #{pr['number']}")
@@ -629,7 +649,7 @@ def comment_with_screenshots(
     images = _screenshot_images(owner, repo, branch, screenshot_paths) if screenshot_paths else []
     files = _file_links(owner, repo, branch, file_paths) if file_paths else []
     content = ensure_agent_session_note(build_comment_content(message, images, files)) or ""
-    r = subprocess.run([gh, "pr", "comment", "--body", content], capture_output=True, encoding="utf-8")
+    r = _run([gh, "pr", "comment", "--body", content], capture_output=True, encoding="utf-8")
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or "`gh pr comment` failed")
     print(f"Added comment ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) to the current PR")
@@ -646,14 +666,17 @@ def has_build_policy(gh: str, branch: str) -> bool:
     Only used to decide whether to print a `bdt pr status` reminder after
     `pr create` — `{owner}`/`{repo}` are resolved by `gh` from the current
     repo, and any failure (no permission to read protection settings, branch
-    not protected at all, etc.) fails open (returns False) rather than
-    blocking PR creation.
+    not protected at all, a timed-out call, etc.) fails open (returns False)
+    rather than blocking PR creation.
     """
-    r = subprocess.run(
-        [gh, "api", f"repos/{{owner}}/{{repo}}/branches/{branch}/protection"],
-        capture_output=True,
-        encoding="utf-8",
-    )
+    try:
+        r = _run(
+            [gh, "api", f"repos/{{owner}}/{{repo}}/branches/{branch}/protection"],
+            capture_output=True,
+            encoding="utf-8",
+        )
+    except SystemExit:
+        return False
     if r.returncode != 0:
         return False
     try:

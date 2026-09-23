@@ -1,4 +1,10 @@
-from bmsdna.devtools.cli_tools import AgentSession, detect_agent_session, ensure_agent_session_note, is_claude_code
+from bmsdna.devtools.cli_tools import (
+    AgentSession,
+    PollHeartbeat,
+    detect_agent_session,
+    ensure_agent_session_note,
+    is_claude_code,
+)
 
 
 def test_is_claude_code_true_when_env_var_set(monkeypatch) -> None:
@@ -94,3 +100,65 @@ def test_ensure_agent_session_note_skips_if_already_in_title(monkeypatch) -> Non
     description = "Some description"
     title = "Fix bug (Claude Session: https://claude.ai/code/session_abc123)"
     assert ensure_agent_session_note(description, also_check=title) == description
+
+
+def test_poll_heartbeat_prints_first_call(capsys) -> None:
+    heartbeat = PollHeartbeat()
+    heartbeat.show("\rstatus: pending")
+    assert capsys.readouterr().out == "\rstatus: pending"
+
+
+def test_poll_heartbeat_suppresses_unchanged_status_before_interval(monkeypatch, capsys) -> None:
+    clock = [0.0]
+    monkeypatch.setattr("bmsdna.devtools.cli_tools.time.monotonic", lambda: clock[0])
+    heartbeat = PollHeartbeat(heartbeat_secs=600)
+
+    heartbeat.show("\rstatus: pending")
+    capsys.readouterr()
+
+    clock[0] = 300  # well under the 600s heartbeat interval
+    heartbeat.show("\rstatus: pending")
+    assert capsys.readouterr().out == ""
+
+
+def test_poll_heartbeat_reprints_unchanged_status_after_interval(monkeypatch, capsys) -> None:
+    clock = [0.0]
+    monkeypatch.setattr("bmsdna.devtools.cli_tools.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("bmsdna.devtools.cli_tools.time.strftime", lambda fmt: "12:00:00")
+    heartbeat = PollHeartbeat(heartbeat_secs=600)
+
+    heartbeat.show("\rstatus: pending")
+    capsys.readouterr()
+
+    clock[0] = 600  # exactly at the heartbeat interval
+    heartbeat.show("\rstatus: pending")
+    out = capsys.readouterr().out
+    assert out == "\n[12:00:00] still waiting: status: pending\n"
+
+
+def test_poll_heartbeat_always_prints_a_changed_status(monkeypatch, capsys) -> None:
+    clock = [0.0]
+    monkeypatch.setattr("bmsdna.devtools.cli_tools.time.monotonic", lambda: clock[0])
+    heartbeat = PollHeartbeat(heartbeat_secs=600)
+
+    heartbeat.show("\rstatus: pending")
+    capsys.readouterr()
+
+    clock[0] = 30  # far under the heartbeat interval, but the status itself changed
+    heartbeat.show("\rstatus: passed")
+    assert capsys.readouterr().out == "\rstatus: passed"
+
+
+def test_poll_heartbeat_resets_interval_after_a_real_change(monkeypatch, capsys) -> None:
+    clock = [0.0]
+    monkeypatch.setattr("bmsdna.devtools.cli_tools.time.monotonic", lambda: clock[0])
+    heartbeat = PollHeartbeat(heartbeat_secs=600)
+
+    heartbeat.show("\rstatus: pending")
+    clock[0] = 300
+    heartbeat.show("\rstatus: passed")
+    capsys.readouterr()
+
+    clock[0] = 700  # 400s after the last (changed) print -- still under a fresh 600s window
+    heartbeat.show("\rstatus: passed")
+    assert capsys.readouterr().out == ""

@@ -6,6 +6,7 @@ import requests
 from bmsdna.devtools.cli_tools import EXIT_NEEDS_APPROVAL
 from bmsdna.devtools.gitrepo import AdoRemote
 from bmsdna.devtools.pr_build import (
+    _poll_or_exit,
     approval_stage_name,
     build_web_url,
     draft_notice,
@@ -337,3 +338,43 @@ def test_run_wait_exits_1_not_2_when_a_pipeline_already_failed_and_another_needs
 
     assert exc_info.value.code == 1
     assert "bdt pr retry" in capsys.readouterr().out
+
+
+def test_poll_or_exit_converts_request_exception_to_clear_message() -> None:
+    """Regression: a stalled/failed Azure DevOps request made by a `--wait` poll loop
+    (`run`/`run_watch_deploy`) must exit with a clear message, not an uncaught
+    `requests` traceback -- the raw `RequestException` (e.g. `ReadTimeout` from the
+    timeouts added alongside this) isn't something the CLI's caller can act on.
+    """
+
+    def boom(*args, **kwargs):
+        raise requests.exceptions.ReadTimeout("Read timed out.")
+
+    with pytest.raises(SystemExit) as exc_info:
+        _poll_or_exit(boom)
+
+    assert "timed out" in str(exc_info.value)
+
+
+def test_poll_or_exit_returns_the_wrapped_call_on_success() -> None:
+    assert _poll_or_exit(lambda x: x * 2, 21) == 42
+
+
+def test_run_exits_cleanly_when_get_pr_request_times_out(monkeypatch) -> None:
+    """Regression: `run()`'s poll loop calls `get_pr` every iteration without catching
+    a network/timeout failure -- must convert it to a clean exit (via `_poll_or_exit`),
+    not crash the whole `--wait` command with a raw `requests` traceback.
+    """
+    remote = AdoRemote("myorg", "MyProj", "myrepo")
+
+    def timed_out_get_pr(*args, **kwargs):
+        raise requests.exceptions.ConnectTimeout("Connection timed out.")
+
+    monkeypatch.setattr("bmsdna.devtools.pr_build.current_branch", lambda: "feature-x")
+    monkeypatch.setattr("bmsdna.devtools.pr_build.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", timed_out_get_pr)
+
+    with pytest.raises(SystemExit) as exc_info:
+        run(remote, pat=None, target_branch="main", wait=False)
+
+    assert "timed out" in str(exc_info.value)

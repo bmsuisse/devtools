@@ -11,7 +11,7 @@ from urllib.parse import quote
 import requests
 
 from .ado_auth import auth_header
-from .cli_tools import EXIT_NEEDS_APPROVAL, detect_agent_session, ensure_agent_session_note, is_claude_code
+from .cli_tools import EXIT_NEEDS_APPROVAL, HTTP_TIMEOUT_SECS, PollHeartbeat, detect_agent_session, ensure_agent_session_note, is_claude_code
 from .gitrepo import AdoRemote, current_branch
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
@@ -22,6 +22,11 @@ TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*")
 # "inProgress" (like an ordinary running step) until someone approves/rejects it or it times
 # out — indistinguishable from "still building" unless you look at the timeline specifically.
 CHECKPOINT_APPROVAL_NAME = "Checkpoint.Approval"
+
+# `HTTP_TIMEOUT_SECS` is generous for a plain JSON GET/PATCH, but too tight for uploading a
+# whole file's bytes (a screenshot/attachment) -- give those more room instead of failing an
+# otherwise-fine upload just because it's slower than a metadata call.
+HTTP_UPLOAD_TIMEOUT_SECS = HTTP_TIMEOUT_SECS * 4
 
 # GitPullRequest.mergeStatus values (PullRequestAsyncStatus) that mean the PR
 # can't be merged as-is — build status is moot until this is resolved.
@@ -34,6 +39,23 @@ BAD_MERGE_STATUSES = {
 
 def _base_url(remote: AdoRemote) -> str:
     return f"https://dev.azure.com/{remote.org}/{quote(remote.project, safe='')}"
+
+
+def _poll_or_exit(fn, *args, **kwargs):
+    """Calls `fn(*args, **kwargs)`, converting a network/timeout failure into a clear exit
+    message instead of an uncaught `requests` traceback -- for the calls a `--wait` poll
+    loop (`run`/`run_watch_deploy`) makes every 30s, where a bare `raise` would otherwise
+    surface as a raw stack trace the first time a request stalls or the connection drops.
+
+    Deliberately not baked into `get_pr`/`get_builds_for_pr`/`get_builds_for_branch`
+    themselves -- several best-effort callers (`has_build_policy`, `deploy_build_hint`,
+    `find_pending_approvals`) already wrap those in their own `except requests.RequestException`
+    to fail open, and converting the exception to `SystemExit` at the source would break that.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except requests.exceptions.RequestException as e:
+        sys.exit(f"Azure DevOps request failed or timed out: {e}")
 
 
 def pr_web_url(remote: AdoRemote, pr_id: int) -> str:
@@ -81,11 +103,12 @@ def has_build_policy(session: requests.Session, remote: AdoRemote, branch: str) 
         r = session.get(
             f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}",
             params={"api-version": "7.1"},
+            timeout=HTTP_TIMEOUT_SECS,
         )
         r.raise_for_status()
         repo = r.json()
 
-        r = session.get(f"{_base_url(remote)}/_apis/policy/configurations", params={"api-version": "7.1"})
+        r = session.get(f"{_base_url(remote)}/_apis/policy/configurations", params={"api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS)
         r.raise_for_status()
         configs = r.json().get("value", [])
     except (requests.RequestException, SystemExit):
@@ -140,6 +163,7 @@ def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, tar
                 "$top": 1,
                 "api-version": "7.1",
             },
+            timeout=HTTP_TIMEOUT_SECS,
         )
         r.raise_for_status()
         items = r.json().get("value", [])
@@ -167,6 +191,7 @@ def upload_attachment(session: requests.Session, remote: AdoRemote, pr_id: int, 
         params={"api-version": "7.1"},
         data=Path(file_path).read_bytes(),
         headers={"Content-Type": "application/octet-stream"},
+        timeout=HTTP_UPLOAD_TIMEOUT_SECS,
     )
     r.raise_for_status()
     return r.json()["url"]
@@ -189,6 +214,7 @@ def _patch_pr(session: requests.Session, remote: AdoRemote, pr_id: int, fields: 
         f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}/pullRequests/{pr_id}",
         params={"api-version": "7.1"},
         json=fields,
+        timeout=HTTP_TIMEOUT_SECS,
     )
     r.raise_for_status()
 
@@ -293,6 +319,7 @@ def add_comment(session: requests.Session, remote: AdoRemote, pr_id: int, conten
         f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}/pullRequests/{pr_id}/threads",
         params={"api-version": "7.1"},
         json={"comments": [{"parentCommentId": 0, "content": content, "commentType": 1}], "status": 1},
+        timeout=HTTP_TIMEOUT_SECS,
     )
     r.raise_for_status()
 
@@ -318,7 +345,7 @@ def get_builds_for_pr(session: requests.Session, remote: AdoRemote, source_branc
     builds = []
     for ref in [f"refs/pull/{pr_id}/merge", f"refs/heads/{source_branch}"]:
         url = f"{_base_url(remote)}/_apis/build/builds"
-        r = session.get(url, params={"branchName": ref, "$top": 5, "api-version": "7.1"})
+        r = session.get(url, params={"branchName": ref, "$top": 5, "api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS)
         r.raise_for_status()
         builds.extend(r.json().get("value", []))
 
@@ -334,7 +361,7 @@ def get_builds_for_branch(session: requests.Session, remote: AdoRemote, branch: 
     just a different `branchName` ref.
     """
     url = f"{_base_url(remote)}/_apis/build/builds"
-    r = session.get(url, params={"branchName": f"refs/heads/{branch}", "$top": top, "api-version": "7.1"})
+    r = session.get(url, params={"branchName": f"refs/heads/{branch}", "$top": top, "api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS)
     r.raise_for_status()
     builds = r.json().get("value", [])
     builds.sort(key=lambda b: b["id"], reverse=True)
@@ -380,7 +407,7 @@ def build_web_url(remote: AdoRemote, build_id: int) -> str:
 
 
 def get_timeline_records(session: requests.Session, remote: AdoRemote, build_id: int) -> list:
-    r = session.get(f"{_base_url(remote)}/_apis/build/builds/{build_id}/timeline", params={"api-version": "7.1"})
+    r = session.get(f"{_base_url(remote)}/_apis/build/builds/{build_id}/timeline", params={"api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS)
     r.raise_for_status()
     return r.json().get("records") or []
 
@@ -428,7 +455,7 @@ def find_pending_approvals(session: requests.Session, remote: AdoRemote, builds:
 
 
 def get_failed_step_logs(session: requests.Session, remote: AdoRemote, build_id: int) -> None:
-    r = session.get(f"{_base_url(remote)}/_apis/build/builds/{build_id}/timeline", params={"api-version": "7.1"})
+    r = session.get(f"{_base_url(remote)}/_apis/build/builds/{build_id}/timeline", params={"api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS)
     r.raise_for_status()
     records = r.json().get("records", [])
 
@@ -443,7 +470,7 @@ def get_failed_step_logs(session: requests.Session, remote: AdoRemote, build_id:
         name = rec.get("name", "?")
         log_url = rec["log"]["url"]
         print(f"\n  [FAILED] {name}")
-        r2 = session.get(log_url, params={"api-version": "7.1"})
+        r2 = session.get(log_url, params={"api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS)
         r2.raise_for_status()
         for line in r2.text.splitlines():
             print(f"    {TIMESTAMP_RE.sub('', line)}")
@@ -464,6 +491,7 @@ def retry_failed_build(session: requests.Session, remote: AdoRemote, build_id: i
         f"{_base_url(remote)}/_apis/build/builds/{build_id}",
         params={"retry": "true", "api-version": "7.1"},
         json={},
+        timeout=HTTP_TIMEOUT_SECS,
     )
     r.raise_for_status()
 
@@ -590,17 +618,17 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
     # this function exists to avoid, for any --wait invoked after the build had already started.
     baseline_completed_ids: dict[int, int] = {}
     if wait:
-        pr = get_pr(session, remote, source_branch, target_branch)
-        for b in get_builds_for_pr(session, remote, source_branch, pr["pullRequestId"]):
+        pr = _poll_or_exit(get_pr, session, remote, source_branch, target_branch)
+        for b in _poll_or_exit(get_builds_for_pr, session, remote, source_branch, pr["pullRequestId"]):
             if b.get("status") != "completed":
                 continue
             def_id = b.get("definition", {}).get("id")
             baseline_completed_ids[def_id] = max(baseline_completed_ids.get(def_id, 0), b["id"])
 
     draft_notice_shown = False
-    last_line = ""
+    heartbeat = PollHeartbeat()
     while True:
-        pr = get_pr(session, remote, source_branch, target_branch)
+        pr = _poll_or_exit(get_pr, session, remote, source_branch, target_branch)
         if not draft_notice_shown:
             draft_msg = draft_notice(pr)
             if draft_msg:
@@ -612,7 +640,7 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
 
         msg = f"\rPR #{pr_id}: {pr_title} ({pr_status})"
 
-        builds = get_builds_for_pr(session, remote, source_branch, pr_id)
+        builds = _poll_or_exit(get_builds_for_pr, session, remote, source_branch, pr_id)
         if builds:
             pipeline_builds = latest_per_pipeline(builds)
             if wait:
@@ -621,9 +649,7 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
                     msg += " | waiting for new build(s) to start: " + ", ".join(
                         b.get("definition", {}).get("name", "?") for b in stale
                     )
-                    if msg != last_line:
-                        print(msg, end="", flush=True)
-                        last_line = msg
+                    heartbeat.show(msg)
                     time.sleep(30)
                     continue
             msg += " | " + ", ".join(
@@ -668,9 +694,7 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
                     print(hint)
                 return
 
-        if msg != last_line:
-            print(msg, end="", flush=True)
-            last_line = msg
+        heartbeat.show(msg)
 
         if wait:
             time.sleep(30)
@@ -688,9 +712,9 @@ def run_watch_deploy(remote: AdoRemote, pat: str | None, target_branch: str, wai
     session = requests.Session()
     session.headers.update(auth_header(pat))
 
-    last_line = ""
+    heartbeat = PollHeartbeat()
     while True:
-        builds = get_builds_for_branch(session, remote, target_branch)
+        builds = _poll_or_exit(get_builds_for_branch, session, remote, target_branch)
         if not builds:
             print(f"No builds found on '{target_branch}'.")
             return
@@ -717,7 +741,5 @@ def run_watch_deploy(remote: AdoRemote, pat: str | None, target_branch: str, wai
                 sys.exit(1)
             return
 
-        if msg != last_line:
-            print(msg, end="", flush=True)
-            last_line = msg
+        heartbeat.show(msg)
         time.sleep(30)
