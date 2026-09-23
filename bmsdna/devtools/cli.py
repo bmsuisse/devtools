@@ -643,7 +643,9 @@ def worktree(
 def find_repo_cmd(
     name: str,
     root: Path | None = typer.Option(
-        None, "--root", help="Local work dir to search (default: $AZDO_WORK_DIR/$BMS_WORK_DIR, falling back to ~/projects)"
+        None,
+        "--root",
+        help="Local work dir to search (default: $AZDO_WORK_DIR/$BMS_WORK_DIR, falling back to ~/projects, or C:/Projects on Windows)",
     ),
     org: str | None = typer.Option(
         None, "--org", envvar=["AZDO_ORG", "BMS_ORG"], help="Azure DevOps org to search when there's no local match"
