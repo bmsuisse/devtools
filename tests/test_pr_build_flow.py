@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 import requests
 
-from bmsdna.devtools.cli_tools import EXIT_NEEDS_APPROVAL
+from bmsdna.devtools.cli_tools import EXIT_NEEDS_APPROVAL, HTTP_TIMEOUT_SECS
 from bmsdna.devtools.gitrepo import AdoRemote
 from bmsdna.devtools.pr_build import (
     add_attachments,
@@ -285,6 +285,17 @@ def test_get_builds_for_branch_queries_target_branch_ref() -> None:
     params = session.get.call_args.kwargs["params"]
     assert params["branchName"] == "refs/heads/main"
     assert params["$top"] == 3
+
+
+def test_get_builds_for_branch_bounds_the_request_with_a_timeout() -> None:
+    """Regression: every Azure DevOps REST call must pass a timeout -- otherwise a stalled
+    network call can hang `--wait` (or any other command hitting this API) forever.
+    """
+    session = make_builds_session([DEPLOY_BUILD])
+
+    get_builds_for_branch(session, REMOTE, "main")
+
+    assert session.get.call_args.kwargs["timeout"] == HTTP_TIMEOUT_SECS
 
 
 def test_deploy_build_hint_none_when_no_builds_on_target() -> None:

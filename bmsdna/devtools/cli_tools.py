@@ -34,6 +34,15 @@ EXIT_NEEDS_APPROVAL = 3
 # not to spam a captured log.
 POLL_HEARTBEAT_SECS = 600.0
 
+# Bounds a single call to an external CLI (`gh`/`az`/`git`) or a single Azure DevOps REST
+# request. Without a timeout, a stalled network call or the CLI blocking on an interactive
+# prompt (e.g. an expired `az`/`gh` login) could hang a command -- most importantly a
+# `--wait` poll loop -- forever with no way to know why. 30s is generous for any single
+# call these commands make (none of them are large/slow by nature) while still bounding
+# the wait to something a human would notice and investigate.
+CLI_TIMEOUT_SECS = 30.0
+HTTP_TIMEOUT_SECS = 30.0
+
 
 class PollHeartbeat:
     """Tracks a repeatedly-polled status line for a `--wait` loop and decides when to

@@ -1,9 +1,10 @@
 import json
+import subprocess
 from unittest.mock import MagicMock
 
 import pytest
 
-from bmsdna.devtools.cli_tools import EXIT_NEEDS_APPROVAL
+from bmsdna.devtools.cli_tools import CLI_TIMEOUT_SECS, EXIT_NEEDS_APPROVAL
 from bmsdna.devtools.gh_pr import (
     add_attachments,
     add_files,
@@ -14,7 +15,9 @@ from bmsdna.devtools.gh_pr import (
     deploy_run_hint,
     draft_notice,
     failed_run_ids,
+    get_pr,
     get_workflow_runs_for_branch,
+    has_build_policy,
     latest_per_workflow,
     merge_conflict_message,
     protection_requires_status_checks,
@@ -735,3 +738,33 @@ def test_run_skips_deploy_hint_when_check_failed(monkeypatch, capsys) -> None:
 
     assert hint_calls == []
     assert "should not print" not in capsys.readouterr().out
+
+
+def test_get_pr_times_out_with_clear_message_not_a_hang(monkeypatch) -> None:
+    """Regression: a stalled `gh` call (network stall, or `gh` blocking on an interactive
+    re-auth prompt) must exit with a clear message within CLI_TIMEOUT_SECS, not hang forever.
+    """
+
+    def fake_run(cmd, **kwargs):
+        assert kwargs.get("timeout") == CLI_TIMEOUT_SECS
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    with pytest.raises(SystemExit) as exc_info:
+        get_pr("gh")
+
+    assert "timed out" in str(exc_info.value)
+
+
+def test_has_build_policy_fails_open_on_timeout(monkeypatch) -> None:
+    """has_build_policy is documented best-effort (fails open) -- a timed-out `gh api` call
+    must return False, not propagate the SystemExit a timeout raises everywhere else.
+    """
+
+    def fake_run(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    assert has_build_policy("gh", "main") is False
