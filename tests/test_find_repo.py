@@ -313,24 +313,29 @@ def test_run_exits_if_no_local_match_and_no_org_or_github_org(tmp_path) -> None:
     assert "GITHUB_ORG" in str(exc_info.value)
 
 
-def test_run_clones_github_org_match_into_github_subfolder(tmp_path, monkeypatch) -> None:
+def test_run_clones_github_org_match_via_gh_repo_clone_not_ado_auth(tmp_path, monkeypatch) -> None:
+    """A GitHub-sourced match must clone via `gh repo clone` (so it authenticates the same
+    way `gh repo list` already did), never via `clone()` + `auth_header()` -- the latter is
+    ADO's Basic-PAT-or-`az`-Bearer-token helper and must never be sent to github.com."""
     monkeypatch.setattr("bmsdna.devtools.find_repo.require_gh", lambda: "gh")
     monkeypatch.setattr(
         "bmsdna.devtools.find_repo.find_github",
         lambda gh, org, name: [RemoteRepo("someghorg", "widgets", "https://github.com/someghorg/widgets", source="github")],
     )
-    monkeypatch.setattr("bmsdna.devtools.find_repo.auth_header", lambda pat: {})
+    monkeypatch.setattr(
+        "bmsdna.devtools.find_repo.auth_header", lambda pat: (_ for _ in ()).throw(AssertionError("must not be called"))
+    )
     clone_calls = []
 
-    def fake_clone(url, dest, auth=None):
-        clone_calls.append((url, dest))
-        return subprocess.CompletedProcess(["git", "clone"], 0)
+    def fake_clone_github(gh, full_name, dest):
+        clone_calls.append((gh, full_name, dest))
+        return subprocess.CompletedProcess(["gh", "repo", "clone"], 0)
 
-    monkeypatch.setattr("bmsdna.devtools.find_repo.clone", fake_clone)
+    monkeypatch.setattr("bmsdna.devtools.find_repo.clone_github", fake_clone_github)
 
     run("widgets", root=tmp_path, org=None, github_org="someghorg", yes=True)
 
-    assert clone_calls == [("https://github.com/someghorg/widgets", tmp_path / "github" / "widgets")]
+    assert clone_calls == [("gh", "someghorg/widgets", tmp_path / "github" / "widgets")]
 
 
 def test_run_searches_both_org_and_github_org(tmp_path, monkeypatch) -> None:
@@ -341,16 +346,15 @@ def test_run_searches_both_org_and_github_org(tmp_path, monkeypatch) -> None:
         "bmsdna.devtools.find_repo.find_github",
         lambda gh, org, name: [RemoteRepo("someghorg", "widgets", "https://github.com/someghorg/widgets", source="github")],
     )
-    monkeypatch.setattr("bmsdna.devtools.find_repo.auth_header", lambda pat: {})
     clone_calls = []
     monkeypatch.setattr(
-        "bmsdna.devtools.find_repo.clone",
-        lambda url, dest, auth=None: clone_calls.append((url, dest)) or subprocess.CompletedProcess(["git"], 0),
+        "bmsdna.devtools.find_repo.clone_github",
+        lambda gh, full_name, dest: clone_calls.append((full_name, dest)) or subprocess.CompletedProcess(["gh"], 0),
     )
 
     run("widgets", root=tmp_path, org="someorg", github_org="someghorg", yes=True)
 
-    assert clone_calls == [("https://github.com/someghorg/widgets", tmp_path / "github" / "widgets")]
+    assert clone_calls == [("someghorg/widgets", tmp_path / "github" / "widgets")]
 
 
 def test_run_prefers_exact_match_from_either_source_over_substring_from_the_other(tmp_path, monkeypatch) -> None:
@@ -366,16 +370,15 @@ def test_run_prefers_exact_match_from_either_source_over_substring_from_the_othe
         "bmsdna.devtools.find_repo.find_github",
         lambda gh, org, name: [RemoteRepo("someghorg", "widgets", "https://github.com/someghorg/widgets", source="github")],
     )
-    monkeypatch.setattr("bmsdna.devtools.find_repo.auth_header", lambda pat: {})
     clone_calls = []
     monkeypatch.setattr(
-        "bmsdna.devtools.find_repo.clone",
-        lambda url, dest, auth=None: clone_calls.append((url, dest)) or subprocess.CompletedProcess(["git"], 0),
+        "bmsdna.devtools.find_repo.clone_github",
+        lambda gh, full_name, dest: clone_calls.append((full_name, dest)) or subprocess.CompletedProcess(["gh"], 0),
     )
 
     run("widgets", root=tmp_path, org="someorg", github_org="someghorg", yes=True)
 
-    assert clone_calls == [("https://github.com/someghorg/widgets", tmp_path / "github" / "widgets")]
+    assert clone_calls == [("someghorg/widgets", tmp_path / "github" / "widgets")]
 
 
 def test_run_exits_if_dest_already_exists(tmp_path, monkeypatch) -> None:

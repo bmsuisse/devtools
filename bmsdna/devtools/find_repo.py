@@ -21,13 +21,17 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
 from .ado_auth import auth_header
 from .cli_tools import require_az, require_gh
 from .worktree import find_repos
+
+T = TypeVar("T")
 
 
 def work_dir() -> Path:
@@ -39,18 +43,21 @@ def work_dir() -> Path:
     return Path("~/projects").expanduser()
 
 
-def find_local(name: str, root: Path) -> list[Path]:
-    """Repos under `root` whose folder name matches `name`, case-insensitively.
-
-    Prefers exact matches; only falls back to substring matches (also
-    case-insensitive) when no exact match exists, so a short/common name
-    doesn't drown in unrelated results.
+def _prefer_exact(items: list[T], name: str, key: Callable[[T], str]) -> list[T]:
+    """Exact (case-insensitive) matches on `key(item)` if there are any, else
+    substring matches -- shared by `find_local`/`find_remote`/`find_github`
+    (and, cross-source, by `run`) so a short/common name doesn't drown in
+    unrelated results.
     """
-    repos = find_repos(root)
-    exact = [r for r in repos if r.name.lower() == name.lower()]
+    exact = [i for i in items if key(i).lower() == name.lower()]
     if exact:
-        return sorted(exact)
-    return sorted(r for r in repos if name.lower() in r.name.lower())
+        return exact
+    return [i for i in items if name.lower() in key(i).lower()]
+
+
+def find_local(name: str, root: Path) -> list[Path]:
+    """Repos under `root` whose folder name matches `name` -- see `_prefer_exact`."""
+    return sorted(_prefer_exact(find_repos(root), name, key=lambda r: r.name))
 
 
 @dataclass(frozen=True)
@@ -75,8 +82,7 @@ def _az(az: str, *args: str) -> tuple[bool, str]:
 
 
 def find_remote(az: str, org: str, name: str) -> list[RemoteRepo]:
-    """Search every project in `org` for a repo matching `name`, the same
-    exact-first/substring-fallback rule as `find_local`.
+    """Search every project in `org` for a repo matching `name` -- see `_prefer_exact`.
 
     Azure DevOps has no "search repos by name across the whole org" API, so
     (as the old skill's script did) this lists every project and then every
@@ -101,15 +107,11 @@ def find_remote(az: str, org: str, name: str) -> list[RemoteRepo]:
         for repos in pool.map(repos_for, projects):
             all_repos.extend(repos)
 
-    exact = [r for r in all_repos if r.name.lower() == name.lower()]
-    if exact:
-        return exact
-    return [r for r in all_repos if name.lower() in r.name.lower()]
+    return _prefer_exact(all_repos, name, key=lambda r: r.name)
 
 
 def find_github(gh: str, org: str, name: str) -> list[RemoteRepo]:
-    """Search `org`'s GitHub repos for a match, the same exact-first/substring-fallback
-    rule as `find_local`/`find_remote`.
+    """Search `org`'s GitHub repos for a match -- see `_prefer_exact`.
 
     Unlike Azure DevOps, GitHub has a single flat list of repos per org/user
     (no per-project split), so `gh repo list` covers the whole org in one call.
@@ -121,11 +123,7 @@ def find_github(gh: str, org: str, name: str) -> list[RemoteRepo]:
         sys.exit(f"gh repo list failed (try `gh auth login`?):\n{result.stderr.strip()}")
 
     all_repos = [RemoteRepo(org, r["name"], r["url"], source="github") for r in json.loads(result.stdout)]
-
-    exact = [r for r in all_repos if r.name.lower() == name.lower()]
-    if exact:
-        return exact
-    return [r for r in all_repos if name.lower() in r.name.lower()]
+    return _prefer_exact(all_repos, name, key=lambda r: r.name)
 
 
 def clone(remote_url: str, dest: Path, auth: dict[str, str] | None = None) -> subprocess.CompletedProcess:
@@ -145,6 +143,20 @@ def clone(remote_url: str, dest: Path, auth: dict[str, str] | None = None) -> su
         return subprocess.run(["git", "clone", remote_url, str(dest)], env=env, check=False)
     except FileNotFoundError:
         sys.exit("'git' is required for this command but wasn't found on PATH.")
+
+
+def clone_github(gh: str, full_name: str, dest: Path) -> subprocess.CompletedProcess:
+    """Clone a GitHub repo via `gh repo clone`, so it authenticates the same way
+    `gh repo list` already did.
+
+    Deliberately not `clone()` + a hand-built header: `auth_header` (ADO's Basic-PAT-or-
+    `az`-Bearer-token helper) must never be sent to github.com, and `gh` already knows how
+    to authenticate its own git operations (private repos included).
+    """
+    try:
+        return subprocess.run([gh, "repo", "clone", full_name, str(dest)], check=False)
+    except FileNotFoundError:
+        sys.exit("'gh' is required for this command but wasn't found on PATH.")
 
 
 def run(
@@ -175,19 +187,23 @@ def run(
             "also search GitHub, or pass --org/--github-org."
         )
 
+    # Both are independent, network-I/O-bound org searches -- run them concurrently
+    # rather than paying their full latency back-to-back when both are given.
     remote_matches: list[RemoteRepo] = []
-    if org:
-        az = require_az()
-        remote_matches += find_remote(az, org, name)
-    if github_org:
-        gh = require_gh()
-        remote_matches += find_github(gh, github_org, name)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        searches = []
+        if org:
+            az = require_az()
+            searches.append(pool.submit(find_remote, az, org, name))
+        if github_org:
+            gh = require_gh()
+            searches.append(pool.submit(find_github, gh, github_org, name))
+        for search in searches:
+            remote_matches += search.result()
 
     # An exact match from one source beats a substring match from the other --
     # find_remote/find_github already apply exact-first within their own source.
-    exact = [r for r in remote_matches if r.name.lower() == name.lower()]
-    if exact:
-        remote_matches = exact
+    remote_matches = _prefer_exact(remote_matches, name, key=lambda r: r.name)
 
     if not remote_matches:
         searched = []
@@ -220,6 +236,9 @@ def run(
             print("Not cloned.")
             return
 
-    result = clone(match.remote_url, dest, auth_header(pat))
+    if match.source == "github":
+        result = clone_github(require_gh(), f"{match.project}/{match.name}", dest)
+    else:
+        result = clone(match.remote_url, dest, auth_header(pat))
     if result.returncode != 0:
         raise SystemExit(result.returncode)
