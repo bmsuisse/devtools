@@ -1,4 +1,10 @@
-from bmsdna.devtools.pr_labels import format_missing_groups_error, missing_label_groups, required_label_groups
+from bmsdna.devtools.pr_labels import (
+    format_missing_groups_error,
+    label_for_scope,
+    missing_label_groups,
+    required_label_groups,
+    scope_labels,
+)
 
 
 def write_pyproject(tmp_path, body: str):
@@ -54,3 +60,48 @@ def test_format_missing_groups_error_lists_group_name_and_choices() -> None:
     assert "risk" in msg
     assert "breaking" in msg
     assert "non-breaking" in msg
+
+
+def test_scope_labels_empty_when_no_pyproject(tmp_path) -> None:
+    assert scope_labels(tmp_path) == {}
+
+
+def test_scope_labels_empty_when_table_absent(tmp_path) -> None:
+    write_pyproject(tmp_path, "[tool.bdt.pr.required_labels]\ntype = ['bug']\n")
+    assert scope_labels(tmp_path) == {}
+
+
+def test_scope_labels_reads_configured_mapping(tmp_path) -> None:
+    write_pyproject(
+        tmp_path,
+        "[tool.bdt.pr.scope_labels]\n"
+        'customers = "e2e-customers"\n'
+        'billing = "e2e-billing"\n',
+    )
+    assert scope_labels(tmp_path) == {"customers": "e2e-customers", "billing": "e2e-billing"}
+
+
+def test_scope_labels_ignores_non_string_values(tmp_path) -> None:
+    write_pyproject(
+        tmp_path,
+        "[tool.bdt.pr.scope_labels]\n"
+        'customers = "e2e-customers"\n'
+        "billing = [\"not\", \"a\", \"string\"]\n",
+    )
+    assert scope_labels(tmp_path) == {"customers": "e2e-customers"}
+
+
+def test_label_for_scope_returns_none_when_scope_is_none() -> None:
+    assert label_for_scope({"customers": "e2e-customers"}, None) is None
+
+
+def test_label_for_scope_returns_none_when_scope_unconfigured() -> None:
+    assert label_for_scope({"customers": "e2e-customers"}, "billing") is None
+
+
+def test_label_for_scope_returns_configured_label() -> None:
+    assert label_for_scope({"customers": "e2e-customers"}, "customers") == "e2e-customers"
+
+
+def test_label_for_scope_matches_case_insensitively() -> None:
+    assert label_for_scope({"Customers": "e2e-customers"}, "CUSTOMERS") == "e2e-customers"
