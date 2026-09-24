@@ -50,6 +50,12 @@ def current_branch(cwd: str | None = None) -> str:
     return _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd)
 
 
+def head_commit_subject(cwd: str | None = None) -> str:
+    """Subject line of the current branch's HEAD commit -- e.g. used to derive a PR's
+    conventional-commit scope (`type(scope): ...`) locally, before the PR exists."""
+    return _run_git(["log", "-1", "--format=%s"], cwd=cwd)
+
+
 def origin_url(cwd: str | None = None) -> str:
     return _run_git(["remote", "get-url", "origin"], cwd=cwd)
 
