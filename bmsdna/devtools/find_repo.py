@@ -1,6 +1,7 @@
 """`bdt find-repo <name>`: locate a repo by name, locally first and then in
-an Azure DevOps org, without needing the full `ALL_REPOS.md` org sync that
-the `cross-repo-discovery` skill (bmsuisse/skills) used to require.
+an Azure DevOps org and/or a GitHub org, without needing the full
+`ALL_REPOS.md` org sync that the `cross-repo-discovery` skill
+(bmsuisse/skills) used to require.
 
 Env vars mirror that skill's so switching over needs no reconfiguration:
 - `AZDO_WORK_DIR` / `BMS_WORK_DIR`: local clone root to search (and to clone
@@ -8,6 +9,10 @@ Env vars mirror that skill's so switching over needs no reconfiguration:
   elsewhere.
 - `AZDO_ORG` / `BMS_ORG`: Azure DevOps org to search when no local match is
   found.
+- `GITHUB_ORG` / `BMS_GITHUB_ORG`: GitHub org to search when no local match
+  is found. A match is cloned into `root/github/<repo>` -- GitHub repos
+  aren't split into ADO-style projects, so by convention they all land in
+  one `github` subfolder regardless of which org they came from.
 """
 
 from __future__ import annotations
@@ -16,13 +21,17 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
 from .ado_auth import auth_header
-from .cli_tools import require_az
+from .cli_tools import require_az, require_gh
 from .worktree import find_repos
+
+T = TypeVar("T")
 
 
 def work_dir() -> Path:
@@ -34,18 +43,21 @@ def work_dir() -> Path:
     return Path("~/projects").expanduser()
 
 
-def find_local(name: str, root: Path) -> list[Path]:
-    """Repos under `root` whose folder name matches `name`, case-insensitively.
-
-    Prefers exact matches; only falls back to substring matches (also
-    case-insensitive) when no exact match exists, so a short/common name
-    doesn't drown in unrelated results.
+def _prefer_exact(items: list[T], name: str, key: Callable[[T], str]) -> list[T]:
+    """Exact (case-insensitive) matches on `key(item)` if there are any, else
+    substring matches -- shared by `find_local`/`find_remote`/`find_github`
+    (and, cross-source, by `run`) so a short/common name doesn't drown in
+    unrelated results.
     """
-    repos = find_repos(root)
-    exact = [r for r in repos if r.name.lower() == name.lower()]
+    exact = [i for i in items if key(i).lower() == name.lower()]
     if exact:
-        return sorted(exact)
-    return sorted(r for r in repos if name.lower() in r.name.lower())
+        return exact
+    return [i for i in items if name.lower() in key(i).lower()]
+
+
+def find_local(name: str, root: Path) -> list[Path]:
+    """Repos under `root` whose folder name matches `name` -- see `_prefer_exact`."""
+    return sorted(_prefer_exact(find_repos(root), name, key=lambda r: r.name))
 
 
 @dataclass(frozen=True)
@@ -53,6 +65,7 @@ class RemoteRepo:
     project: str
     name: str
     remote_url: str
+    source: str = "ado"
 
 
 def _az(az: str, *args: str) -> tuple[bool, str]:
@@ -69,8 +82,7 @@ def _az(az: str, *args: str) -> tuple[bool, str]:
 
 
 def find_remote(az: str, org: str, name: str) -> list[RemoteRepo]:
-    """Search every project in `org` for a repo matching `name`, the same
-    exact-first/substring-fallback rule as `find_local`.
+    """Search every project in `org` for a repo matching `name` -- see `_prefer_exact`.
 
     Azure DevOps has no "search repos by name across the whole org" API, so
     (as the old skill's script did) this lists every project and then every
@@ -95,10 +107,23 @@ def find_remote(az: str, org: str, name: str) -> list[RemoteRepo]:
         for repos in pool.map(repos_for, projects):
             all_repos.extend(repos)
 
-    exact = [r for r in all_repos if r.name.lower() == name.lower()]
-    if exact:
-        return exact
-    return [r for r in all_repos if name.lower() in r.name.lower()]
+    return _prefer_exact(all_repos, name, key=lambda r: r.name)
+
+
+def find_github(gh: str, org: str, name: str) -> list[RemoteRepo]:
+    """Search `org`'s GitHub repos for a match -- see `_prefer_exact`.
+
+    Unlike Azure DevOps, GitHub has a single flat list of repos per org/user
+    (no per-project split), so `gh repo list` covers the whole org in one call.
+    """
+    result = subprocess.run(
+        [gh, "repo", "list", org, "--json", "name,url", "--limit", "1000"], capture_output=True, text=True, check=False
+    )
+    if result.returncode != 0:
+        sys.exit(f"gh repo list failed (try `gh auth login`?):\n{result.stderr.strip()}")
+
+    all_repos = [RemoteRepo(org, r["name"], r["url"], source="github") for r in json.loads(result.stdout)]
+    return _prefer_exact(all_repos, name, key=lambda r: r.name)
 
 
 def clone(remote_url: str, dest: Path, auth: dict[str, str] | None = None) -> subprocess.CompletedProcess:
@@ -120,10 +145,27 @@ def clone(remote_url: str, dest: Path, auth: dict[str, str] | None = None) -> su
         sys.exit("'git' is required for this command but wasn't found on PATH.")
 
 
-def run(name: str, *, root: Path | None, org: str | None, yes: bool, pat: str | None = None) -> None:
+def clone_github(gh: str, full_name: str, dest: Path) -> subprocess.CompletedProcess:
+    """Clone a GitHub repo via `gh repo clone`, so it authenticates the same way
+    `gh repo list` already did.
+
+    Deliberately not `clone()` + a hand-built header: `auth_header` (ADO's Basic-PAT-or-
+    `az`-Bearer-token helper) must never be sent to github.com, and `gh` already knows how
+    to authenticate its own git operations (private repos included).
+    """
+    try:
+        return subprocess.run([gh, "repo", "clone", full_name, str(dest)], check=False)
+    except FileNotFoundError:
+        sys.exit("'gh' is required for this command but wasn't found on PATH.")
+
+
+def run(
+    name: str, *, root: Path | None, org: str | None, github_org: str | None = None, yes: bool, pat: str | None = None
+) -> None:
     """`bdt find-repo <name>`: search `root` (default `work_dir()`) for a local
-    match, then -- if there isn't one -- `org`'s Azure DevOps repos, offering
-    to clone a single remote-only match into `root/<project>/<repo>`.
+    match, then -- if there isn't one -- `org`'s Azure DevOps repos and/or
+    `github_org`'s GitHub repos, offering to clone a single remote-only match
+    into `root/<project>/<repo>` (ADO) or `root/github/<repo>` (GitHub).
     """
     search_root = root or work_dir()
     if not search_root.is_dir():
@@ -138,16 +180,38 @@ def run(name: str, *, root: Path | None, org: str | None, yes: bool, pat: str | 
             print(path)
         return
 
-    if not org:
+    if not org and not github_org:
         sys.exit(
             f"No local repo matching '{name}' found under {search_root}. "
-            "Set AZDO_ORG (or BMS_ORG) to also search Azure DevOps, or pass --org."
+            "Set AZDO_ORG (or BMS_ORG) to also search Azure DevOps, GITHUB_ORG (or BMS_GITHUB_ORG) to "
+            "also search GitHub, or pass --org/--github-org."
         )
 
-    az = require_az()
-    remote_matches = find_remote(az, org, name)
+    # Both are independent, network-I/O-bound org searches -- run them concurrently
+    # rather than paying their full latency back-to-back when both are given.
+    remote_matches: list[RemoteRepo] = []
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        searches = []
+        if org:
+            az = require_az()
+            searches.append(pool.submit(find_remote, az, org, name))
+        if github_org:
+            gh = require_gh()
+            searches.append(pool.submit(find_github, gh, github_org, name))
+        for search in searches:
+            remote_matches += search.result()
+
+    # An exact match from one source beats a substring match from the other --
+    # find_remote/find_github already apply exact-first within their own source.
+    remote_matches = _prefer_exact(remote_matches, name, key=lambda r: r.name)
+
     if not remote_matches:
-        sys.exit(f"No repo matching '{name}' found locally under {search_root} or in the '{org}' Azure DevOps org.")
+        searched = []
+        if org:
+            searched.append(f"the '{org}' Azure DevOps org")
+        if github_org:
+            searched.append(f"the '{github_org}' GitHub org")
+        sys.exit(f"No repo matching '{name}' found locally under {search_root} or in " + " or ".join(searched) + ".")
 
     for r in remote_matches:
         print(f"{r.project}/{r.name}  {r.remote_url}")
@@ -156,7 +220,7 @@ def run(name: str, *, root: Path | None, org: str | None, yes: bool, pat: str | 
         sys.exit("\nMultiple matches -- narrow the name or clone manually.")
 
     match = remote_matches[0]
-    dest = search_root / match.project / match.name
+    dest = search_root / "github" / match.name if match.source == "github" else search_root / match.project / match.name
     if dest.exists():
         sys.exit(f"{dest} already exists -- remove it or clone manually.")
 
@@ -172,6 +236,9 @@ def run(name: str, *, root: Path | None, org: str | None, yes: bool, pat: str | 
             print("Not cloned.")
             return
 
-    result = clone(match.remote_url, dest, auth_header(pat))
+    if match.source == "github":
+        result = clone_github(require_gh(), f"{match.project}/{match.name}", dest)
+    else:
+        result = clone(match.remote_url, dest, auth_header(pat))
     if result.returncode != 0:
         raise SystemExit(result.returncode)
