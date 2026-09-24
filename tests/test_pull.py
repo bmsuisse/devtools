@@ -182,6 +182,30 @@ def test_build_steps_includes_all_three_when_default_differs_from_main(tmp_path)
         assert "--no-rebase" in step.cmd
 
 
+def test_build_steps_queries_the_remote_exactly_once_for_main_and_default_branch(tmp_path, monkeypatch) -> None:
+    """`remote_main_or_master` and `default_branch`'s info (main/master heads, and
+    the default branch) both come from a single `git ls-remote`, not two separate
+    round trips to the same remote -- regression test for that dedup."""
+    remote = init_repo(tmp_path / "remote")
+    checkout = clone(remote, tmp_path / "clone")
+
+    import bmsdna.devtools.pull as pull_module
+
+    ls_remote_calls: list[list[str]] = []
+    real_run_capture = pull_module._run_capture
+
+    def counting_run_capture(cmd, cwd=None, **kwargs):
+        if "ls-remote" in cmd:
+            ls_remote_calls.append(cmd)
+        return real_run_capture(cmd, cwd, **kwargs)
+
+    monkeypatch.setattr(pull_module, "_run_capture", counting_run_capture)
+
+    build_steps("origin", no_default=False, pull_args=[], cwd=checkout)
+
+    assert len(ls_remote_calls) == 1
+
+
 def test_build_steps_skips_default_branch_when_no_default(tmp_path) -> None:
     remote = init_repo(tmp_path / "remote")
     checkout = clone(remote, tmp_path / "clone")
@@ -312,3 +336,26 @@ def test_run_reports_non_conflict_pull_failure(tmp_path, capsys) -> None:
         run(cwd=checkout)
 
     assert "failed" in str(exc_info.value)
+
+
+def test_run_refuses_to_start_with_a_pre_existing_unrelated_conflict(tmp_path, capsys) -> None:
+    """Regression test: without an up-front check, a conflict already sitting in the
+    worktree from something unrelated (an earlier manual rebase, a previous unresolved
+    `bdt pull`, ...) would make the *first* step's `git pull` fail and get mislabeled as
+    "merge conflict while pulling <that step>" -- misattributing a pre-existing problem
+    to whichever step happens to run first."""
+    remote = init_repo(tmp_path / "remote")
+    checkout = clone(remote, tmp_path / "clone")
+    commit_file(remote, "remote change\n")
+    commit_file(checkout, "local conflicting change\n")
+    with pytest.raises(SystemExit):
+        run(cwd=checkout)
+    capsys.readouterr()  # discard output from the run() call above
+
+    with pytest.raises(SystemExit) as exc_info:
+        run(cwd=checkout)
+
+    message = str(exc_info.value)
+    assert "already has unresolved merge conflicts" in message
+    out = capsys.readouterr().out
+    assert "pulling" not in out  # refused before attempting any step

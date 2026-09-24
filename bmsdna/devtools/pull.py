@@ -79,15 +79,29 @@ def _parse_ls_remote_heads(output: str) -> dict[str, str]:
     return branches
 
 
+def _query_remote(remote: str, cwd: Path | str | None, *, timeout: float) -> tuple[str | None, dict[str, str]]:
+    """One `git ls-remote --symref <remote> HEAD main master` covering both
+    `default_branch`'s and `remote_main_or_master`'s needs in a single
+    network round trip -- returns (HEAD's symref target, {branch: sha}).
+    ({} and None respectively if the remote couldn't be reached.)
+    """
+    result = _run_capture(["git", "ls-remote", "--symref", remote, "HEAD", "main", "master"], cwd, timeout=timeout)
+    if result.returncode != 0:
+        return None, {}
+    default = None
+    for line in result.stdout.splitlines():
+        # "ref: refs/heads/main\tHEAD"
+        if line.startswith("ref:") and line.endswith("HEAD"):
+            default = line[len("ref:"):].split("\t")[0].strip().removeprefix("refs/heads/")
+    return default, _parse_ls_remote_heads(result.stdout)
+
+
 def remote_main_or_master(remote: str, cwd: Path | str | None = None) -> str | None:
     """'main' or 'master', whichever exists as a branch on `remote` (checked
     live via `git ls-remote`, not stale local remote-tracking refs); 'main'
     wins if somehow both exist. None if neither does, or the remote couldn't
     be reached."""
-    result = _run_capture(["git", "ls-remote", "--heads", remote, "main", "master"], cwd)
-    if result.returncode != 0:
-        return None
-    branches = _parse_ls_remote_heads(result.stdout)
+    _, branches = _query_remote(remote, cwd, timeout=CLI_TIMEOUT_SECS)
     if "main" in branches:
         return "main"
     if "master" in branches:
@@ -105,15 +119,8 @@ def default_branch(remote: str, cwd: Path | str | None = None, *, timeout: float
     (e.g. `worktree.create()`'s post-creation hint) should pass a short one --
     an offline/slow remote shouldn't make an unrelated command visibly stall.
     """
-    result = _run_capture(["git", "ls-remote", "--symref", remote, "HEAD"], cwd, timeout=timeout)
-    if result.returncode != 0:
-        return None
-    for line in result.stdout.splitlines():
-        # "ref: refs/heads/main\tHEAD"
-        if line.startswith("ref:") and line.endswith("HEAD"):
-            ref = line[len("ref:"):].split("\t")[0].strip()
-            return ref.removeprefix("refs/heads/")
-    return None
+    default, _ = _query_remote(remote, cwd, timeout=timeout)
+    return default
 
 
 # A recent-ish git refuses to even attempt a `git pull` that isn't a fast-forward
@@ -152,14 +159,17 @@ def build_steps(remote: str, *, no_default: bool, pull_args: list[str], cwd: Pat
     else:
         steps.append(PullStep("current branch's remote tracking branch (skipped: no upstream configured)", None))
 
-    main = remote_main_or_master(remote, cwd)
+    # One combined `git ls-remote` covers both main/master and the default
+    # branch -- see `_query_remote` -- rather than two separate round trips
+    # to the same remote.
+    default, branches = _query_remote(remote, cwd, timeout=CLI_TIMEOUT_SECS)
+    main = "main" if "main" in branches else "master" if "master" in branches else None
     if main is not None:
         steps.append(PullStep(f"{remote}/{main}", ["git", "pull", remote, main, *args]))
     else:
         steps.append(PullStep(f"{remote}'s main/master branch (skipped: neither exists on {remote}, or it's unreachable)", None))
 
     if not no_default:
-        default = default_branch(remote, cwd)
         if default is not None and default == main:
             # Common case: the default branch IS main/master, already pulled
             # above -- running the identical `git pull` a second time would
@@ -204,6 +214,19 @@ def run(
     cwd: Path | str | None = None,
 ) -> None:
     pull_args = pull_args or []
+
+    # Checked up front, before any step runs, so that a conflict seen after a
+    # step below is guaranteed to have been *caused* by that step -- without
+    # this, `_has_conflict` can't tell a conflict this run just made from one
+    # already sitting there from an earlier, unrelated, still-unresolved
+    # `git rebase`/`cherry-pick`/`bdt pull`, and would mislabel the latter as
+    # caused by whichever step happens to run (and fail) first.
+    if _has_conflict(cwd):
+        sys.exit(
+            "ERROR: this worktree already has unresolved merge conflicts (unrelated to this run).\n"
+            "Resolve them (or run `git merge --abort` / `git rebase --abort` to give up), then re-run `bdt pull`."
+        )
+
     steps = build_steps(remote, no_default=no_default, pull_args=pull_args, cwd=cwd)
 
     print(f"bringing '{current_branch(cwd)}' up to date from {remote}:")
