@@ -17,7 +17,7 @@ from . import env_config
 from . import find_repo as find_repo_mod
 from . import gh_issue, gh_pr
 from . import logs as logs_mod
-from . import pr_build, pr_labels, pull as pull_mod, worktree as worktree_mod
+from . import pr_build, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
 from .cli_tools import detect_agent_session, require_az, require_gh
 from .gitrepo import AdoRemote, GitHubRemote, current_branch, current_remote, head_commit_subject
@@ -120,6 +120,53 @@ def _after_create(step: Callable[[], None], label: str) -> None:
         print(f"Warning: PR created, but {label} failed: {e}")
 
 
+def _link_and_label_github(gh: str, remote: GitHubRemote, issue_numbers: list[int]) -> None:
+    """Link every issue in `issue_numbers`, plus every issue `find_issue_refs_in_body` finds in
+    the PR's actual body, to the current branch's PR, and label each `pr-available`.
+
+    Best-effort per issue -- one bad/inaccessible issue number shouldn't stop the others from
+    being linked/labeled; failures are collected and surfaced together to the caller (which
+    wraps this in `_after_create`, so they're reported as a warning, not a failed `pr create`).
+    A no-op (no `gh` calls at all) when there's nothing to link.
+    """
+    pr_number, body = gh_pr.get_pr_body(gh)
+    all_numbers = list(dict.fromkeys([*issue_numbers, *pr_issue_link.find_issue_refs_in_body(body, remote)]))
+    if not all_numbers:
+        return
+    gh_issue.ensure_pr_available_label(gh)
+    errors: list[str] = []
+    for number in all_numbers:
+        try:
+            body = gh_pr.link_issue_to_pr(gh, pr_number, body, number)
+            gh_issue.add_pr_available_label(gh, number)
+        except SystemExit as e:
+            errors.append(f"#{number}: {e}")
+    if errors:
+        raise RuntimeError("; ".join(errors))
+
+
+def _link_and_label_ado(session: requests.Session, remote: AdoRemote, pr_id: int, description: str, issue_numbers: list[int]) -> None:
+    """Azure DevOps equivalent of `_link_and_label_github`: link every issue in `issue_numbers`,
+    plus every work item `find_issue_refs_in_body` finds in the PR's description, to PR `pr_id`,
+    and tag each `pr-available`.
+
+    Best-effort per work item -- one bad/inaccessible number shouldn't stop the others from being
+    linked/tagged; failures (a REST error, or a 404 `sys.exit` from deeper in `ado_issue.py`) are
+    collected and surfaced together to the caller (which wraps this in `_after_create`, so they're
+    reported as a warning, not a failed `pr create`).
+    """
+    all_numbers = list(dict.fromkeys([*issue_numbers, *pr_issue_link.find_issue_refs_in_body(description, remote)]))
+    errors: list[str] = []
+    for number in all_numbers:
+        try:
+            pr_build.link_work_item(session, remote, pr_id, number)
+            ado_issue.add_pr_available_tag(session, remote, number)
+        except (requests.RequestException, SystemExit) as e:
+            errors.append(f"#{number}: {e}")
+    if errors:
+        raise RuntimeError("; ".join(errors))
+
+
 @pr_app.command("create")
 def pr_create(
     target: str = typer.Option("main", "--target", help="Target branch (e.g. main, test)"),
@@ -142,6 +189,14 @@ def pr_create(
     ),
     file: list[str] = typer.Option(
         [], "--file", help="Path to an arbitrary file to attach to the PR description as a linked attachment (repeatable)"
+    ),
+    issue: list[str] = typer.Option(
+        [],
+        "--issue",
+        help="Issue number or URL (GitHub issue or Azure DevOps work item) to link to this PR (repeatable). "
+        "Each linked issue/work item is also labeled/tagged 'pr-available'. Independent of this flag, the PR "
+        "body is scanned for 'Fixes/Closes/Resolves #NR' and full issue/work-item URLs; every match found "
+        "there gets the same link + label/tag treatment automatically.",
     ),
     pat: str | None = typer.Option(
         None,
@@ -172,7 +227,17 @@ def pr_create(
         raise typer.BadParameter(pr_labels.format_missing_groups_error(missing_groups), param_hint="--label")
 
     remote = current_remote()
+
+    issue_numbers: list[int] = []
+    for ref in issue:
+        try:
+            issue_numbers.append(pr_issue_link.parse_issue_ref(ref, remote))
+        except ValueError as e:
+            raise typer.BadParameter(str(e), param_hint="--issue") from e
+    issue_numbers = list(dict.fromkeys(issue_numbers))
+
     source_branch = current_branch()
+
     pr_url: str | None = None
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
@@ -180,6 +245,8 @@ def pr_create(
         build_policy = gh_pr.has_build_policy(gh, target)
         if returncode == 0 and (screenshot or file):
             _after_create(lambda: gh_pr.add_attachments(gh, remote.owner, remote.repo, source_branch, screenshot, file), "attaching screenshots/files")
+        if returncode == 0:
+            _after_create(lambda: _link_and_label_github(gh, remote, issue_numbers), "linking issue(s) / setting 'pr-available' label")
     else:
         az = require_az()
         cmd = [
@@ -228,6 +295,17 @@ def pr_create(
                 pr_build.ensure_session_note(session, remote, pr)
 
             _after_create(_finish, "attaching screenshots/files and/or noting the agent session")
+        if returncode == 0:
+            # Fetches the PR fresh via `pr_build.get_pr` rather than trusting `pr_json` -- `az`
+            # can exit 0 with stdout that isn't clean JSON (e.g. a deprecation banner ahead of
+            # it), which already leaves `pr_json` as None above; gating issue-linking on it too
+            # would then silently skip it instead of at least warning, unlike every other
+            # best-effort step here.
+            def _link_issues() -> None:
+                pr = pr_build.get_pr(session, remote, source_branch, target)
+                _link_and_label_ado(session, remote, pr["pullRequestId"], pr.get("description") or "", issue_numbers)
+
+            _after_create(_link_issues, "linking work item(s) / setting 'pr-available' tag")
 
     if returncode == 0 and pr_url:
         print(f"\n{pr_url}")

@@ -1,0 +1,158 @@
+import pytest
+
+from bmsdna.devtools.gitrepo import AdoRemote, GitHubRemote
+from bmsdna.devtools.pr_issue_link import find_issue_refs_in_body, parse_issue_ref
+
+GH_REMOTE = GitHubRemote(owner="owner", repo="repo")
+ADO_REMOTE = AdoRemote(org="myorg", project="MyProj", repo="myrepo")
+
+
+# -- parse_issue_ref --------------------------------------------------------
+
+
+def test_parse_issue_ref_bare_number_github() -> None:
+    assert parse_issue_ref("42", GH_REMOTE) == 42
+
+
+def test_parse_issue_ref_bare_number_ado() -> None:
+    assert parse_issue_ref(" 42 ", ADO_REMOTE) == 42
+
+
+def test_parse_issue_ref_github_url_matching_repo() -> None:
+    assert parse_issue_ref("https://github.com/owner/repo/issues/42", GH_REMOTE) == 42
+
+
+def test_parse_issue_ref_github_url_case_insensitive() -> None:
+    assert parse_issue_ref("https://github.com/Owner/Repo/issues/7", GH_REMOTE) == 7
+
+
+def test_parse_issue_ref_github_url_wrong_repo_raises() -> None:
+    with pytest.raises(ValueError, match="owner/repo"):
+        parse_issue_ref("https://github.com/other/repo/issues/42", GH_REMOTE)
+
+
+def test_parse_issue_ref_github_garbage_raises() -> None:
+    with pytest.raises(ValueError):
+        parse_issue_ref("not-a-number-or-url", GH_REMOTE)
+
+
+def test_parse_issue_ref_ado_url_matching_org() -> None:
+    assert parse_issue_ref("https://dev.azure.com/myorg/MyProj/_workitems/edit/99", ADO_REMOTE) == 99
+
+
+def test_parse_issue_ref_ado_visualstudio_url_matching_org() -> None:
+    assert parse_issue_ref("https://myorg.visualstudio.com/MyProj/_workitems/edit/99", ADO_REMOTE) == 99
+
+
+def test_parse_issue_ref_ado_url_wrong_org_raises() -> None:
+    with pytest.raises(ValueError, match="myorg"):
+        parse_issue_ref("https://dev.azure.com/otherorg/MyProj/_workitems/edit/99", ADO_REMOTE)
+
+
+def test_parse_issue_ref_ado_github_url_raises() -> None:
+    with pytest.raises(ValueError):
+        parse_issue_ref("https://github.com/owner/repo/issues/42", ADO_REMOTE)
+
+
+# -- find_issue_refs_in_body -------------------------------------------------
+
+
+def test_find_issue_refs_in_body_none_or_empty() -> None:
+    assert find_issue_refs_in_body(None, GH_REMOTE) == []
+    assert find_issue_refs_in_body("", GH_REMOTE) == []
+
+
+@pytest.mark.parametrize(
+    "keyword",
+    ["Fixes", "fixes", "Fix", "Fixed", "Closes", "close", "Closed", "Resolves", "resolve", "Resolved"],
+)
+def test_find_issue_refs_in_body_github_keyword_variants(keyword: str) -> None:
+    assert find_issue_refs_in_body(f"{keyword} #42", GH_REMOTE) == [42]
+
+
+def test_find_issue_refs_in_body_github_multiple_keywords_deduped_and_ordered() -> None:
+    body = "This fixes #3 and also closes #3 again, plus resolves #5."
+    assert find_issue_refs_in_body(body, GH_REMOTE) == [3, 5]
+
+
+def test_find_issue_refs_in_body_github_url_same_repo() -> None:
+    body = "See https://github.com/owner/repo/issues/9 for context."
+    assert find_issue_refs_in_body(body, GH_REMOTE) == [9]
+
+
+def test_find_issue_refs_in_body_github_url_other_repo_ignored() -> None:
+    body = "See https://github.com/someone/else/issues/9 for context."
+    assert find_issue_refs_in_body(body, GH_REMOTE) == []
+
+
+def test_find_issue_refs_in_body_github_plain_hash_number_not_matched() -> None:
+    # A bare `#N` with no closing keyword isn't a GitHub "closes" reference.
+    assert find_issue_refs_in_body("See #42 for background.", GH_REMOTE) == []
+
+
+def test_find_issue_refs_in_body_ado_url() -> None:
+    body = "Related work item: https://dev.azure.com/myorg/MyProj/_workitems/edit/17"
+    assert find_issue_refs_in_body(body, ADO_REMOTE) == [17]
+
+
+def test_find_issue_refs_in_body_ado_url_other_org_ignored() -> None:
+    body = "https://dev.azure.com/otherorg/MyProj/_workitems/edit/17"
+    assert find_issue_refs_in_body(body, ADO_REMOTE) == []
+
+
+def test_find_issue_refs_in_body_ado_ignores_github_keywords() -> None:
+    # Azure DevOps has no bare-#N keyword syntax of its own -- "Fixes #42" in an ADO PR
+    # description isn't something this scan resolves to a work item.
+    assert find_issue_refs_in_body("Fixes #42", ADO_REMOTE) == []
+
+
+# -- host-boundary anchoring (regression) ------------------------------------
+
+
+def test_parse_issue_ref_rejects_lookalike_github_domain() -> None:
+    # "notgithub.com" merely *contains* "github.com" -- must not be treated as github.com itself.
+    with pytest.raises(ValueError):
+        parse_issue_ref("https://notgithub.com/owner/repo/issues/42", GH_REMOTE)
+
+
+def test_find_issue_refs_in_body_ignores_lookalike_github_domain() -> None:
+    body = "See https://notgithub.com/owner/repo/issues/42 for context."
+    assert find_issue_refs_in_body(body, GH_REMOTE) == []
+
+
+def test_parse_issue_ref_accepts_real_github_subdomain() -> None:
+    # A genuine github.com subdomain (dot boundary) must still work.
+    assert parse_issue_ref("https://www.github.com/owner/repo/issues/42", GH_REMOTE) == 42
+
+
+def test_parse_issue_ref_rejects_lookalike_ado_domain() -> None:
+    with pytest.raises(ValueError):
+        parse_issue_ref("https://notdev.azure.com/myorg/MyProj/_workitems/edit/9", ADO_REMOTE)
+
+
+def test_find_issue_refs_in_body_ignores_lookalike_ado_domain() -> None:
+    body = "https://notdev.azure.com/myorg/MyProj/_workitems/edit/9"
+    assert find_issue_refs_in_body(body, ADO_REMOTE) == []
+
+
+# -- github_body_already_closes ----------------------------------------------
+
+
+def test_github_body_already_closes_true_for_closing_keyword() -> None:
+    from bmsdna.devtools.pr_issue_link import github_body_already_closes
+
+    assert github_body_already_closes("This fixes #42.", 42) is True
+
+
+def test_github_body_already_closes_false_for_plain_mention() -> None:
+    from bmsdna.devtools.pr_issue_link import github_body_already_closes
+
+    # A bare mention (no closing keyword) doesn't count -- GitHub itself doesn't treat it as a
+    # real "closes" link, so `link_issue_to_pr` must not be fooled into thinking one exists.
+    assert github_body_already_closes("See #42 for background, not fixing it here.", 42) is False
+
+
+def test_github_body_already_closes_false_for_a_different_issue_number() -> None:
+    from bmsdna.devtools.pr_issue_link import github_body_already_closes
+
+    assert github_body_already_closes("Fixes #7", 42) is False

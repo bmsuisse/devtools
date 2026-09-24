@@ -305,6 +305,21 @@ def update(
     print(f"Updated PR #{pr_id}")
 
 
+def link_work_item(session: requests.Session, remote: AdoRemote, pr_id: int, work_item_id: int) -> None:
+    """Link work item `work_item_id` to PR `pr_id`, so it shows up in the PR's "Work Items" tab
+    (and the work item's own "Development" links) -- the Azure DevOps equivalent of GitHub's
+    closing-keyword PR<->issue link, via the dedicated Pull Request Work Items REST resource
+    (POST .../pullRequests/{pr_id}/workitems/{work_item_id}, the same one `az repos pr work-item
+    add` itself calls). Idempotent -- linking an already-linked work item just re-confirms it.
+    """
+    r = session.post(
+        f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}/pullRequests/{pr_id}/workitems/{work_item_id}",
+        params={"api-version": "7.1"},
+        timeout=HTTP_TIMEOUT_SECS,
+    )
+    r.raise_for_status()
+
+
 def publish(session: requests.Session, remote: AdoRemote, pr: dict) -> None:
     """Mark a draft PR as ready for review (clears isDraft)."""
     pr_id = pr["pullRequestId"]

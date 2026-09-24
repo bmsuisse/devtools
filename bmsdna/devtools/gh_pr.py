@@ -18,6 +18,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from . import pr_issue_link
 from .cli_tools import CLI_TIMEOUT_SECS, EXIT_NEEDS_APPROVAL, PollHeartbeat, detect_agent_session, ensure_agent_session_note, is_claude_code
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
@@ -488,6 +489,37 @@ def ensure_session_note(gh: str) -> None:
             r.check_returncode()
     except (subprocess.SubprocessError, SystemExit, json.JSONDecodeError, OSError):
         pass
+
+
+def get_pr_body(gh: str) -> tuple[int, str]:
+    """(PR number, PR body) for the current branch's PR -- used by issue-linking, which needs
+    the body actually stored (e.g. autofilled from the commit message via `--fill`), not
+    whatever a caller happened to pass to `pr create`.
+    """
+    pr = _run_gh_json(gh, ["pr", "view", "--json", "number,body"])
+    return pr["number"], pr.get("body") or ""
+
+
+def link_issue_to_pr(gh: str, pr_number: int, body: str, issue_number: int) -> str:
+    """Make sure `body` (the PR's current body) references `issue_number` via a GitHub closing
+    keyword, so GitHub shows this as a genuinely linked PR (appearing in the issue's
+    "Development" sidebar and auto-closing it on merge) -- a plain `#N` mention elsewhere (only
+    in a comment, or just prose referencing it, say) doesn't get that treatment, so it isn't
+    mistaken for one already being present (see `pr_issue_link.github_body_already_closes`). A
+    no-op if `body` already has a real closing-keyword reference to the issue (e.g. because this
+    number came from scanning the body for one in the first place).
+
+    Returns the (possibly unchanged) new body -- callers linking more than one issue in a row
+    pass this back in as `body` for the next call, so each edit builds on the last instead of
+    re-fetching or clobbering a previous append.
+    """
+    if pr_issue_link.github_body_already_closes(body, issue_number):
+        return body
+    new_body = f"{body.rstrip()}\n\nFixes #{issue_number}\n".lstrip("\n")
+    r = _run([gh, "pr", "edit", str(pr_number), "--body", new_body], capture_output=True, encoding="utf-8")
+    if r.returncode != 0:
+        sys.exit((r.stderr or r.stdout).strip() or "`gh pr edit` failed")
+    return new_body
 
 
 def publish(gh: str) -> None:

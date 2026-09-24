@@ -27,6 +27,7 @@ from pathlib import Path
 from .bdt_config import load_bdt_table
 from .cli_tools import ensure_agent_session_note
 from .gh_pr import push_assets
+from .pr_issue_link import PR_AVAILABLE_LABEL
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 _COMMENT_ID_RE = re.compile(r"#issuecomment-(\d+)")
@@ -164,6 +165,40 @@ def create(
             new_body = build_attachments_section(new_body, _file_links(owner, repo, f"issue-{number}", file_paths))
         _run_gh(gh, ["issue", "edit", number, "--body", new_body])
         print(f"Attached {len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s) to issue #{number}")
+
+
+def _label_exists(gh: str, name: str) -> bool:
+    out = _run_gh(gh, ["label", "list", "--search", name, "--json", "name"])
+    names = {label["name"].casefold() for label in (json.loads(out) if out else [])}
+    return name.casefold() in names
+
+
+def ensure_pr_available_label(gh: str) -> None:
+    """Make sure the repo-wide `pr-available` label exists, creating it if not -- unlike Azure
+    DevOps tags (freeform), `gh issue edit --add-label` rejects a label name GitHub doesn't
+    already know about (see `gh_pr.create`'s docstring). Only creates the label when it's
+    actually missing, so an existing custom color/description isn't clobbered.
+
+    Call this once per `pr create` invocation, before any `add_pr_available_label` calls --
+    it's the same repo-wide label being checked/created each time, not a per-issue thing, so a
+    caller linking several issues in one go should only pay for this lookup once.
+    """
+    if not _label_exists(gh, PR_AVAILABLE_LABEL):
+        _run_gh(
+            gh,
+            [
+                "label", "create", PR_AVAILABLE_LABEL,
+                "--color", "0E8A16",
+                "--description", "A PR exists that addresses this issue",
+            ],
+        )
+
+
+def add_pr_available_label(gh: str, number: int) -> None:
+    """Label issue `number` `pr-available`. Caller must have already called
+    `ensure_pr_available_label` (once, not per-issue) so the label exists on the repo first.
+    """
+    _run_gh(gh, ["issue", "edit", str(number), "--add-label", PR_AVAILABLE_LABEL])
 
 
 def build_search_query(keywords: list[str], since: str | None) -> str:
