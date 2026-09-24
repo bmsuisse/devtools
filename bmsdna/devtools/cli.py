@@ -20,7 +20,7 @@ from . import logs as logs_mod
 from . import pr_build, pr_labels, worktree as worktree_mod
 from .ado_auth import auth_header
 from .cli_tools import detect_agent_session, require_az, require_gh
-from .gitrepo import AdoRemote, GitHubRemote, current_branch, current_remote
+from .gitrepo import AdoRemote, GitHubRemote, current_branch, current_remote, head_commit_subject
 
 # Non-ASCII output (checkmarks, en-dashes in ADO project names, etc.) needs a
 # UTF-8 stream — the default Windows console codepage isn't UTF-8, and would
@@ -134,7 +134,8 @@ def pr_create(
         help="Label to apply to the PR (repeatable). On GitHub the label must already exist on the repo "
         "(`gh label create`); Azure DevOps PR labels are freeform and created on the fly. "
         r"[tool.bdt.pr.required_labels] in pyproject.toml can require at least one label from each "
-        "named group before the PR is created.",
+        "named group before the PR is created. [tool.bdt.pr.scope_labels] can auto-add a label based "
+        "on the HEAD commit's conventional-commit scope (e.g. `feat(customers): ...` -> a configured label).",
     ),
     screenshot: list[str] = typer.Option(
         [], "--screenshot", help="Path to an image to attach to the PR description (repeatable)"
@@ -157,6 +158,14 @@ def pr_create(
     for path in file:
         if not Path(path).is_file():
             raise typer.BadParameter(f"File not found: {path}", param_hint="--file")
+
+    scope_label_map = pr_labels.scope_labels()
+    if scope_label_map:
+        scope = commit_mod.conventional_commit_scope(head_commit_subject())
+        auto_label = pr_labels.label_for_scope(scope_label_map, scope)
+        if auto_label and auto_label.lower() not in {existing.lower() for existing in label}:
+            print(f"Auto-applying label '{auto_label}' for scope '{scope}' ([tool.bdt.pr.scope_labels])")
+            label = [*label, auto_label]
 
     missing_groups = pr_labels.missing_label_groups(pr_labels.required_label_groups(), label)
     if missing_groups:

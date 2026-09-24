@@ -10,6 +10,20 @@ create` must be given at least one label from every configured group
 (checked locally, before talking to GitHub/Azure DevOps, so a PR missing a
 required label is never created in the first place). Applies identically on
 both hosts.
+
+Also: scope -> label auto-labeling, configured under `[tool.bdt.pr.scope_labels]`:
+
+    [tool.bdt.pr.scope_labels]
+    customers = "e2e-customers"
+    billing = "e2e-billing"
+
+`bdt pr create` derives the "scope" from the HEAD commit's conventional-commit
+subject using the same parser `bdt commit` itself enforces
+(`commit.conventional_commit_scope`, e.g. `feat(customers): ...` -> scope
+"customers"). If the derived scope has a configured label, that label is
+added to the PR's `--label` list automatically (deduplicated against any
+explicitly-passed `--label`). Opt-in: with no `[tool.bdt.pr.scope_labels]`
+table, this is a no-op and behavior is unchanged.
 """
 
 from __future__ import annotations
@@ -25,6 +39,24 @@ def required_label_groups(start: Path | None = None) -> dict[str, list[str]]:
     if not isinstance(raw, dict):
         return {}
     return {name: choices for name, choices in raw.items() if isinstance(choices, list)}
+
+
+def scope_labels(start: Path | None = None) -> dict[str, str]:
+    """`[tool.bdt.pr.scope_labels]` -> {scope: label to auto-apply}."""
+    raw = load_bdt_table("pr", start).get("scope_labels", {})
+    if not isinstance(raw, dict):
+        return {}
+    return {name: label for name, label in raw.items() if isinstance(label, str)}
+
+
+def label_for_scope(scope_label_map: dict[str, str], scope: str | None) -> str | None:
+    """The configured label for `scope`, matched case-insensitively (same
+    convention as `missing_label_groups`), or None if `scope` is unset or
+    unconfigured."""
+    if not scope:
+        return None
+    lowered = {name.lower(): label for name, label in scope_label_map.items()}
+    return lowered.get(scope.lower())
 
 
 def missing_label_groups(groups: dict[str, list[str]], labels: list[str]) -> dict[str, list[str]]:
