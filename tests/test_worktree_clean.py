@@ -9,6 +9,7 @@ from bmsdna.devtools.worktree import (
     clean_orphaned_dbs,
     clean_worktrees,
     collect_worktrees,
+    create,
     find_orphaned_dbs,
     find_repos,
 )
@@ -42,6 +43,69 @@ def add_submodule(repo, sub_repo, sub_path="vendor/sub"):
     whatever branch is currently checked out in `repo`."""
     _git(["-c", "protocol.file.allow=always", "submodule", "add", str(sub_repo), sub_path], cwd=repo)
     _git(["commit", "-q", "-m", "add submodule"], cwd=repo)
+
+
+# --- create (`bdt worktree`) -------------------------------------------------
+
+
+def test_create_hints_plain_bdt_pull_when_base_is_not_main_or_master(tmp_path, capsys) -> None:
+    repo = init_repo(tmp_path / "repo")
+    _git(["branch", "dev"], cwd=repo)
+
+    create("my-feature", base="dev", submodules=False, root=repo)
+
+    out = capsys.readouterr().out
+    assert "Hint: run `bdt pull`" in out
+    assert "--no-default" not in out
+
+
+def test_create_hints_no_default_flag_when_base_is_main(tmp_path, capsys) -> None:
+    repo = init_repo(tmp_path / "repo")
+
+    create("my-feature", base="main", submodules=False, root=repo)
+
+    out = capsys.readouterr().out
+    assert "Hint: run `bdt pull --no-default`" in out
+
+
+def test_create_hints_no_default_flag_when_base_is_master(tmp_path, capsys) -> None:
+    repo = init_repo(tmp_path / "repo")
+    _git(["branch", "-m", "main", "master"], cwd=repo)
+
+    create("my-feature", base="master", submodules=False, root=repo)
+
+    out = capsys.readouterr().out
+    assert "Hint: run `bdt pull --no-default`" in out
+
+
+def test_create_hints_no_default_flag_when_origin_confirms_base_is_the_real_default(tmp_path, capsys) -> None:
+    """With an `origin` remote configured (as any real clone would have), the hint
+    checks the remote's *actual* default branch rather than just assuming main/master
+    IS it -- this exercises that live-checked path, not just the base-name fallback."""
+    repo = init_repo(tmp_path / "repo")
+    _git(["remote", "add", "origin", str(repo)], cwd=repo)
+
+    create("my-feature", base="main", submodules=False, root=repo)
+
+    out = capsys.readouterr().out
+    assert "Hint: run `bdt pull --no-default`" in out
+
+
+def test_create_does_not_hint_no_default_when_base_is_main_but_remotes_real_default_differs(tmp_path, capsys) -> None:
+    """Regression test: a repo whose base branch is (still) literally called
+    `main`/`master` but whose configured DEFAULT branch on the remote is something
+    else (e.g. `develop`) must NOT get the --no-default hint -- that flag would skip
+    pulling the actual default branch, which is exactly the one this worktree didn't
+    already come from."""
+    repo = init_repo(tmp_path / "repo")
+    _git(["checkout", "-q", "-b", "develop"], cwd=repo)
+    _git(["remote", "add", "origin", str(repo)], cwd=repo)
+
+    create("my-feature", base="main", submodules=False, root=repo)
+
+    out = capsys.readouterr().out
+    assert "Hint: run `bdt pull`" in out
+    assert "--no-default" not in out
 
 
 # --- find_repos -----------------------------------------------------------
