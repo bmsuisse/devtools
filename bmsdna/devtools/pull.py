@@ -96,17 +96,26 @@ def _query_remote(remote: str, cwd: Path | str | None, *, timeout: float) -> tup
     return default, _parse_ls_remote_heads(result.stdout)
 
 
+def _pick_main_or_master(branches: dict[str, str]) -> str | None:
+    """'main' or 'master', whichever key is present in `branches` (as returned
+    by `_query_remote`); 'main' wins if somehow both exist. None if neither
+    is. The one place this tie-break rule lives -- `remote_main_or_master`
+    and `build_steps` both go through this rather than each re-deciding it,
+    so they can't silently diverge."""
+    if "main" in branches:
+        return "main"
+    if "master" in branches:
+        return "master"
+    return None
+
+
 def remote_main_or_master(remote: str, cwd: Path | str | None = None) -> str | None:
     """'main' or 'master', whichever exists as a branch on `remote` (checked
     live via `git ls-remote`, not stale local remote-tracking refs); 'main'
     wins if somehow both exist. None if neither does, or the remote couldn't
     be reached."""
     _, branches = _query_remote(remote, cwd, timeout=CLI_TIMEOUT_SECS)
-    if "main" in branches:
-        return "main"
-    if "master" in branches:
-        return "master"
-    return None
+    return _pick_main_or_master(branches)
 
 
 def default_branch(remote: str, cwd: Path | str | None = None, *, timeout: float = CLI_TIMEOUT_SECS) -> str | None:
@@ -173,7 +182,7 @@ def build_steps(remote: str, *, no_default: bool, pull_args: list[str], cwd: Pat
     # branch -- see `_query_remote` -- rather than two separate round trips
     # to the same remote.
     default, branches = _query_remote(remote, cwd, timeout=CLI_TIMEOUT_SECS)
-    main = "main" if "main" in branches else "master" if "master" in branches else None
+    main = _pick_main_or_master(branches)
     if main is not None:
         main_ref = f"{remote}/{main}"
         if main_ref in pulled_refs:
