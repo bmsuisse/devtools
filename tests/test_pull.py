@@ -37,6 +37,13 @@ def clone(remote, path, checkout: str | None = None):
     out *in the remote itself*, which earlier setup in a test may already
     have moved to `checkout`."""
     _git(["clone", "-q", str(remote), str(path)], cwd=None)
+    # A fresh clone gets its own, separate .git config -- unlike a worktree
+    # (which shares the main checkout's config), it does NOT inherit
+    # init_repo()'s user.email/user.name, and a CI runner has no global git
+    # identity configured to fall back on (unlike most dev machines), so any
+    # `git commit` here would otherwise fail with "Author identity unknown".
+    _git(["config", "user.email", "test@example.com"], cwd=path)
+    _git(["config", "user.name", "Test"], cwd=path)
     if checkout and _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=path).stdout.strip() != checkout:
         _git(["checkout", "-q", "-b", checkout, f"origin/{checkout}"], cwd=path)
     return path
