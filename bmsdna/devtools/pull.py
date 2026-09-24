@@ -30,16 +30,37 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from .cli_tools import CLI_TIMEOUT_SECS
+from .gitrepo import current_branch as _current_branch
 
-def _run_capture(cmd: list[str], cwd: Path | str | None = None) -> subprocess.CompletedProcess:
+# `git pull` can legitimately take longer than a metadata call (`ls-remote`,
+# `rev-parse`) -- an actual fetch+merge of a large repo over a slow network --
+# so it gets a more generous timeout than everything else in this module,
+# same reasoning as `CLI_UPLOAD_TIMEOUT_SECS` in gh_pr.py.
+PULL_TIMEOUT_SECS = CLI_TIMEOUT_SECS * 4
+
+
+def _run_capture(cmd: list[str], cwd: Path | str | None = None, *, timeout: float = CLI_TIMEOUT_SECS) -> subprocess.CompletedProcess:
+    """`subprocess.run` bounded by `timeout` -- every `git` call in this module goes
+    through this, so a stalled network call (or git blocking on an interactive
+    prompt, e.g. an expired SSH/HTTPS credential) can't hang the caller forever.
+    A timeout is reported the same way as any other non-zero exit (returncode
+    124, stderr set) rather than raising, so callers that already treat "git
+    failed" as "couldn't determine this, fall back" (e.g. `default_branch`)
+    don't need special-casing for it.
+    """
     try:
-        return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
+        return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False, timeout=timeout)
     except FileNotFoundError:
         sys.exit(f"'{cmd[0]}' is required for this command but wasn't found on PATH.")
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            cmd, 124, "", f"`{' '.join(cmd)}` timed out after {timeout:.0f}s -- stalled network, or needs an interactive login?"
+        )
 
 
 def current_branch(cwd: Path | str | None = None) -> str:
-    return _run_capture(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd).stdout.strip()
+    return _current_branch(str(cwd) if cwd is not None else None)
 
 
 def upstream_branch(cwd: Path | str | None = None) -> str | None:
@@ -74,11 +95,17 @@ def remote_main_or_master(remote: str, cwd: Path | str | None = None) -> str | N
     return None
 
 
-def default_branch(remote: str, cwd: Path | str | None = None) -> str | None:
+def default_branch(remote: str, cwd: Path | str | None = None, *, timeout: float = CLI_TIMEOUT_SECS) -> str | None:
     """The branch `remote`'s HEAD points at -- i.e. its configured default
     branch -- or None if it couldn't be determined (remote unreachable, or
-    it has no HEAD symref, e.g. an empty repo)."""
-    result = _run_capture(["git", "ls-remote", "--symref", remote, "HEAD"], cwd)
+    it has no HEAD symref, e.g. an empty repo).
+
+    `timeout` defaults to a full `CLI_TIMEOUT_SECS`, but a caller for whom this
+    is only a best-effort nicety rather than the actual point of the command
+    (e.g. `worktree.create()`'s post-creation hint) should pass a short one --
+    an offline/slow remote shouldn't make an unrelated command visibly stall.
+    """
+    result = _run_capture(["git", "ls-remote", "--symref", remote, "HEAD"], cwd, timeout=timeout)
     if result.returncode != 0:
         return None
     for line in result.stdout.splitlines():
@@ -191,7 +218,7 @@ def run(
             continue
 
         print(f"pulling {step.label}: {cmd_str}")
-        result = _run_capture(step.cmd, cwd)
+        result = _run_capture(step.cmd, cwd, timeout=PULL_TIMEOUT_SECS)
         if result.stdout.strip():
             print(result.stdout.strip())
         if result.returncode == 0:

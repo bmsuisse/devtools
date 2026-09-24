@@ -95,8 +95,10 @@ def create(
     # (via `git ls-remote`, same as `pull.default_branch`) rather than just
     # assuming main/master IS the default, which isn't always true (e.g. a
     # repo defaulting to `develop`). Falls back to that main/master assumption
-    # only if the remote can't be reached from here.
-    remote_default = pull_mod.default_branch("origin", cwd=path)
+    # only if the remote can't be reached from here -- a short timeout, since
+    # this is just a hint: an offline/slow remote shouldn't make worktree
+    # creation (otherwise a purely local operation) visibly stall over it.
+    remote_default = pull_mod.default_branch("origin", cwd=path, timeout=5.0)
     originated_from_default = base == remote_default if remote_default is not None else base in ("main", "master")
     if originated_from_default:
         print(f"Hint: run `bdt pull --no-default` in it to pull the latest {base} (it's also the default branch, so pulling that again would be redundant).")

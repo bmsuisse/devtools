@@ -3,6 +3,7 @@ import subprocess
 import pytest
 
 from bmsdna.devtools.pull import (
+    _run_capture,
     build_steps,
     current_branch,
     default_branch,
@@ -44,6 +45,27 @@ def clone(remote, path, checkout: str | None = None):
 def commit_file(repo, content, message="change"):
     (repo / "f.txt").write_text(content)
     _git(["commit", "-q", "-am", message], cwd=repo)
+
+
+# --- _run_capture timeout handling -------------------------------------------
+
+
+def test_run_capture_converts_timeout_into_a_failed_completed_process_instead_of_hanging(tmp_path, monkeypatch) -> None:
+    """A stalled network call (or git blocking on an interactive credential
+    prompt) must not hang `bdt pull` forever -- it's reported the same way as
+    any other git failure (non-zero returncode, message in stderr) instead of
+    raising, so existing "git failed" handling (skip/fallback/error) already
+    covers it without special-casing."""
+
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs.get("timeout"))
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = _run_capture(["git", "ls-remote", "--symref", "origin", "HEAD"], tmp_path, timeout=1.0)
+
+    assert result.returncode == 124
+    assert "timed out after 1s" in result.stderr
 
 
 # --- current_branch / upstream_branch ---------------------------------------
