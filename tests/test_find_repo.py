@@ -319,6 +319,7 @@ def test_run_clones_github_org_match_into_github_subfolder(tmp_path, monkeypatch
         "bmsdna.devtools.find_repo.find_github",
         lambda gh, org, name: [RemoteRepo("someghorg", "widgets", "https://github.com/someghorg/widgets", source="github")],
     )
+    monkeypatch.setattr("bmsdna.devtools.find_repo.auth_header", lambda pat: {})
     clone_calls = []
 
     def fake_clone(url, dest, auth=None):
@@ -340,6 +341,7 @@ def test_run_searches_both_org_and_github_org(tmp_path, monkeypatch) -> None:
         "bmsdna.devtools.find_repo.find_github",
         lambda gh, org, name: [RemoteRepo("someghorg", "widgets", "https://github.com/someghorg/widgets", source="github")],
     )
+    monkeypatch.setattr("bmsdna.devtools.find_repo.auth_header", lambda pat: {})
     clone_calls = []
     monkeypatch.setattr(
         "bmsdna.devtools.find_repo.clone",
@@ -364,6 +366,7 @@ def test_run_prefers_exact_match_from_either_source_over_substring_from_the_othe
         "bmsdna.devtools.find_repo.find_github",
         lambda gh, org, name: [RemoteRepo("someghorg", "widgets", "https://github.com/someghorg/widgets", source="github")],
     )
+    monkeypatch.setattr("bmsdna.devtools.find_repo.auth_header", lambda pat: {})
     clone_calls = []
     monkeypatch.setattr(
         "bmsdna.devtools.find_repo.clone",
