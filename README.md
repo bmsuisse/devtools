@@ -342,15 +342,35 @@ bdt commit "feat(x): add widget support" file1.py file2.py [--json] [--no-verify
 ```
 
 Stages, commits, and pushes the given files. Pre-flight checks: files
-exist, commit message looks like `type: description` (skip with
-`--skip-message-check`), not on `main`/`master` (skip with `--allow-main`).
-Retries once (re-`git add`) if a pre-commit hook reformats files. Pass
-`--subrepo <dir>` (repeatable) for repos that vendor a submodule (e.g.
-`database`) — files under that prefix are committed/pushed inside the
-submodule first, then the bump is staged in the parent repo.
+exist, commit message follows [Conventional Commits](https://www.conventionalcommits.org)
+(`type(scope): description`, skip with `--skip-message-check`), not on
+`main`/`master` (skip with `--allow-main`). Retries once (re-`git add`) if a
+pre-commit hook reformats files. Pass `--subrepo <dir>` (repeatable) for
+repos that vendor a submodule (e.g. `database`) — files under that prefix
+are committed/pushed inside the submodule first, then the bump is staged in
+the parent repo.
+
+The built-in commit types are `feat`, `fix`, `docs`, `style`, `refactor`,
+`perf`, `test`, `build`, `ci`, `chore`, `revert`. A repo can accept
+additional types on top of those under `[tool.bdt.commit]` in
+`pyproject.toml`:
+
+```toml
+[tool.bdt.commit]
+types = ["sql", "infra"]
+```
+
+If the pushed commit's type is `feat` and the current branch's PR is
+already published (not a draft), it's converted back to draft — a feature
+needs a fresh review pass before CI/merge, not just whatever review
+happened before the commit existed. Run `bdt pr publish` when it's ready
+again. Pass `--target`/`--pat` to resolve the PR on Azure DevOps (GitHub
+always resolves the current branch's PR directly).
 
 Set `IS_BMS_AI_SANDBOX=1` to skip the push step (commit only) — used when
-an AI coding sandbox pushes on its own schedule separately.
+an AI coding sandbox pushes on its own schedule separately. The draft
+conversion above only runs after an actual push, so it's skipped in
+sandbox mode too.
 
 `--json` emits a machine-readable result for AI-agent callers:
 
@@ -358,7 +378,7 @@ an AI coding sandbox pushes on its own schedule separately.
 {
   "success": true, "committed": true, "pushed": true,
   "message": "...", "files": ["..."], "commit_sha": "abc1234",
-  "error": null, "hint": null
+  "error": null, "hint": null, "commit_type": "feat"
 }
 ```
 

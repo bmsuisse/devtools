@@ -7,12 +7,45 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
 
+from .bdt_config import load_bdt_table
+
 IS_SANDBOX_ENV_VAR = "IS_BMS_AI_SANDBOX"
+
+# Conventional Commits (https://www.conventionalcommits.org) type prefixes that are
+# always accepted, regardless of what the calling repo configures.
+BUILTIN_COMMIT_TYPES = {"feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"}
+
+# `type(scope)!: description` -- scope and the breaking-change `!` are both optional.
+_CONVENTIONAL_COMMIT_RE = re.compile(r"^(?P<type>[a-z]+)(?:\([^)]+\))?!?: .+")
+
+
+def allowed_commit_types(start=None) -> set[str]:
+    """`BUILTIN_COMMIT_TYPES` plus whatever a repo adds under `[tool.bdt.commit]`:
+
+        [tool.bdt.commit]
+        types = ["sql", "infra"]
+
+    lets a repo accept custom types (e.g. an "sql" type for a repo organized around
+    database migrations) on top of the standard set, rather than replacing it.
+    """
+    extra = load_bdt_table("commit", start).get("types", [])
+    if not isinstance(extra, list):
+        return set(BUILTIN_COMMIT_TYPES)
+    return BUILTIN_COMMIT_TYPES | {t for t in extra if isinstance(t, str)}
+
+
+def conventional_commit_type(message: str) -> str | None:
+    """The `type` prefix of `message` (e.g. "feat" from "feat(x): add widget"), or
+    None if `message` doesn't follow the `type(scope): description` shape at all.
+    """
+    match = _CONVENTIONAL_COMMIT_RE.match(message)
+    return match.group("type") if match else None
 
 
 def _run(cmd: list[str], cwd: str | None = None) -> subprocess.CompletedProcess:
@@ -204,12 +237,16 @@ def commit_and_push(
             warnings=warnings,
         )
 
-    msg_ok = not require_message_quality or (len(message) >= 20 and ":" in message)
-    if not check(msg_ok, "commit message quality (len>=20, has colon)"):
+    commit_type = conventional_commit_type(message)
+    allowed_types = allowed_commit_types()
+    msg_ok = not require_message_quality or commit_type in allowed_types
+    if not check(msg_ok, "commit message follows Conventional Commits (type(scope): description)"):
         return CommitResult(
             False, False, False, message, files,
-            error=f"Commit message too short or missing type prefix (e.g. 'feat(x): ...') — got: {message!r}",
-            hint="Use conventional commits format: 'feat(scope): description' or 'fix: description'",
+            error=f"Commit message doesn't follow Conventional Commits format 'type(scope): description' "
+            f"(allowed types: {', '.join(sorted(allowed_types))}) — got: {message!r}",
+            hint="Use e.g. 'feat(x): add widget' or 'fix: correct off-by-one'. Add repo-specific types under "
+            "[tool.bdt.commit] types = [...] in pyproject.toml.",
             warnings=warnings,
         )
 
@@ -266,8 +303,10 @@ def commit_and_push(
     committed = ok
     print("  ✓ committed", flush=True)
 
+    extra = {"commit_type": commit_type}
+
     if _in_sandbox():
-        return CommitResult(True, committed, False, message, files, commit_sha=_sha(), warnings=warnings)
+        return CommitResult(True, committed, False, message, files, commit_sha=_sha(), warnings=warnings, extra=extra)
 
     pr = _run(["git", "push"])
     if pr.returncode != 0:
@@ -277,10 +316,11 @@ def commit_and_push(
             error=(pr.stdout + pr.stderr).strip(),
             hint="Push rejected. Run `git pull --rebase`, resolve conflicts, then retry.",
             warnings=warnings,
+            extra=extra,
         )
 
     print("  ✓ pushed", flush=True)
-    return CommitResult(True, committed, True, message, files, commit_sha=_sha(), warnings=warnings)
+    return CommitResult(True, committed, True, message, files, commit_sha=_sha(), warnings=warnings, extra=extra)
 
 
 def emit(result: CommitResult, *, use_json: bool) -> None:

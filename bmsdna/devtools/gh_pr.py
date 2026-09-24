@@ -499,6 +499,22 @@ def publish(gh: str) -> None:
     print("\nRun `bdt pr status --wait` to watch the PR's CI.")
 
 
+def set_draft(gh: str) -> bool:
+    """Convert the current branch's ready PR back to a draft (`gh pr ready --undo`).
+
+    Returns True if it was just converted, False if it was already a draft --
+    a caller announcing "converted to draft" shouldn't do so for a PR that
+    already was one.
+    """
+    pr = get_pr(gh)
+    if pr.get("isDraft"):
+        return False
+    r = _run([gh, "pr", "ready", "--undo"], capture_output=True, encoding="utf-8")
+    if r.returncode != 0:
+        sys.exit((r.stderr or r.stdout).strip() or "`gh pr ready --undo` failed")
+    return True
+
+
 def _git(args: list[str], env: dict[str, str] | None = None, *, timeout: float = CLI_TIMEOUT_SECS) -> str:
     r = _run(["git", *args], capture_output=True, encoding="utf-8", env=env, timeout=timeout)
     if r.returncode != 0:

@@ -23,6 +23,7 @@ from bmsdna.devtools.pr_build import (
     retry_failed_build,
     run,
     run_watch_deploy,
+    set_draft,
     update,
 )
 from tests.test_pr_build import CHECKPOINT_RECORD, PENDING_APPROVAL_RECORD, STAGE_RECORD
@@ -132,6 +133,23 @@ def test_add_attachments_returns_pr_with_updated_description(tmp_path) -> None:
     assert updated["pullRequestId"] == PR["pullRequestId"]
     assert updated["description"] == session.patch.call_args.kwargs["json"]["description"]
     assert "## Screenshots" in updated["description"]
+
+
+def test_set_draft_patches_is_draft_true_when_ready() -> None:
+    session = make_session()
+    pr = {**PR, "isDraft": False}
+
+    assert set_draft(session, REMOTE, pr) is True
+    session.patch.assert_called_once()
+    assert session.patch.call_args.kwargs["json"] == {"isDraft": True}
+
+
+def test_set_draft_no_op_when_already_draft() -> None:
+    session = make_session()
+    pr = {**PR, "isDraft": True}
+
+    assert set_draft(session, REMOTE, pr) is False
+    session.patch.assert_not_called()
 
 
 def test_ensure_session_note_appends_when_agent_detected(monkeypatch) -> None:

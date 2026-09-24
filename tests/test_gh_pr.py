@@ -27,6 +27,7 @@ from bmsdna.devtools.gh_pr import (
     retry_hint,
     run,
     run_watch_deploy,
+    set_draft,
     update,
 )
 
@@ -222,6 +223,34 @@ def test_create_returns_none_url_on_failure(monkeypatch, capsys) -> None:
     assert returncode == 1
     assert url is None
     assert "not found" in capsys.readouterr().err
+
+
+def test_set_draft_converts_ready_pr_to_draft(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if "view" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps({"number": 42, "isDraft": False}), stderr="")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    assert set_draft("gh") is True
+    assert any("ready" in cmd and "--undo" in cmd for cmd in calls)
+
+
+def test_set_draft_no_op_when_already_draft(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return MagicMock(returncode=0, stdout=json.dumps({"number": 42, "isDraft": True}), stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    assert set_draft("gh") is False
+    assert not any("--undo" in cmd for cmd in calls)
 
 
 def test_create_without_agent_makes_no_follow_up_calls(monkeypatch) -> None:

@@ -746,6 +746,30 @@ def cleanup_worktree(
     )
 
 
+def _draft_feat_pr(target: str, pat: str | None) -> None:
+    """A 'feat' commit landing on an already-published PR forces it back to draft --
+    a feature needs a fresh review pass before CI/merge, not just whatever review
+    happened before this commit existed.
+
+    Best-effort: swallows failures (no PR yet is the common case mid-implementation,
+    plus auth/network hiccups) rather than turning a successful commit+push into a
+    failure over a step that's purely a safety nudge.
+    """
+    try:
+        remote = current_remote()
+        if isinstance(remote, GitHubRemote):
+            converted = gh_pr.set_draft(require_gh())
+        else:
+            session = requests.Session()
+            session.headers.update(auth_header(pat))
+            pr = pr_build.get_pr(session, remote, current_branch(), target)
+            converted = pr_build.set_draft(session, remote, pr)
+    except (Exception, SystemExit):
+        return
+    if converted:
+        print("\n'feat' commit pushed -- PR converted back to draft (needs review before CI runs). Run `bdt pr publish` when ready.")
+
+
 @app.command()
 def commit(
     message: str,
@@ -755,6 +779,13 @@ def commit(
     subrepo: list[str] = typer.Option([], "--subrepo", help="Submodule directory name to split matching files into (repeatable)"),
     skip_message_check: bool = typer.Option(False, "--skip-message-check", help="Don't require a conventional-commit-style message"),
     allow_main: bool = typer.Option(False, "--allow-main", help="Allow committing directly on main/master"),
+    target: str = typer.Option("main", "--target", help="Target branch of the PR to draft on a 'feat' commit (Azure DevOps only)"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
 ) -> None:
     """Stage, commit, and push files, with pre-flight checks and a pre-commit-hook retry."""
     result = commit_mod.commit_and_push(
@@ -765,6 +796,8 @@ def commit(
         require_feature_branch=not allow_main,
         subrepos=subrepo,
     )
+    if result.success and result.pushed and result.extra.get("commit_type") == "feat":
+        _draft_feat_pr(target, pat)
     commit_mod.emit(result, use_json=json_output)
 
 

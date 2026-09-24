@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from bmsdna.devtools.commit import commit_and_push
+from bmsdna.devtools.commit import allowed_commit_types, commit_and_push, conventional_commit_type
 
 
 def init_repo(path):
@@ -189,3 +189,79 @@ def test_commit_and_push_installs_prek_hook_when_missing(tmp_path, monkeypatch):
     # same as any other pre-commit hook failure -- not a `warnings` entry.
     assert result.committed is False
     assert result.error
+
+
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        ("feat(x): add widget", "feat"),
+        ("fix: correct off-by-one", "fix"),
+        ("feat!: breaking change", "feat"),
+        ("feat(x)!: breaking change with scope", "feat"),
+        ("chore(deps): bump requests", "chore"),
+        ("not a conventional message", None),
+        ("feat missing colon", None),
+        ("feat:missing space", None),
+        ("", None),
+    ],
+)
+def test_conventional_commit_type(message, expected) -> None:
+    assert conventional_commit_type(message) == expected
+
+
+def test_allowed_commit_types_includes_builtins_with_no_pyproject(tmp_path) -> None:
+    types = allowed_commit_types(tmp_path)
+    assert {"feat", "fix", "chore"} <= types
+
+
+def test_allowed_commit_types_extends_with_pyproject_config(tmp_path) -> None:
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.commit]\ntypes = ["sql", "infra"]\n')
+    types = allowed_commit_types(tmp_path)
+    assert {"feat", "fix", "sql", "infra"} <= types
+
+
+def test_commit_and_push_rejects_non_conventional_message(tmp_path, monkeypatch):
+    init_repo(tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+    monkeypatch.chdir(tmp_path)
+
+    result = commit_and_push(
+        "just a plain message that is long enough",
+        ["a.txt"],
+        require_feature_branch=False,
+    )
+
+    assert result.committed is False
+    assert result.success is False
+    assert "Conventional Commits" in (result.error or "")
+
+
+def test_commit_and_push_accepts_custom_type_from_pyproject(tmp_path, monkeypatch):
+    init_repo(tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.commit]\ntypes = ["sql"]\n')
+    monkeypatch.chdir(tmp_path)
+
+    result = commit_and_push(
+        "sql(migrations): add users table",
+        ["a.txt", "pyproject.toml"],
+        require_feature_branch=False,
+    )
+
+    assert result.committed is True
+    assert result.extra.get("commit_type") == "sql"
+
+
+def test_commit_and_push_records_feat_commit_type_in_extra(tmp_path, monkeypatch):
+    init_repo(tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+    monkeypatch.chdir(tmp_path)
+
+    result = commit_and_push(
+        "feat(x): add a.txt",
+        ["a.txt"],
+        require_feature_branch=False,
+    )
+
+    assert result.committed is True
+    assert result.extra.get("commit_type") == "feat"
