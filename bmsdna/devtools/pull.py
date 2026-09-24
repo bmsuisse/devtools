@@ -153,9 +153,19 @@ class PullStep:
 def build_steps(remote: str, *, no_default: bool, pull_args: list[str], cwd: Path | str | None = None) -> list[PullStep]:
     steps: list[PullStep] = []
     args = _with_default_strategy(pull_args)
+    # Fully-qualified "remote/branch" refs a step above has already pulled,
+    # keyed to that step's label -- any later step targeting the same ref
+    # (e.g. running `bdt pull` while already on main/master itself, whose
+    # tracking branch IS origin/main -- or the default branch turning out to
+    # be main/master, the common case) is skipped instead of issuing the
+    # identical `git pull` again.
+    pulled_refs: dict[str, str] = {}
 
-    if upstream_branch(cwd) is not None:
-        steps.append(PullStep("current branch's remote tracking branch", ["git", "pull", *args]))
+    upstream = upstream_branch(cwd)
+    if upstream is not None:
+        label = "current branch's remote tracking branch"
+        steps.append(PullStep(label, ["git", "pull", *args]))
+        pulled_refs[upstream] = label
     else:
         steps.append(PullStep("current branch's remote tracking branch (skipped: no upstream configured)", None))
 
@@ -165,18 +175,22 @@ def build_steps(remote: str, *, no_default: bool, pull_args: list[str], cwd: Pat
     default, branches = _query_remote(remote, cwd, timeout=CLI_TIMEOUT_SECS)
     main = "main" if "main" in branches else "master" if "master" in branches else None
     if main is not None:
-        steps.append(PullStep(f"{remote}/{main}", ["git", "pull", remote, main, *args]))
+        main_ref = f"{remote}/{main}"
+        if main_ref in pulled_refs:
+            steps.append(PullStep(f"{main_ref} (skipped: same as {pulled_refs[main_ref]}, already pulled above)", None))
+        else:
+            steps.append(PullStep(main_ref, ["git", "pull", remote, main, *args]))
+            pulled_refs[main_ref] = main_ref
     else:
         steps.append(PullStep(f"{remote}'s main/master branch (skipped: neither exists on {remote}, or it's unreachable)", None))
 
     if not no_default:
-        if default is not None and default == main:
-            # Common case: the default branch IS main/master, already pulled
-            # above -- running the identical `git pull` a second time would
-            # just print "Already up to date.", so skip it instead.
-            steps.append(PullStep(f"{remote}'s default branch ({default}) (skipped: same as {remote}/{main}, already pulled above)", None))
-        elif default is not None:
-            steps.append(PullStep(f"{remote}'s default branch ({default})", ["git", "pull", remote, default, *args]))
+        if default is not None:
+            default_ref = f"{remote}/{default}"
+            if default_ref in pulled_refs:
+                steps.append(PullStep(f"{remote}'s default branch ({default}) (skipped: same as {pulled_refs[default_ref]}, already pulled above)", None))
+            else:
+                steps.append(PullStep(f"{remote}'s default branch ({default})", ["git", "pull", remote, default, *args]))
         else:
             steps.append(PullStep(f"{remote}'s default branch (skipped: could not be determined)", None))
 

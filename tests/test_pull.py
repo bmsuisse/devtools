@@ -146,29 +146,50 @@ def test_default_branch_none_for_unreachable_remote(tmp_path) -> None:
 # --- build_steps ---------------------------------------------------------------
 
 
-def test_build_steps_dedups_default_branch_pull_when_it_matches_main(tmp_path) -> None:
-    """The common case: the remote's DEFAULT branch IS main. Re-running the
-    identical `git pull origin main` a second time would be a no-op --
-    skip it instead of actually issuing it twice."""
+def test_build_steps_dedups_main_pull_when_it_matches_the_tracking_branch(tmp_path) -> None:
+    """Running `bdt pull` while already on main/master itself -- whose tracking
+    branch IS origin/main -- must not pull origin/main a second time in step 2:
+    it's the exact ref step 1 (the bare `git pull`) already covers."""
     remote = init_repo(tmp_path / "remote")
-    checkout = clone(remote, tmp_path / "clone")
+    checkout = clone(remote, tmp_path / "clone")  # stays on 'main', tracking origin/main
 
     steps = build_steps("origin", no_default=False, pull_args=[], cwd=checkout)
 
     assert [s.label for s in steps] == [
         "current branch's remote tracking branch",
+        "origin/main (skipped: same as current branch's remote tracking branch, already pulled above)",
+        "origin's default branch (main) (skipped: same as current branch's remote tracking branch, already pulled above)",
+    ]
+    assert steps[0].cmd is not None
+    assert steps[1].cmd is None
+    assert steps[2].cmd is None
+
+
+def test_build_steps_dedups_default_branch_pull_when_it_matches_main(tmp_path) -> None:
+    """The common case: the remote's DEFAULT branch IS main, but the current branch
+    tracks something else entirely. Re-running the identical `git pull origin main`
+    a second time (step 3 after step 2) would be a no-op -- skip it instead."""
+    remote = init_repo(tmp_path / "remote")
+    checkout = clone(remote, tmp_path / "clone")
+    _git(["checkout", "-q", "-b", "feature", "--no-track"], cwd=checkout)  # no upstream -- isolates step 2 vs 3
+
+    steps = build_steps("origin", no_default=False, pull_args=[], cwd=checkout)
+
+    assert [s.label for s in steps] == [
+        "current branch's remote tracking branch (skipped: no upstream configured)",
         "origin/main",
         "origin's default branch (main) (skipped: same as origin/main, already pulled above)",
     ]
-    assert steps[0].cmd is not None
     assert steps[1].cmd is not None
     assert steps[2].cmd is None
 
 
-def test_build_steps_includes_all_three_when_default_differs_from_main(tmp_path) -> None:
+def test_build_steps_includes_all_three_distinct_real_pulls_when_none_overlap(tmp_path) -> None:
     remote = init_repo(tmp_path / "remote")
     _git(["checkout", "-q", "-b", "develop"], cwd=remote)  # 'main' still exists; remote's default is now 'develop'
     checkout = clone(remote, tmp_path / "clone", checkout="develop")
+    _git(["checkout", "-q", "-b", "feature"], cwd=checkout)
+    _git(["push", "-q", "-u", "origin", "feature"], cwd=checkout)  # tracks origin/feature -- distinct from main and develop
 
     steps = build_steps("origin", no_default=False, pull_args=[], cwd=checkout)
 
@@ -209,11 +230,12 @@ def test_build_steps_queries_the_remote_exactly_once_for_main_and_default_branch
 def test_build_steps_skips_default_branch_when_no_default(tmp_path) -> None:
     remote = init_repo(tmp_path / "remote")
     checkout = clone(remote, tmp_path / "clone")
+    _git(["checkout", "-q", "-b", "feature", "--no-track"], cwd=checkout)  # isolate from the tracking-branch dedup
 
     steps = build_steps("origin", no_default=True, pull_args=[], cwd=checkout)
 
     assert [s.label for s in steps] == [
-        "current branch's remote tracking branch",
+        "current branch's remote tracking branch (skipped: no upstream configured)",
         "origin/main",
     ]
 

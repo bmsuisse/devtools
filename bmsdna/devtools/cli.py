@@ -641,7 +641,12 @@ def worktree(
 
 @app.command()
 def pull(
-    remote: str = typer.Option("origin", "--remote", help="Remote to pull from"),
+    remote: str = typer.Option(
+        "origin",
+        "--remote",
+        help="Remote to pull main/master and the default branch from (the current branch's own tracking "
+        "branch step always follows its real configured upstream, regardless of this)",
+    ),
     no_default: bool = typer.Option(
         False,
         "--no-default",
