@@ -161,9 +161,10 @@ def pr_create(
 
     scope_label_map = pr_labels.scope_labels()
     if scope_label_map:
-        scope = pr_labels.parse_conventional_scope(head_commit_subject())
+        scope = commit_mod.conventional_commit_scope(head_commit_subject())
         auto_label = pr_labels.label_for_scope(scope_label_map, scope)
         if auto_label and auto_label.lower() not in {existing.lower() for existing in label}:
+            print(f"Auto-applying label '{auto_label}' for scope '{scope}' ([tool.bdt.pr.scope_labels])")
             label = [*label, auto_label]
 
     missing_groups = pr_labels.missing_label_groups(pr_labels.required_label_groups(), label)

@@ -1,10 +1,7 @@
-import pytest
-
 from bmsdna.devtools.pr_labels import (
     format_missing_groups_error,
     label_for_scope,
     missing_label_groups,
-    parse_conventional_scope,
     required_label_groups,
     scope_labels,
 )
@@ -92,22 +89,6 @@ def test_scope_labels_ignores_non_string_values(tmp_path) -> None:
         "billing = [\"not\", \"a\", \"string\"]\n",
     )
     assert scope_labels(tmp_path) == {"customers": "e2e-customers"}
-
-
-@pytest.mark.parametrize(
-    "subject,expected",
-    [
-        ("feat(customers): add widget support", "customers"),
-        ("fix(billing)!: correct rounding", "billing"),
-        ("feat(some scope): spaces in scope", "some scope"),
-        ("fix: no scope here", None),
-        ("not a conventional commit at all", None),
-        ("", None),
-        (None, None),
-    ],
-)
-def test_parse_conventional_scope(subject: str | None, expected: str | None) -> None:
-    assert parse_conventional_scope(subject) == expected
 
 
 def test_label_for_scope_returns_none_when_scope_is_none() -> None:

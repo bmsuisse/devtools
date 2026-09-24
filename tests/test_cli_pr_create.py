@@ -238,6 +238,7 @@ def test_pr_create_auto_applies_scope_label_for_github(monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     assert captured_cmd.count("--label") == 1
     assert captured_cmd[captured_cmd.index("--label") + 1] == "e2e-customers"
+    assert "Auto-applying label 'e2e-customers' for scope 'customers'" in result.output
 
 
 def test_pr_create_auto_applies_scope_label_for_ado(monkeypatch) -> None:
