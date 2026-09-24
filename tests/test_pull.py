@@ -124,7 +124,10 @@ def test_default_branch_none_for_unreachable_remote(tmp_path) -> None:
 # --- build_steps ---------------------------------------------------------------
 
 
-def test_build_steps_includes_all_three_by_default(tmp_path) -> None:
+def test_build_steps_dedups_default_branch_pull_when_it_matches_main(tmp_path) -> None:
+    """The common case: the remote's DEFAULT branch IS main. Re-running the
+    identical `git pull origin main` a second time would be a no-op --
+    skip it instead of actually issuing it twice."""
     remote = init_repo(tmp_path / "remote")
     checkout = clone(remote, tmp_path / "clone")
 
@@ -133,7 +136,24 @@ def test_build_steps_includes_all_three_by_default(tmp_path) -> None:
     assert [s.label for s in steps] == [
         "current branch's remote tracking branch",
         "origin/main",
-        "origin's default branch (main)",
+        "origin's default branch (main) (skipped: same as origin/main, already pulled above)",
+    ]
+    assert steps[0].cmd is not None
+    assert steps[1].cmd is not None
+    assert steps[2].cmd is None
+
+
+def test_build_steps_includes_all_three_when_default_differs_from_main(tmp_path) -> None:
+    remote = init_repo(tmp_path / "remote")
+    _git(["checkout", "-q", "-b", "develop"], cwd=remote)  # 'main' still exists; remote's default is now 'develop'
+    checkout = clone(remote, tmp_path / "clone", checkout="develop")
+
+    steps = build_steps("origin", no_default=False, pull_args=[], cwd=checkout)
+
+    assert [s.label for s in steps] == [
+        "current branch's remote tracking branch",
+        "origin/main",
+        "origin's default branch (develop)",
     ]
     for step in steps:
         assert step.cmd is not None
@@ -207,6 +227,16 @@ def test_run_dry_run_does_not_pull_anything(tmp_path, capsys) -> None:
     out = capsys.readouterr().out
     assert "would run: git pull" in out
     assert (checkout / "f.txt").read_text() == "base\n"
+
+
+def test_run_prints_current_branch_header(tmp_path, capsys) -> None:
+    remote = init_repo(tmp_path / "remote")
+    checkout = clone(remote, tmp_path / "clone")
+
+    run(dry_run=True, cwd=checkout)
+
+    out = capsys.readouterr().out
+    assert "bringing 'main' up to date from origin:" in out
 
 
 def test_run_pulls_tracking_branch_and_main_and_default(tmp_path, capsys) -> None:

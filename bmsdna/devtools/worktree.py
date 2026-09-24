@@ -22,6 +22,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import pull as pull_mod
 from . import testdb
 
 # Heavy/vendor/build directories that are never themselves a separate repo
@@ -89,7 +90,15 @@ def create(
         _run(install_cmd, cwd=path)
 
     print(f"worktree ready at {path}")
-    if base in ("main", "master"):
+    # A worktree based on the remote's actual DEFAULT branch makes `bdt pull`'s
+    # separate default-branch step redundant -- checked against the real thing
+    # (via `git ls-remote`, same as `pull.default_branch`) rather than just
+    # assuming main/master IS the default, which isn't always true (e.g. a
+    # repo defaulting to `develop`). Falls back to that main/master assumption
+    # only if the remote can't be reached from here.
+    remote_default = pull_mod.default_branch("origin", cwd=path)
+    originated_from_default = base == remote_default if remote_default is not None else base in ("main", "master")
+    if originated_from_default:
         print(f"Hint: run `bdt pull --no-default` in it to pull the latest {base} (it's also the default branch, so pulling that again would be redundant).")
     else:
         print("Hint: run `bdt pull` in it to pull the latest main/master and default branch.")

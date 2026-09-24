@@ -5,7 +5,8 @@ rather than piling every source into one merge no one asked for:
 1. the current branch's own remote tracking branch (plain `git pull`);
 2. the remote's `main` or `master` branch, whichever exists;
 3. the repo's DEFAULT branch, as configured on the remote -- unless
-   `--no-default`.
+   `--no-default`. Skipped (rather than run again) when it turns out to be
+   the same branch as step 2, which is the common case.
 
 "Default branch" here is resolved via `git ls-remote --symref <remote> HEAD`
 (what `git remote show <remote>`'s "HEAD branch" line is itself built from)
@@ -132,7 +133,12 @@ def build_steps(remote: str, *, no_default: bool, pull_args: list[str], cwd: Pat
 
     if not no_default:
         default = default_branch(remote, cwd)
-        if default is not None:
+        if default is not None and default == main:
+            # Common case: the default branch IS main/master, already pulled
+            # above -- running the identical `git pull` a second time would
+            # just print "Already up to date.", so skip it instead.
+            steps.append(PullStep(f"{remote}'s default branch ({default}) (skipped: same as {remote}/{main}, already pulled above)", None))
+        elif default is not None:
             steps.append(PullStep(f"{remote}'s default branch ({default})", ["git", "pull", remote, default, *args]))
         else:
             steps.append(PullStep(f"{remote}'s default branch (skipped: could not be determined)", None))
@@ -173,6 +179,7 @@ def run(
     pull_args = pull_args or []
     steps = build_steps(remote, no_default=no_default, pull_args=pull_args, cwd=cwd)
 
+    print(f"bringing '{current_branch(cwd)}' up to date from {remote}:")
     for step in steps:
         if step.cmd is None:
             print(f"skip: {step.label}")
