@@ -89,6 +89,10 @@ def create(
         _run(install_cmd, cwd=path)
 
     print(f"worktree ready at {path}")
+    if base in ("main", "master"):
+        print(f"Hint: run `bdt pull --no-default` in it to pull the latest {base} (it's also the default branch, so pulling that again would be redundant).")
+    else:
+        print("Hint: run `bdt pull` in it to pull the latest main/master and default branch.")
     return path
 
 

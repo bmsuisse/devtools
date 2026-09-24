@@ -1,0 +1,206 @@
+"""`bdt pull`: bring the current branch up to date from three sources, each a
+separate `git pull` so a conflict in one is reported before the next runs
+rather than piling every source into one merge no one asked for:
+
+1. the current branch's own remote tracking branch (plain `git pull`);
+2. the remote's `main` or `master` branch, whichever exists;
+3. the repo's DEFAULT branch, as configured on the remote -- unless
+   `--no-default`.
+
+"Default branch" here is resolved via `git ls-remote --symref <remote> HEAD`
+(what `git remote show <remote>`'s "HEAD branch" line is itself built from)
+rather than `gh repo view`: it's plain git, so it works the same for a GitHub
+or an Azure DevOps remote and needs no extra CLI/auth beyond what a `git
+pull` already needs. Step 2 (main/master) is a separate, more conservative
+check on top of that -- it only ever looks at branches literally named
+`main`/`master`, so it still does something sane on repos whose configured
+default branch is neither (e.g. `develop`).
+
+On a merge conflict, this stops immediately (later steps are skipped) and
+exits with the exact `bdt pull ...` command to re-run once the conflict is
+resolved -- same flags as this invocation, minus `--dry-run`.
+"""
+
+from __future__ import annotations
+
+import shlex
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+
+def _run_capture(cmd: list[str], cwd: Path | str | None = None) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        sys.exit(f"'{cmd[0]}' is required for this command but wasn't found on PATH.")
+
+
+def current_branch(cwd: Path | str | None = None) -> str:
+    return _run_capture(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd).stdout.strip()
+
+
+def upstream_branch(cwd: Path | str | None = None) -> str | None:
+    """The current branch's configured remote tracking branch (e.g.
+    'origin/my-feature'), or None if it has none set."""
+    result = _run_capture(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd)
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _parse_ls_remote_heads(output: str) -> dict[str, str]:
+    branches: dict[str, str] = {}
+    for line in output.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 2 and parts[1].startswith("refs/heads/"):
+            branches[parts[1].removeprefix("refs/heads/")] = parts[0]
+    return branches
+
+
+def remote_main_or_master(remote: str, cwd: Path | str | None = None) -> str | None:
+    """'main' or 'master', whichever exists as a branch on `remote` (checked
+    live via `git ls-remote`, not stale local remote-tracking refs); 'main'
+    wins if somehow both exist. None if neither does, or the remote couldn't
+    be reached."""
+    result = _run_capture(["git", "ls-remote", "--heads", remote, "main", "master"], cwd)
+    if result.returncode != 0:
+        return None
+    branches = _parse_ls_remote_heads(result.stdout)
+    if "main" in branches:
+        return "main"
+    if "master" in branches:
+        return "master"
+    return None
+
+
+def default_branch(remote: str, cwd: Path | str | None = None) -> str | None:
+    """The branch `remote`'s HEAD points at -- i.e. its configured default
+    branch -- or None if it couldn't be determined (remote unreachable, or
+    it has no HEAD symref, e.g. an empty repo)."""
+    result = _run_capture(["git", "ls-remote", "--symref", remote, "HEAD"], cwd)
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        # "ref: refs/heads/main\tHEAD"
+        if line.startswith("ref:") and line.endswith("HEAD"):
+            ref = line[len("ref:"):].split("\t")[0].strip()
+            return ref.removeprefix("refs/heads/")
+    return None
+
+
+# A recent-ish git refuses to even attempt a `git pull` that isn't a fast-forward
+# unless it's told how to reconcile divergent branches (merge vs rebase vs
+# fast-forward-only) -- either via `pull.rebase`/`pull.ff` in the caller's git
+# config, or one of these flags on the command line. A caller with neither
+# configured would otherwise have `bdt pull` immediately fail every step with
+# git's "Need to specify how to reconcile divergent branches" instead of doing
+# anything, which defeats the point of the command. `--no-rebase` (a plain
+# merge, never rewriting history) is added by default so it always does
+# something sensible out of the box; any of these flags in `pull_args`
+# overrides that default instead of stacking with it.
+_STRATEGY_FLAGS = ("--rebase", "--no-rebase", "--ff-only", "--ff", "--no-ff")
+
+
+def _with_default_strategy(pull_args: list[str]) -> list[str]:
+    if any(a in _STRATEGY_FLAGS or a.startswith("--rebase=") for a in pull_args):
+        return pull_args
+    return ["--no-rebase", *pull_args]
+
+
+@dataclass(frozen=True)
+class PullStep:
+    label: str
+    # None means "nothing to do" (e.g. no upstream configured) -- the step is
+    # reported as skipped rather than run.
+    cmd: list[str] | None
+
+
+def build_steps(remote: str, *, no_default: bool, pull_args: list[str], cwd: Path | str | None = None) -> list[PullStep]:
+    steps: list[PullStep] = []
+    args = _with_default_strategy(pull_args)
+
+    if upstream_branch(cwd) is not None:
+        steps.append(PullStep("current branch's remote tracking branch", ["git", "pull", *args]))
+    else:
+        steps.append(PullStep("current branch's remote tracking branch (skipped: no upstream configured)", None))
+
+    main = remote_main_or_master(remote, cwd)
+    if main is not None:
+        steps.append(PullStep(f"{remote}/{main}", ["git", "pull", remote, main, *args]))
+    else:
+        steps.append(PullStep(f"{remote}'s main/master branch (skipped: neither exists on {remote}, or it's unreachable)", None))
+
+    if not no_default:
+        default = default_branch(remote, cwd)
+        if default is not None:
+            steps.append(PullStep(f"{remote}'s default branch ({default})", ["git", "pull", remote, default, *args]))
+        else:
+            steps.append(PullStep(f"{remote}'s default branch (skipped: could not be determined)", None))
+
+    return steps
+
+
+def _has_conflict(cwd: Path | str | None) -> bool:
+    """True if the working tree currently has unmerged (conflicted) paths --
+    left behind by a `git pull` that hit a merge/rebase conflict, regardless
+    of which strategy `pull_args` picked."""
+    result = _run_capture(["git", "ls-files", "-u"], cwd)
+    return bool(result.stdout.strip())
+
+
+def rerun_command(remote: str, *, no_default: bool, pull_args: list[str]) -> str:
+    """The exact `bdt pull ...` invocation to print alongside a conflict
+    error -- same flags as the current run, minus --dry-run (resolving a
+    conflict means actually pulling, not previewing again)."""
+    parts = ["bdt", "pull"]
+    if remote != "origin":
+        parts += ["--remote", remote]
+    if no_default:
+        parts.append("--no-default")
+    if pull_args:
+        parts += ["--", *pull_args]
+    return " ".join(shlex.quote(p) for p in parts)
+
+
+def run(
+    *,
+    remote: str = "origin",
+    no_default: bool = False,
+    dry_run: bool = False,
+    pull_args: list[str] | None = None,
+    cwd: Path | str | None = None,
+) -> None:
+    pull_args = pull_args or []
+    steps = build_steps(remote, no_default=no_default, pull_args=pull_args, cwd=cwd)
+
+    for step in steps:
+        if step.cmd is None:
+            print(f"skip: {step.label}")
+            continue
+
+        cmd_str = " ".join(shlex.quote(c) for c in step.cmd)
+        if dry_run:
+            print(f"would run: {cmd_str}")
+            continue
+
+        print(f"pulling {step.label}: {cmd_str}")
+        result = _run_capture(step.cmd, cwd)
+        if result.stdout.strip():
+            print(result.stdout.strip())
+        if result.returncode == 0:
+            continue
+
+        if result.stderr.strip():
+            print(result.stderr.strip(), file=sys.stderr)
+
+        if _has_conflict(cwd):
+            rerun = rerun_command(remote, no_default=no_default, pull_args=pull_args)
+            sys.exit(
+                f"ERROR: merge conflict while pulling {step.label}.\n"
+                f"Resolve the conflict(s) (or run `git merge --abort` / `git rebase --abort` to give up), "
+                f"then re-run:\n  {rerun}"
+            )
+
+        sys.exit(f"ERROR: `{cmd_str}` failed (see output above).")
+
+    print("dry run complete; nothing was pulled" if dry_run else "done")

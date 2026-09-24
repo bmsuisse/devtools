@@ -17,7 +17,7 @@ from . import env_config
 from . import find_repo as find_repo_mod
 from . import gh_issue, gh_pr
 from . import logs as logs_mod
-from . import pr_build, pr_labels, worktree as worktree_mod
+from . import pr_build, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
 from .cli_tools import detect_agent_session, require_az, require_gh
 from .gitrepo import AdoRemote, GitHubRemote, current_branch, current_remote
@@ -637,6 +637,29 @@ def worktree(
     """Create a git worktree under .worktrees/<name>, mirroring the `just worktree` recipe."""
     install_cmd = install.split() if install else None
     worktree_mod.create(name, base=base, env_file=env_file, submodules=submodules, install_cmd=install_cmd)
+
+
+@app.command()
+def pull(
+    remote: str = typer.Option("origin", "--remote", help="Remote to pull from"),
+    no_default: bool = typer.Option(
+        False,
+        "--no-default",
+        help="Don't also pull the repo's DEFAULT branch -- skip this when the current branch was already "
+        "branched from main/master, since pulling it again would be redundant",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print what would be pulled, without doing it"),
+    pull_args: list[str] = typer.Argument(
+        None,
+        help="Extra flags passed through to every `git pull` step, e.g. `-- --rebase --ff-only` (put them after `--`)",
+    ),
+) -> None:
+    """Bring the current branch up to date from three sources: its own remote tracking branch, the
+    remote's main/master branch, and the repo's DEFAULT branch (unless --no-default) -- each a
+    separate `git pull`, stopping with a clear error (and the exact command to re-run) if any step
+    hits a merge conflict.
+    """
+    pull_mod.run(remote=remote, no_default=no_default, dry_run=dry_run, pull_args=pull_args or [])
 
 
 @app.command("find-repo")
