@@ -9,6 +9,7 @@ from bmsdna.devtools.worktree import (
     clean_orphaned_dbs,
     clean_worktrees,
     collect_worktrees,
+    create,
     find_orphaned_dbs,
     find_repos,
 )
@@ -42,6 +43,39 @@ def add_submodule(repo, sub_repo, sub_path="vendor/sub"):
     whatever branch is currently checked out in `repo`."""
     _git(["-c", "protocol.file.allow=always", "submodule", "add", str(sub_repo), sub_path], cwd=repo)
     _git(["commit", "-q", "-m", "add submodule"], cwd=repo)
+
+
+# --- create (`bdt worktree`) -------------------------------------------------
+
+
+def test_create_hints_plain_bdt_pull_when_base_is_not_main_or_master(tmp_path, capsys) -> None:
+    repo = init_repo(tmp_path / "repo")
+    _git(["branch", "dev"], cwd=repo)
+
+    create("my-feature", base="dev", submodules=False, root=repo)
+
+    out = capsys.readouterr().out
+    assert "Hint: run `bdt pull`" in out
+    assert "--no-default" not in out
+
+
+def test_create_hints_no_default_flag_when_base_is_main(tmp_path, capsys) -> None:
+    repo = init_repo(tmp_path / "repo")
+
+    create("my-feature", base="main", submodules=False, root=repo)
+
+    out = capsys.readouterr().out
+    assert "Hint: run `bdt pull --no-default`" in out
+
+
+def test_create_hints_no_default_flag_when_base_is_master(tmp_path, capsys) -> None:
+    repo = init_repo(tmp_path / "repo")
+    _git(["branch", "-m", "main", "master"], cwd=repo)
+
+    create("my-feature", base="master", submodules=False, root=repo)
+
+    out = capsys.readouterr().out
+    assert "Hint: run `bdt pull --no-default`" in out
 
 
 # --- find_repos -----------------------------------------------------------
