@@ -5,7 +5,7 @@ import pytest
 from typer.testing import CliRunner
 
 from bmsdna.devtools.cli import app
-from bmsdna.devtools.find_repo import RemoteRepo, find_local, find_remote, run, work_dir
+from bmsdna.devtools.find_repo import RemoteRepo, find_github, find_local, find_remote, run, work_dir
 
 runner = CliRunner()
 
@@ -170,6 +170,61 @@ def test_find_remote_skips_project_whose_repos_list_fails_but_keeps_searching(mo
     assert "NoAccess" in capsys.readouterr().err
 
 
+# --- find_github --------------------------------------------------------------
+
+
+def _fake_gh(repos: list[dict]):
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(repos), stderr="")
+
+    return fake_run
+
+
+def test_find_github_prefers_exact_match(monkeypatch) -> None:
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        _fake_gh(
+            [
+                {"name": "widgets-extra", "url": "https://github.com/org/widgets-extra"},
+                {"name": "widgets", "url": "https://github.com/org/widgets"},
+            ]
+        ),
+    )
+
+    result = find_github("gh", "org", "widgets")
+
+    assert result == [RemoteRepo("org", "widgets", "https://github.com/org/widgets", source="github")]
+
+
+def test_find_github_falls_back_to_substring_match(monkeypatch) -> None:
+    monkeypatch.setattr(
+        subprocess, "run", _fake_gh([{"name": "widgets-extra", "url": "https://github.com/org/widgets-extra"}])
+    )
+
+    result = find_github("gh", "org", "widgets")
+
+    assert result == [RemoteRepo("org", "widgets-extra", "https://github.com/org/widgets-extra", source="github")]
+
+
+def test_find_github_no_match(monkeypatch) -> None:
+    monkeypatch.setattr(subprocess, "run", _fake_gh([{"name": "other", "url": "https://github.com/org/other"}]))
+
+    assert find_github("gh", "org", "widgets") == []
+
+
+def test_find_github_exits_if_repo_list_fails(monkeypatch) -> None:
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="not logged in")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(SystemExit) as exc_info:
+        find_github("gh", "org", "widgets")
+
+    assert "not logged in" in str(exc_info.value)
+
+
 # --- run -----------------------------------------------------------------------
 
 
@@ -248,6 +303,76 @@ def test_run_clones_into_project_nested_dest(tmp_path, monkeypatch) -> None:
     run("widgets", root=tmp_path, org="someorg", yes=True)
 
     assert clone_calls == [("https://a/widgets", tmp_path / "ProjectA" / "widgets", {"Authorization": "Bearer token"})]
+
+
+def test_run_exits_if_no_local_match_and_no_org_or_github_org(tmp_path) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        run("widgets", root=tmp_path, org=None, github_org=None, yes=False)
+
+    assert "AZDO_ORG" in str(exc_info.value)
+    assert "GITHUB_ORG" in str(exc_info.value)
+
+
+def test_run_clones_github_org_match_into_github_subfolder(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("bmsdna.devtools.find_repo.require_gh", lambda: "gh")
+    monkeypatch.setattr(
+        "bmsdna.devtools.find_repo.find_github",
+        lambda gh, org, name: [RemoteRepo("someghorg", "widgets", "https://github.com/someghorg/widgets", source="github")],
+    )
+    clone_calls = []
+
+    def fake_clone(url, dest, auth=None):
+        clone_calls.append((url, dest))
+        return subprocess.CompletedProcess(["git", "clone"], 0)
+
+    monkeypatch.setattr("bmsdna.devtools.find_repo.clone", fake_clone)
+
+    run("widgets", root=tmp_path, org=None, github_org="someghorg", yes=True)
+
+    assert clone_calls == [("https://github.com/someghorg/widgets", tmp_path / "github" / "widgets")]
+
+
+def test_run_searches_both_org_and_github_org(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("bmsdna.devtools.find_repo.require_az", lambda: "az")
+    monkeypatch.setattr("bmsdna.devtools.find_repo.require_gh", lambda: "gh")
+    monkeypatch.setattr("bmsdna.devtools.find_repo.find_remote", lambda az, org, name: [])
+    monkeypatch.setattr(
+        "bmsdna.devtools.find_repo.find_github",
+        lambda gh, org, name: [RemoteRepo("someghorg", "widgets", "https://github.com/someghorg/widgets", source="github")],
+    )
+    clone_calls = []
+    monkeypatch.setattr(
+        "bmsdna.devtools.find_repo.clone",
+        lambda url, dest, auth=None: clone_calls.append((url, dest)) or subprocess.CompletedProcess(["git"], 0),
+    )
+
+    run("widgets", root=tmp_path, org="someorg", github_org="someghorg", yes=True)
+
+    assert clone_calls == [("https://github.com/someghorg/widgets", tmp_path / "github" / "widgets")]
+
+
+def test_run_prefers_exact_match_from_either_source_over_substring_from_the_other(tmp_path, monkeypatch) -> None:
+    """An ADO substring-only match shouldn't beat an exact GitHub match (or vice versa) --
+    exact-first must apply across the combined results, not just within each source."""
+    monkeypatch.setattr("bmsdna.devtools.find_repo.require_az", lambda: "az")
+    monkeypatch.setattr("bmsdna.devtools.find_repo.require_gh", lambda: "gh")
+    monkeypatch.setattr(
+        "bmsdna.devtools.find_repo.find_remote",
+        lambda az, org, name: [RemoteRepo("ProjectA", "widgets-extra", "https://a/widgets-extra")],
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.find_repo.find_github",
+        lambda gh, org, name: [RemoteRepo("someghorg", "widgets", "https://github.com/someghorg/widgets", source="github")],
+    )
+    clone_calls = []
+    monkeypatch.setattr(
+        "bmsdna.devtools.find_repo.clone",
+        lambda url, dest, auth=None: clone_calls.append((url, dest)) or subprocess.CompletedProcess(["git"], 0),
+    )
+
+    run("widgets", root=tmp_path, org="someorg", github_org="someghorg", yes=True)
+
+    assert clone_calls == [("https://github.com/someghorg/widgets", tmp_path / "github" / "widgets")]
 
 
 def test_run_exits_if_dest_already_exists(tmp_path, monkeypatch) -> None:
@@ -406,6 +531,8 @@ def test_find_repo_cli_delegates_to_run(monkeypatch, tmp_path) -> None:
     # otherwise leak into `--pat`'s envvar fallback and make this assertion flaky.
     monkeypatch.delenv("AZURE_DEVOPS_EXT_PAT", raising=False)
     monkeypatch.delenv("AZURE_DEVOPS_PAT", raising=False)
+    monkeypatch.delenv("GITHUB_ORG", raising=False)
+    monkeypatch.delenv("BMS_GITHUB_ORG", raising=False)
     captured: dict = {}
     monkeypatch.setattr(
         "bmsdna.devtools.cli.find_repo_mod.run",
@@ -415,4 +542,26 @@ def test_find_repo_cli_delegates_to_run(monkeypatch, tmp_path) -> None:
     result = runner.invoke(app, ["find-repo", "widgets", "--root", str(tmp_path), "--org", "someorg", "--yes"])
 
     assert result.exit_code == 0, result.output
-    assert captured == {"name": "widgets", "root": tmp_path, "org": "someorg", "yes": True, "pat": None}
+    assert captured == {
+        "name": "widgets",
+        "root": tmp_path,
+        "org": "someorg",
+        "github_org": None,
+        "yes": True,
+        "pat": None,
+    }
+
+
+def test_find_repo_cli_passes_github_org(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("AZURE_DEVOPS_EXT_PAT", raising=False)
+    monkeypatch.delenv("AZURE_DEVOPS_PAT", raising=False)
+    captured: dict = {}
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.find_repo_mod.run",
+        lambda name, **kwargs: captured.update(name=name, **kwargs),
+    )
+
+    result = runner.invoke(app, ["find-repo", "widgets", "--root", str(tmp_path), "--github-org", "someghorg", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["github_org"] == "someghorg"

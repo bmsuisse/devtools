@@ -650,6 +650,12 @@ def find_repo_cmd(
     org: str | None = typer.Option(
         None, "--org", envvar=["AZDO_ORG", "BMS_ORG"], help="Azure DevOps org to search when there's no local match"
     ),
+    github_org: str | None = typer.Option(
+        None,
+        "--github-org",
+        envvar=["GITHUB_ORG", "BMS_GITHUB_ORG"],
+        help="GitHub org to search when there's no local match",
+    ),
     yes: bool = typer.Option(False, "--yes", help="Clone a remote-only match without an interactive confirmation prompt"),
     pat: str | None = typer.Option(
         None,
@@ -658,13 +664,15 @@ def find_repo_cmd(
         help="Azure DevOps PAT for cloning over HTTPS (else falls back to `az` login)",
     ),
 ) -> None:
-    """Find a repo by name: locally first, then in an Azure DevOps org if there's no local match -- offering to clone it.
+    """Find a repo by name: locally first, then in an Azure DevOps org and/or a GitHub org if there's
+    no local match -- offering to clone it.
 
     Replaces the `cross-repo-discovery` skill's full `ALL_REPOS.md` org sync with a
     single-name lookup; it reads the same AZDO_WORK_DIR/BMS_WORK_DIR and AZDO_ORG/BMS_ORG
-    env vars that skill used, so switching over needs no reconfiguration.
+    env vars that skill used, so switching over needs no reconfiguration. A GitHub-org match
+    clones into `root/github/<repo>`, by convention.
     """
-    find_repo_mod.run(name, root=root, org=org, yes=yes, pat=pat)
+    find_repo_mod.run(name, root=root, org=org, github_org=github_org, yes=yes, pat=pat)
 
 
 @cleanup_app.command("worktrees")
