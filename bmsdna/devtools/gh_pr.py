@@ -490,6 +490,39 @@ def ensure_session_note(gh: str) -> None:
         pass
 
 
+def get_pr_body(gh: str) -> tuple[int, str]:
+    """(PR number, PR body) for the current branch's PR -- used by issue-linking, which needs
+    the body actually stored (e.g. autofilled from the commit message via `--fill`), not
+    whatever a caller happened to pass to `pr create`.
+    """
+    pr = _run_gh_json(gh, ["pr", "view", "--json", "number,body"])
+    return pr["number"], pr.get("body") or ""
+
+
+_ISSUE_MENTION_RE = re.compile(r"#(\d+)\b")
+
+
+def link_issue_to_pr(gh: str, pr_number: int, body: str, issue_number: int) -> str:
+    """Make sure `body` (the PR's current body) references `issue_number` via a GitHub closing
+    keyword, so GitHub shows this as a genuinely linked PR (appearing in the issue's
+    "Development" sidebar and auto-closing it on merge) -- a plain `#N` mention elsewhere (only
+    in a comment, say) doesn't get that treatment. A no-op if `body` already mentions the issue
+    number in any form (e.g. it's already there because this number came from scanning the body
+    in the first place).
+
+    Returns the (possibly unchanged) new body -- callers linking more than one issue in a row
+    pass this back in as `body` for the next call, so each edit builds on the last instead of
+    re-fetching or clobbering a previous append.
+    """
+    if any(int(m) == issue_number for m in _ISSUE_MENTION_RE.findall(body)):
+        return body
+    new_body = f"{body.rstrip()}\n\nFixes #{issue_number}\n".lstrip("\n")
+    r = _run([gh, "pr", "edit", str(pr_number), "--body", new_body], capture_output=True, encoding="utf-8")
+    if r.returncode != 0:
+        sys.exit((r.stderr or r.stdout).strip() or "`gh pr edit` failed")
+    return new_body
+
+
 def publish(gh: str) -> None:
     """Mark the current branch's draft PR as ready for review."""
     r = _run([gh, "pr", "ready"], capture_output=True, encoding="utf-8")

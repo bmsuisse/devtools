@@ -49,6 +49,7 @@ import requests
 from .bdt_config import load_bdt_table
 from .cli_tools import ensure_agent_session_note
 from .gitrepo import AdoRemote
+from .pr_issue_link import PR_AVAILABLE_LABEL
 from .pr_markdown import build_comment_content_html
 
 COMMENTS_API_VERSION = "7.1-preview.4"
@@ -202,6 +203,39 @@ def get_valid_states(session: requests.Session, remote: AdoRemote, work_item_typ
     )
     r.raise_for_status()
     return [s["name"] for s in r.json()["value"]]
+
+
+def get_work_item_tags(session: requests.Session, remote: AdoRemote, work_item_id: int) -> list[str]:
+    r = session.get(
+        f"{_base_url(remote)}/_apis/wit/workitems/{work_item_id}",
+        params={"fields": "System.Tags", "api-version": "7.1"},
+    )
+    if r.status_code == 404:
+        sys.exit(f"Work item #{work_item_id} not found in project '{remote.project}'.")
+    r.raise_for_status()
+    raw = r.json().get("fields", {}).get("System.Tags") or ""
+    return [t.strip() for t in raw.split(";") if t.strip()]
+
+
+def add_tag(session: requests.Session, remote: AdoRemote, work_item_id: int, tag: str) -> None:
+    """Add `tag` to work item `work_item_id`'s tags, alongside whatever's already there.
+
+    `update_work_item`'s tags op replaces the whole `System.Tags` field (there's no
+    Azure DevOps "add one tag" patch op), so this reads the current tags first and only
+    PATCHes if `tag` isn't already among them -- otherwise a second `pr create --issue`
+    against the same work item would keep re-sending an unchanged value.
+    """
+    tags = get_work_item_tags(session, remote, work_item_id)
+    if any(t.casefold() == tag.casefold() for t in tags):
+        return
+    update_work_item(session, remote, work_item_id, tags=[*tags, tag])
+
+
+def add_pr_available_tag(session: requests.Session, remote: AdoRemote, work_item_id: int) -> None:
+    """Tag work item `work_item_id` `pr-available` -- the Azure DevOps equivalent of the
+    GitHub `pr-available` label (Azure DevOps work items have no label concept; tags are the
+    closest equivalent, same as `ado_issue.py`'s own `--tag` create/update flag)."""
+    add_tag(session, remote, work_item_id, PR_AVAILABLE_LABEL)
 
 
 def delete_work_item(session: requests.Session, remote: AdoRemote, work_item_id: int) -> None:
