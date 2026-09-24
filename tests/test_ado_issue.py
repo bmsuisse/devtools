@@ -1,11 +1,14 @@
 from unittest.mock import MagicMock
 
 from bmsdna.devtools.ado_issue import (
+    add_pr_available_tag,
+    add_tag,
     build_attach_ops,
     build_create_ops,
     build_search_wiql,
     build_update_ops,
     edit_url,
+    get_work_item_tags,
     html_url,
     resolve_board,
     upload_attachment,
@@ -243,3 +246,58 @@ def test_build_search_wiql_area_path_scopes_to_board() -> None:
 
 def test_build_search_wiql_no_area_path_by_default() -> None:
     assert "AreaPath" not in build_search_wiql(["auth"])
+
+
+# -- get_work_item_tags / add_tag / add_pr_available_tag --------------------
+
+
+def test_get_work_item_tags_parses_semicolon_separated_field() -> None:
+    session = MagicMock()
+    session.get.return_value.status_code = 200
+    session.get.return_value.json.return_value = {"fields": {"System.Tags": "one; two; three"}}
+
+    assert get_work_item_tags(session, REMOTE, 123) == ["one", "two", "three"]
+
+
+def test_get_work_item_tags_empty_when_field_absent() -> None:
+    session = MagicMock()
+    session.get.return_value.status_code = 200
+    session.get.return_value.json.return_value = {"fields": {}}
+
+    assert get_work_item_tags(session, REMOTE, 123) == []
+
+
+def test_add_tag_merges_with_existing_tags() -> None:
+    session = MagicMock()
+    session.get.return_value.status_code = 200
+    session.get.return_value.json.return_value = {"fields": {"System.Tags": "one; two"}}
+    session.patch.return_value.status_code = 200
+
+    add_tag(session, REMOTE, 123, "pr-available")
+
+    ops = session.patch.call_args.kwargs["json"]
+    tags_op = next(op for op in ops if op["path"] == "/fields/System.Tags")
+    assert tags_op["value"] == "one; two; pr-available"
+
+
+def test_add_tag_is_noop_when_tag_already_present_case_insensitively() -> None:
+    session = MagicMock()
+    session.get.return_value.status_code = 200
+    session.get.return_value.json.return_value = {"fields": {"System.Tags": "PR-Available; other"}}
+
+    add_tag(session, REMOTE, 123, "pr-available")
+
+    session.patch.assert_not_called()
+
+
+def test_add_pr_available_tag_uses_the_shared_label_constant() -> None:
+    session = MagicMock()
+    session.get.return_value.status_code = 200
+    session.get.return_value.json.return_value = {"fields": {}}
+    session.patch.return_value.status_code = 200
+
+    add_pr_available_tag(session, REMOTE, 123)
+
+    ops = session.patch.call_args.kwargs["json"]
+    tags_op = next(op for op in ops if op["path"] == "/fields/System.Tags")
+    assert tags_op["value"] == "pr-available"

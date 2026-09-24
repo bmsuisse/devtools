@@ -209,7 +209,6 @@ def pr_create(
         raise typer.BadParameter(pr_labels.format_missing_groups_error(missing_groups), param_hint="--label")
 
     remote = current_remote()
-    source_branch = current_branch()
 
     issue_numbers: list[int] = []
     for ref in issue:
@@ -218,6 +217,8 @@ def pr_create(
         except ValueError as e:
             raise typer.BadParameter(str(e), param_hint="--issue") from e
     issue_numbers = list(dict.fromkeys(issue_numbers))
+
+    source_branch = current_branch()
 
     pr_url: str | None = None
     if isinstance(remote, GitHubRemote):

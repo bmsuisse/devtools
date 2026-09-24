@@ -17,9 +17,11 @@ from bmsdna.devtools.gh_pr import (
     draft_notice,
     failed_run_ids,
     get_pr,
+    get_pr_body,
     get_workflow_runs_for_branch,
     has_build_policy,
     latest_per_workflow,
+    link_issue_to_pr,
     merge_conflict_message,
     protection_requires_status_checks,
     push_assets,
@@ -832,3 +834,64 @@ def test_push_assets_bounds_fetch_and_push_with_a_longer_upload_timeout(monkeypa
     assert fetch_kwargs["timeout"] == CLI_UPLOAD_TIMEOUT_SECS
     assert push_kwargs["timeout"] == CLI_UPLOAD_TIMEOUT_SECS
     assert ls_remote_kwargs["timeout"] == CLI_TIMEOUT_SECS
+
+
+# -- get_pr_body / link_issue_to_pr -----------------------------------------
+
+
+def test_get_pr_body_returns_number_and_body(monkeypatch) -> None:
+    def fake_run(cmd, **kwargs):
+        assert cmd == ["gh", "pr", "view", "--json", "number,body"]
+        return MagicMock(returncode=0, stdout='{"number": 7, "body": "some body"}', stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    assert get_pr_body("gh") == (7, "some body")
+
+
+def test_get_pr_body_missing_body_is_empty_string(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.subprocess.run",
+        lambda cmd, **kwargs: MagicMock(returncode=0, stdout='{"number": 7}', stderr=""),
+    )
+
+    assert get_pr_body("gh") == (7, "")
+
+
+def test_link_issue_to_pr_appends_fixes_keyword(monkeypatch) -> None:
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    new_body = link_issue_to_pr("gh", 7, "existing body", 42)
+
+    assert captured_cmd[:3] == ["gh", "pr", "edit"]
+    assert captured_cmd[3] == "7"
+    edited_body = captured_cmd[captured_cmd.index("--body") + 1]
+    assert "existing body" in edited_body
+    assert "Fixes #42" in edited_body
+    assert new_body == edited_body
+
+
+def test_link_issue_to_pr_noop_when_body_already_mentions_issue(monkeypatch) -> None:
+    def fail_if_called(cmd, **kwargs):
+        raise AssertionError("should not edit the PR -- body already mentions the issue")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fail_if_called)
+
+    body = "This closes #42 already."
+    assert link_issue_to_pr("gh", 7, body, 42) == body
+
+
+def test_link_issue_to_pr_raises_on_gh_failure(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.subprocess.run",
+        lambda cmd, **kwargs: MagicMock(returncode=1, stdout="", stderr="permission denied"),
+    )
+
+    with pytest.raises(SystemExit, match="permission denied"):
+        link_issue_to_pr("gh", 7, "body", 42)

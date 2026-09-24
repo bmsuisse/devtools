@@ -11,6 +11,7 @@ from bmsdna.devtools.pr_build import (
     build_web_url,
     draft_notice,
     find_pending_approvals,
+    link_work_item,
     merge_conflict_message,
     pending_approval_records,
     policy_configs_include_branch,
@@ -378,3 +379,29 @@ def test_run_exits_cleanly_when_get_pr_request_times_out(monkeypatch) -> None:
         run(remote, pat=None, target_branch="main", wait=False)
 
     assert "timed out" in str(exc_info.value)
+
+
+# -- link_work_item -----------------------------------------------------------
+
+
+def test_link_work_item_posts_to_the_pr_work_items_endpoint() -> None:
+    remote = AdoRemote("myorg", "MyProj", "myrepo")
+    session = MagicMock()
+    session.post.return_value = MagicMock(status_code=200)
+
+    link_work_item(session, remote, pr_id=456, work_item_id=99)
+
+    url = session.post.call_args.args[0]
+    assert url == "https://dev.azure.com/myorg/MyProj/_apis/git/repositories/myrepo/pullRequests/456/workitems/99"
+    session.post.return_value.raise_for_status.assert_called_once()
+
+
+def test_link_work_item_raises_on_http_error() -> None:
+    remote = AdoRemote("myorg", "MyProj", "myrepo")
+    session = MagicMock()
+    response = MagicMock(status_code=404)
+    response.raise_for_status.side_effect = requests.HTTPError("not found")
+    session.post.return_value = response
+
+    with pytest.raises(requests.HTTPError):
+        link_work_item(session, remote, pr_id=456, work_item_id=99)
