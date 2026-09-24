@@ -313,6 +313,19 @@ def publish(session: requests.Session, remote: AdoRemote, pr: dict) -> None:
     print("\nRun `bdt pr status --wait` to watch the PR's CI.")
 
 
+def set_draft(session: requests.Session, remote: AdoRemote, pr: dict) -> bool:
+    """Convert a ready PR back to a draft (sets isDraft).
+
+    Returns True if it was just converted, False if it was already a draft --
+    a caller announcing "converted to draft" shouldn't do so for a PR that
+    already was one.
+    """
+    if pr.get("isDraft"):
+        return False
+    _patch_pr(session, remote, pr["pullRequestId"], {"isDraft": True})
+    return True
+
+
 def add_comment(session: requests.Session, remote: AdoRemote, pr_id: int, content: str) -> None:
     """Post a new top-level comment thread on the PR."""
     r = session.post(

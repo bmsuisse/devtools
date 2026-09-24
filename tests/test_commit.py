@@ -3,7 +3,13 @@ import subprocess
 
 import pytest
 
-from bmsdna.devtools.commit import commit_and_push
+from bmsdna.devtools.commit import (
+    allowed_commit_scopes,
+    allowed_commit_types,
+    commit_and_push,
+    conventional_commit_scope,
+    conventional_commit_type,
+)
 
 
 def init_repo(path):
@@ -189,3 +195,179 @@ def test_commit_and_push_installs_prek_hook_when_missing(tmp_path, monkeypatch):
     # same as any other pre-commit hook failure -- not a `warnings` entry.
     assert result.committed is False
     assert result.error
+
+
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        ("feat(x): add widget", "feat"),
+        ("fix: correct off-by-one", "fix"),
+        ("feat!: breaking change", "feat"),
+        ("feat(x)!: breaking change with scope", "feat"),
+        ("chore(deps): bump requests", "chore"),
+        ("not a conventional message", None),
+        ("feat missing colon", None),
+        ("feat:missing space", None),
+        ("", None),
+    ],
+)
+def test_conventional_commit_type(message, expected) -> None:
+    assert conventional_commit_type(message) == expected
+
+
+def test_allowed_commit_types_includes_builtins_with_no_pyproject(tmp_path) -> None:
+    types = allowed_commit_types(tmp_path)
+    assert {"feat", "fix", "chore"} <= types
+
+
+def test_allowed_commit_types_extends_with_pyproject_config(tmp_path) -> None:
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.commit]\ntypes = ["sql", "infra"]\n')
+    types = allowed_commit_types(tmp_path)
+    assert {"feat", "fix", "sql", "infra"} <= types
+
+
+def test_commit_and_push_rejects_non_conventional_message(tmp_path, monkeypatch):
+    init_repo(tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+    monkeypatch.chdir(tmp_path)
+
+    result = commit_and_push(
+        "just a plain message that is long enough",
+        ["a.txt"],
+        require_feature_branch=False,
+    )
+
+    assert result.committed is False
+    assert result.success is False
+    assert "Conventional Commits" in (result.error or "")
+
+
+def test_commit_and_push_accepts_custom_type_from_pyproject(tmp_path, monkeypatch):
+    init_repo(tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.commit]\ntypes = ["sql"]\n')
+    monkeypatch.chdir(tmp_path)
+
+    result = commit_and_push(
+        "sql(migrations): add users table",
+        ["a.txt", "pyproject.toml"],
+        require_feature_branch=False,
+    )
+
+    assert result.committed is True
+    assert result.extra.get("commit_type") == "sql"
+
+
+def test_commit_and_push_records_feat_commit_type_in_extra(tmp_path, monkeypatch):
+    init_repo(tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+    monkeypatch.chdir(tmp_path)
+
+    result = commit_and_push(
+        "feat(x): add a.txt",
+        ["a.txt"],
+        require_feature_branch=False,
+    )
+
+    assert result.committed is True
+    assert result.extra.get("commit_type") == "feat"
+
+
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        ("feat(x): add widget", "x"),
+        ("fix: correct off-by-one", None),
+        ("feat(x)!: breaking change with scope", "x"),
+        ("not a conventional message", None),
+    ],
+)
+def test_conventional_commit_scope(message, expected) -> None:
+    assert conventional_commit_scope(message) == expected
+
+
+def test_allowed_commit_scopes_empty_with_no_pyproject(tmp_path) -> None:
+    assert allowed_commit_scopes(tmp_path) == set()
+
+
+def test_allowed_commit_scopes_reads_pyproject_config(tmp_path) -> None:
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.commit]\nscopes = ["api", "ui"]\n')
+    assert allowed_commit_scopes(tmp_path) == {"api", "ui"}
+
+
+def test_commit_and_push_allows_any_scope_when_unconfigured(tmp_path, monkeypatch):
+    init_repo(tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+    monkeypatch.chdir(tmp_path)
+
+    result = commit_and_push(
+        "feat(whatever): add a.txt",
+        ["a.txt"],
+        require_feature_branch=False,
+    )
+
+    assert result.committed is True
+
+
+def test_commit_and_push_allows_no_scope_even_when_scopes_configured(tmp_path, monkeypatch):
+    init_repo(tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.commit]\nscopes = ["api"]\n')
+    monkeypatch.chdir(tmp_path)
+
+    result = commit_and_push(
+        "feat: add a.txt",
+        ["a.txt", "pyproject.toml"],
+        require_feature_branch=False,
+    )
+
+    assert result.committed is True
+
+
+def test_commit_and_push_accepts_configured_scope(tmp_path, monkeypatch):
+    init_repo(tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.commit]\nscopes = ["api"]\n')
+    monkeypatch.chdir(tmp_path)
+
+    result = commit_and_push(
+        "feat(api): add a.txt",
+        ["a.txt", "pyproject.toml"],
+        require_feature_branch=False,
+    )
+
+    assert result.committed is True
+    assert result.extra.get("commit_scope") == "api"
+
+
+def test_commit_and_push_rejects_scope_outside_configured_list(tmp_path, monkeypatch):
+    init_repo(tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.commit]\nscopes = ["api"]\n')
+    monkeypatch.chdir(tmp_path)
+
+    result = commit_and_push(
+        "feat(bogus): add a.txt",
+        ["a.txt", "pyproject.toml"],
+        require_feature_branch=False,
+    )
+
+    assert result.committed is False
+    assert result.success is False
+    assert "scope" in (result.error or "").lower()
+
+
+def test_commit_and_push_skips_scope_check_with_skip_message_check(tmp_path, monkeypatch):
+    init_repo(tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.commit]\nscopes = ["api"]\n')
+    monkeypatch.chdir(tmp_path)
+
+    result = commit_and_push(
+        "feat(bogus): add a.txt",
+        ["a.txt", "pyproject.toml"],
+        require_message_quality=False,
+        require_feature_branch=False,
+    )
+
+    assert result.committed is True
