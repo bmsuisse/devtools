@@ -127,9 +127,13 @@ def _link_and_label_github(gh: str, remote: GitHubRemote, issue_numbers: list[in
     Best-effort per issue -- one bad/inaccessible issue number shouldn't stop the others from
     being linked/labeled; failures are collected and surfaced together to the caller (which
     wraps this in `_after_create`, so they're reported as a warning, not a failed `pr create`).
+    A no-op (no `gh` calls at all) when there's nothing to link.
     """
     pr_number, body = gh_pr.get_pr_body(gh)
     all_numbers = list(dict.fromkeys([*issue_numbers, *pr_issue_link.find_issue_refs_in_body(body, remote)]))
+    if not all_numbers:
+        return
+    gh_issue.ensure_pr_available_label(gh)
     errors: list[str] = []
     for number in all_numbers:
         try:
@@ -145,6 +149,11 @@ def _link_and_label_ado(session: requests.Session, remote: AdoRemote, pr_id: int
     """Azure DevOps equivalent of `_link_and_label_github`: link every issue in `issue_numbers`,
     plus every work item `find_issue_refs_in_body` finds in the PR's description, to PR `pr_id`,
     and tag each `pr-available`.
+
+    Best-effort per work item -- one bad/inaccessible number shouldn't stop the others from being
+    linked/tagged; failures (a REST error, or a 404 `sys.exit` from deeper in `ado_issue.py`) are
+    collected and surfaced together to the caller (which wraps this in `_after_create`, so they're
+    reported as a warning, not a failed `pr create`).
     """
     all_numbers = list(dict.fromkeys([*issue_numbers, *pr_issue_link.find_issue_refs_in_body(description, remote)]))
     errors: list[str] = []
@@ -152,7 +161,7 @@ def _link_and_label_ado(session: requests.Session, remote: AdoRemote, pr_id: int
         try:
             pr_build.link_work_item(session, remote, pr_id, number)
             ado_issue.add_pr_available_tag(session, remote, number)
-        except requests.RequestException as e:
+        except (requests.RequestException, SystemExit) as e:
             errors.append(f"#{number}: {e}")
     if errors:
         raise RuntimeError("; ".join(errors))
@@ -277,11 +286,17 @@ def pr_create(
                 pr_build.ensure_session_note(session, remote, pr)
 
             _after_create(_finish, "attaching screenshots/files and/or noting the agent session")
-        if returncode == 0 and pr_json is not None:
-            _after_create(
-                lambda: _link_and_label_ado(session, remote, pr_json["pullRequestId"], pr_json.get("description") or "", issue_numbers),
-                "linking work item(s) / setting 'pr-available' tag",
-            )
+        if returncode == 0:
+            # Fetches the PR fresh via `pr_build.get_pr` rather than trusting `pr_json` -- `az`
+            # can exit 0 with stdout that isn't clean JSON (e.g. a deprecation banner ahead of
+            # it), which already leaves `pr_json` as None above; gating issue-linking on it too
+            # would then silently skip it instead of at least warning, unlike every other
+            # best-effort step here.
+            def _link_issues() -> None:
+                pr = pr_build.get_pr(session, remote, source_branch, target)
+                _link_and_label_ado(session, remote, pr["pullRequestId"], pr.get("description") or "", issue_numbers)
+
+            _after_create(_link_issues, "linking work item(s) / setting 'pr-available' tag")
 
     if returncode == 0 and pr_url:
         print(f"\n{pr_url}")

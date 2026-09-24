@@ -877,14 +877,33 @@ def test_link_issue_to_pr_appends_fixes_keyword(monkeypatch) -> None:
     assert new_body == edited_body
 
 
-def test_link_issue_to_pr_noop_when_body_already_mentions_issue(monkeypatch) -> None:
+def test_link_issue_to_pr_noop_when_body_already_has_closing_keyword(monkeypatch) -> None:
     def fail_if_called(cmd, **kwargs):
-        raise AssertionError("should not edit the PR -- body already mentions the issue")
+        raise AssertionError("should not edit the PR -- body already closes the issue")
 
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fail_if_called)
 
     body = "This closes #42 already."
     assert link_issue_to_pr("gh", 7, body, 42) == body
+
+
+def test_link_issue_to_pr_still_appends_when_body_only_has_a_plain_mention(monkeypatch) -> None:
+    """Regression: a bare `#42` mention elsewhere in the body (e.g. "see #42 for background")
+    isn't a real GitHub closing keyword -- must not be mistaken for one already being present.
+    """
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    body = "See #42 for background, not fixing it here."
+    new_body = link_issue_to_pr("gh", 7, body, 42)
+
+    assert captured_cmd[:3] == ["gh", "pr", "edit"]
+    assert "Fixes #42" in new_body
 
 
 def test_link_issue_to_pr_raises_on_gh_failure(monkeypatch) -> None:

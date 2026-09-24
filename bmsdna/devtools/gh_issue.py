@@ -173,11 +173,15 @@ def _label_exists(gh: str, name: str) -> bool:
     return name.casefold() in names
 
 
-def add_pr_available_label(gh: str, number: int) -> None:
-    """Label issue `number` `pr-available`, creating that label on the repo first if it doesn't
-    already exist -- unlike Azure DevOps tags (freeform), `gh issue edit --add-label` rejects a
-    label name GitHub doesn't already know about (see `gh_pr.create`'s docstring). Only creates
-    the label when it's actually missing, so an existing custom color/description isn't clobbered.
+def ensure_pr_available_label(gh: str) -> None:
+    """Make sure the repo-wide `pr-available` label exists, creating it if not -- unlike Azure
+    DevOps tags (freeform), `gh issue edit --add-label` rejects a label name GitHub doesn't
+    already know about (see `gh_pr.create`'s docstring). Only creates the label when it's
+    actually missing, so an existing custom color/description isn't clobbered.
+
+    Call this once per `pr create` invocation, before any `add_pr_available_label` calls --
+    it's the same repo-wide label being checked/created each time, not a per-issue thing, so a
+    caller linking several issues in one go should only pay for this lookup once.
     """
     if not _label_exists(gh, PR_AVAILABLE_LABEL):
         _run_gh(
@@ -188,6 +192,12 @@ def add_pr_available_label(gh: str, number: int) -> None:
                 "--description", "A PR exists that addresses this issue",
             ],
         )
+
+
+def add_pr_available_label(gh: str, number: int) -> None:
+    """Label issue `number` `pr-available`. Caller must have already called
+    `ensure_pr_available_label` (once, not per-issue) so the label exists on the repo first.
+    """
     _run_gh(gh, ["issue", "edit", str(number), "--add-label", PR_AVAILABLE_LABEL])
 
 

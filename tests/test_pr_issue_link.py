@@ -104,3 +104,55 @@ def test_find_issue_refs_in_body_ado_ignores_github_keywords() -> None:
     # Azure DevOps has no bare-#N keyword syntax of its own -- "Fixes #42" in an ADO PR
     # description isn't something this scan resolves to a work item.
     assert find_issue_refs_in_body("Fixes #42", ADO_REMOTE) == []
+
+
+# -- host-boundary anchoring (regression) ------------------------------------
+
+
+def test_parse_issue_ref_rejects_lookalike_github_domain() -> None:
+    # "notgithub.com" merely *contains* "github.com" -- must not be treated as github.com itself.
+    with pytest.raises(ValueError):
+        parse_issue_ref("https://notgithub.com/owner/repo/issues/42", GH_REMOTE)
+
+
+def test_find_issue_refs_in_body_ignores_lookalike_github_domain() -> None:
+    body = "See https://notgithub.com/owner/repo/issues/42 for context."
+    assert find_issue_refs_in_body(body, GH_REMOTE) == []
+
+
+def test_parse_issue_ref_accepts_real_github_subdomain() -> None:
+    # A genuine github.com subdomain (dot boundary) must still work.
+    assert parse_issue_ref("https://www.github.com/owner/repo/issues/42", GH_REMOTE) == 42
+
+
+def test_parse_issue_ref_rejects_lookalike_ado_domain() -> None:
+    with pytest.raises(ValueError):
+        parse_issue_ref("https://notdev.azure.com/myorg/MyProj/_workitems/edit/9", ADO_REMOTE)
+
+
+def test_find_issue_refs_in_body_ignores_lookalike_ado_domain() -> None:
+    body = "https://notdev.azure.com/myorg/MyProj/_workitems/edit/9"
+    assert find_issue_refs_in_body(body, ADO_REMOTE) == []
+
+
+# -- github_body_already_closes ----------------------------------------------
+
+
+def test_github_body_already_closes_true_for_closing_keyword() -> None:
+    from bmsdna.devtools.pr_issue_link import github_body_already_closes
+
+    assert github_body_already_closes("This fixes #42.", 42) is True
+
+
+def test_github_body_already_closes_false_for_plain_mention() -> None:
+    from bmsdna.devtools.pr_issue_link import github_body_already_closes
+
+    # A bare mention (no closing keyword) doesn't count -- GitHub itself doesn't treat it as a
+    # real "closes" link, so `link_issue_to_pr` must not be fooled into thinking one exists.
+    assert github_body_already_closes("See #42 for background, not fixing it here.", 42) is False
+
+
+def test_github_body_already_closes_false_for_a_different_issue_number() -> None:
+    from bmsdna.devtools.pr_issue_link import github_body_already_closes
+
+    assert github_body_already_closes("Fixes #7", 42) is False

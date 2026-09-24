@@ -9,6 +9,7 @@ from bmsdna.devtools.gh_issue import (
     build_search_query,
     comment,
     create,
+    ensure_pr_available_label,
     parse_comment_id,
     parse_issue_number,
     resolve_board,
@@ -360,10 +361,10 @@ def test_comment_appends_agent_session_note_when_detected(monkeypatch) -> None:
     assert body == "Fixed\n\nClaude Session: https://claude.ai/code/session_abc123"
 
 
-# -- add_pr_available_label --------------------------------------------------
+# -- ensure_pr_available_label / add_pr_available_label ----------------------
 
 
-def test_add_pr_available_label_creates_label_when_missing(monkeypatch) -> None:
+def test_ensure_pr_available_label_creates_label_when_missing(monkeypatch) -> None:
     captured_cmds: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):
@@ -374,16 +375,13 @@ def test_add_pr_available_label_creates_label_when_missing(monkeypatch) -> None:
 
     monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
 
-    add_pr_available_label("gh", 42)
+    ensure_pr_available_label("gh")
 
     create_cmd = next(cmd for cmd in captured_cmds if cmd[1:3] == ["label", "create"])
     assert create_cmd[3] == "pr-available"
-    edit_cmd = next(cmd for cmd in captured_cmds if cmd[1:3] == ["issue", "edit"])
-    assert edit_cmd[3] == "42"
-    assert edit_cmd[edit_cmd.index("--add-label") + 1] == "pr-available"
 
 
-def test_add_pr_available_label_skips_create_when_label_already_exists(monkeypatch) -> None:
+def test_ensure_pr_available_label_skips_create_when_label_already_exists(monkeypatch) -> None:
     captured_cmds: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):
@@ -394,7 +392,26 @@ def test_add_pr_available_label_skips_create_when_label_already_exists(monkeypat
 
     monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
 
-    add_pr_available_label("gh", 42)
+    ensure_pr_available_label("gh")
 
     assert not any(cmd[1:3] == ["label", "create"] for cmd in captured_cmds)
-    assert any(cmd[1:3] == ["issue", "edit"] for cmd in captured_cmds)
+
+
+def test_add_pr_available_label_adds_the_label_to_the_issue(monkeypatch) -> None:
+    captured_cmds: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmds.append(cmd)
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
+
+    add_pr_available_label("gh", 42)
+
+    # Doesn't itself check/create the label -- that's `ensure_pr_available_label`'s job, called
+    # once per `pr create` invocation rather than once per issue (see cli.py).
+    assert not any(cmd[1:3] == ["label", "list"] for cmd in captured_cmds)
+    assert not any(cmd[1:3] == ["label", "create"] for cmd in captured_cmds)
+    edit_cmd = next(cmd for cmd in captured_cmds if cmd[1:3] == ["issue", "edit"])
+    assert edit_cmd[3] == "42"
+    assert edit_cmd[edit_cmd.index("--add-label") + 1] == "pr-available"
