@@ -22,7 +22,7 @@ IS_SANDBOX_ENV_VAR = "IS_BMS_AI_SANDBOX"
 BUILTIN_COMMIT_TYPES = {"feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"}
 
 # `type(scope)!: description` -- scope and the breaking-change `!` are both optional.
-_CONVENTIONAL_COMMIT_RE = re.compile(r"^(?P<type>[a-z]+)(?:\([^)]+\))?!?: .+")
+_CONVENTIONAL_COMMIT_RE = re.compile(r"^(?P<type>[a-z]+)(?:\((?P<scope>[^)]+)\))?!?: .+")
 
 
 def allowed_commit_types(start=None) -> set[str]:
@@ -40,12 +40,33 @@ def allowed_commit_types(start=None) -> set[str]:
     return BUILTIN_COMMIT_TYPES | {t for t in extra if isinstance(t, str)}
 
 
+def allowed_commit_scopes(start=None) -> set[str]:
+    """`[tool.bdt.commit] scopes = [...]` -- opt-in, like `[tool.bdt.pr.required_labels]`:
+    unconfigured (the default, empty set) means any scope, or no scope at all, is
+    accepted. Configuring it only restricts which scope a message *may* name; a
+    message with no scope at all is still accepted either way -- this doesn't make
+    a scope mandatory.
+    """
+    raw = load_bdt_table("commit", start).get("scopes", [])
+    if not isinstance(raw, list):
+        return set()
+    return {s for s in raw if isinstance(s, str)}
+
+
 def conventional_commit_type(message: str) -> str | None:
     """The `type` prefix of `message` (e.g. "feat" from "feat(x): add widget"), or
     None if `message` doesn't follow the `type(scope): description` shape at all.
     """
     match = _CONVENTIONAL_COMMIT_RE.match(message)
     return match.group("type") if match else None
+
+
+def conventional_commit_scope(message: str) -> str | None:
+    """The `scope` of `message` (e.g. "x" from "feat(x): add widget"), or None if
+    `message` doesn't follow the `type(scope): description` shape, or has no scope.
+    """
+    match = _CONVENTIONAL_COMMIT_RE.match(message)
+    return match.group("scope") if match else None
 
 
 def _run(cmd: list[str], cwd: str | None = None) -> subprocess.CompletedProcess:
@@ -250,6 +271,26 @@ def commit_and_push(
             warnings=warnings,
         )
 
+    commit_scope = conventional_commit_scope(message)
+    allowed_scopes = allowed_commit_scopes()
+    # Opt-in: unconfigured `allowed_scopes` means no restriction, and a message with
+    # no scope at all is always fine -- only a *named* scope outside the configured
+    # list is rejected. Matched case-insensitively, same as `pr_labels.missing_label_groups`.
+    scope_ok = (
+        not require_message_quality
+        or not allowed_scopes
+        or commit_scope is None
+        or commit_scope.lower() in {s.lower() for s in allowed_scopes}
+    )
+    if not check(scope_ok, "commit scope is in the allowed list"):
+        return CommitResult(
+            False, False, False, message, files,
+            error=f"Commit scope {commit_scope!r} isn't in the allowed list configured under "
+            f"[tool.bdt.commit] scopes (allowed: {', '.join(sorted(allowed_scopes))}) — got: {message!r}",
+            hint="Use one of the configured scopes, or omit the scope entirely.",
+            warnings=warnings,
+        )
+
     current_branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
     branch_ok = not require_feature_branch or current_branch not in ("main", "master")
     if not check(branch_ok, f"not on main/master (branch: {current_branch})"):
@@ -303,7 +344,7 @@ def commit_and_push(
     committed = ok
     print("  ✓ committed", flush=True)
 
-    extra = {"commit_type": commit_type}
+    extra = {"commit_type": commit_type, "commit_scope": commit_scope}
 
     if _in_sandbox():
         return CommitResult(True, committed, False, message, files, commit_sha=_sha(), warnings=warnings, extra=extra)

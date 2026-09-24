@@ -3,7 +3,13 @@ import subprocess
 
 import pytest
 
-from bmsdna.devtools.commit import allowed_commit_types, commit_and_push, conventional_commit_type
+from bmsdna.devtools.commit import (
+    allowed_commit_scopes,
+    allowed_commit_types,
+    commit_and_push,
+    conventional_commit_scope,
+    conventional_commit_type,
+)
 
 
 def init_repo(path):
@@ -265,3 +271,103 @@ def test_commit_and_push_records_feat_commit_type_in_extra(tmp_path, monkeypatch
 
     assert result.committed is True
     assert result.extra.get("commit_type") == "feat"
+
+
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        ("feat(x): add widget", "x"),
+        ("fix: correct off-by-one", None),
+        ("feat(x)!: breaking change with scope", "x"),
+        ("not a conventional message", None),
+    ],
+)
+def test_conventional_commit_scope(message, expected) -> None:
+    assert conventional_commit_scope(message) == expected
+
+
+def test_allowed_commit_scopes_empty_with_no_pyproject(tmp_path) -> None:
+    assert allowed_commit_scopes(tmp_path) == set()
+
+
+def test_allowed_commit_scopes_reads_pyproject_config(tmp_path) -> None:
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.commit]\nscopes = ["api", "ui"]\n')
+    assert allowed_commit_scopes(tmp_path) == {"api", "ui"}
+
+
+def test_commit_and_push_allows_any_scope_when_unconfigured(tmp_path, monkeypatch):
+    init_repo(tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+    monkeypatch.chdir(tmp_path)
+
+    result = commit_and_push(
+        "feat(whatever): add a.txt",
+        ["a.txt"],
+        require_feature_branch=False,
+    )
+
+    assert result.committed is True
+
+
+def test_commit_and_push_allows_no_scope_even_when_scopes_configured(tmp_path, monkeypatch):
+    init_repo(tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.commit]\nscopes = ["api"]\n')
+    monkeypatch.chdir(tmp_path)
+
+    result = commit_and_push(
+        "feat: add a.txt",
+        ["a.txt", "pyproject.toml"],
+        require_feature_branch=False,
+    )
+
+    assert result.committed is True
+
+
+def test_commit_and_push_accepts_configured_scope(tmp_path, monkeypatch):
+    init_repo(tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.commit]\nscopes = ["api"]\n')
+    monkeypatch.chdir(tmp_path)
+
+    result = commit_and_push(
+        "feat(api): add a.txt",
+        ["a.txt", "pyproject.toml"],
+        require_feature_branch=False,
+    )
+
+    assert result.committed is True
+    assert result.extra.get("commit_scope") == "api"
+
+
+def test_commit_and_push_rejects_scope_outside_configured_list(tmp_path, monkeypatch):
+    init_repo(tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.commit]\nscopes = ["api"]\n')
+    monkeypatch.chdir(tmp_path)
+
+    result = commit_and_push(
+        "feat(bogus): add a.txt",
+        ["a.txt", "pyproject.toml"],
+        require_feature_branch=False,
+    )
+
+    assert result.committed is False
+    assert result.success is False
+    assert "scope" in (result.error or "").lower()
+
+
+def test_commit_and_push_skips_scope_check_with_skip_message_check(tmp_path, monkeypatch):
+    init_repo(tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.commit]\nscopes = ["api"]\n')
+    monkeypatch.chdir(tmp_path)
+
+    result = commit_and_push(
+        "feat(bogus): add a.txt",
+        ["a.txt", "pyproject.toml"],
+        require_message_quality=False,
+        require_feature_branch=False,
+    )
+
+    assert result.committed is True

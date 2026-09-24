@@ -360,6 +360,19 @@ additional types on top of those under `[tool.bdt.commit]` in
 types = ["sql", "infra"]
 ```
 
+Scope (the `(x)` in `feat(x): ...`) is unrestricted by default — any scope,
+or none at all, is accepted. A repo can opt into restricting it to a fixed
+list under the same table:
+
+```toml
+[tool.bdt.commit]
+scopes = ["api", "ui", "db"]
+```
+
+Once configured, a message that *names* a scope must use one from the
+list — but a message with no scope at all is still always accepted; this
+doesn't make a scope mandatory.
+
 If the pushed commit's type is `feat` and the current branch's PR is
 already published (not a draft), it's converted back to draft — a feature
 needs a fresh review pass before CI/merge, not just whatever review
@@ -378,7 +391,7 @@ sandbox mode too.
 {
   "success": true, "committed": true, "pushed": true,
   "message": "...", "files": ["..."], "commit_sha": "abc1234",
-  "error": null, "hint": null, "commit_type": "feat"
+  "error": null, "hint": null, "commit_type": "feat", "commit_scope": "x"
 }
 ```
 
