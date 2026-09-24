@@ -225,6 +225,129 @@ def test_pr_create_attaches_files_for_github(monkeypatch, tmp_path) -> None:
     assert captured["file_paths"] == [str(report)]
 
 
+def test_pr_create_auto_applies_scope_label_for_github(monkeypatch) -> None:
+    remote = GitHubRemote("owner", "repo")
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
+    monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feature-x")
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    monkeypatch.setattr("bmsdna.devtools.cli.pr_labels.scope_labels", lambda: {"customers": "e2e-customers"})
+    monkeypatch.setattr("bmsdna.devtools.cli.head_commit_subject", lambda: "feat(customers): add widget")
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.has_build_policy", lambda gh, target: False)
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/pull/7\n", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    result = runner.invoke(app, ["pr", "create", "--target", "main"])
+
+    assert result.exit_code == 0, result.output
+    captured_cmd = next(cmd for cmd in calls if "create" in cmd)
+    assert captured_cmd.count("--label") == 1
+    assert captured_cmd[captured_cmd.index("--label") + 1] == "e2e-customers"
+    assert "Auto-applying label 'e2e-customers' for scope 'customers'" in result.output
+
+
+def test_pr_create_auto_applies_scope_label_for_ado(monkeypatch) -> None:
+    remote = AdoRemote("bmeurope", "BMS - CCMT2", "BMS - CCMT2")
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
+    monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feature-x")
+    monkeypatch.setattr("bmsdna.devtools.cli.require_az", lambda: "az")
+    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.cli.pr_labels.scope_labels", lambda: {"customers": "e2e-customers"})
+    monkeypatch.setattr("bmsdna.devtools.cli.head_commit_subject", lambda: "feat(customers): add widget")
+    monkeypatch.setattr("bmsdna.devtools.pr_build.has_build_policy", lambda session, remote, target: False)
+
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout=json.dumps({"pullRequestId": 456, "title": "feat(customers): add widget"}), stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.cli.subprocess.run", fake_run)
+
+    result = runner.invoke(app, ["pr", "create", "--target", "test"])
+
+    assert result.exit_code == 0, result.output
+    assert "--labels" in captured_cmd
+    labels_idx = captured_cmd.index("--labels")
+    assert captured_cmd[labels_idx + 1 : labels_idx + 2] == ["e2e-customers"]
+
+
+def test_pr_create_scope_label_dedups_against_explicit_label(monkeypatch) -> None:
+    remote = GitHubRemote("owner", "repo")
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
+    monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feature-x")
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    monkeypatch.setattr("bmsdna.devtools.cli.pr_labels.scope_labels", lambda: {"customers": "e2e-customers"})
+    monkeypatch.setattr("bmsdna.devtools.cli.head_commit_subject", lambda: "feat(customers): add widget")
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.has_build_policy", lambda gh, target: False)
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/pull/7\n", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    result = runner.invoke(app, ["pr", "create", "--target", "main", "--label", "e2e-customers"])
+
+    assert result.exit_code == 0, result.output
+    captured_cmd = next(cmd for cmd in calls if "create" in cmd)
+    assert captured_cmd.count("--label") == 1  # not duplicated
+
+
+def test_pr_create_no_scope_label_when_commit_has_no_scope(monkeypatch) -> None:
+    remote = GitHubRemote("owner", "repo")
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
+    monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feature-x")
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    monkeypatch.setattr("bmsdna.devtools.cli.pr_labels.scope_labels", lambda: {"customers": "e2e-customers"})
+    monkeypatch.setattr("bmsdna.devtools.cli.head_commit_subject", lambda: "fix: no scope here")
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.has_build_policy", lambda gh, target: False)
+
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/pull/7\n", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    result = runner.invoke(app, ["pr", "create", "--target", "main"])
+
+    assert result.exit_code == 0, result.output
+    assert "--label" not in captured_cmd
+
+
+def test_pr_create_skips_commit_lookup_when_scope_labels_unconfigured(monkeypatch) -> None:
+    """Opt-in: no [tool.bdt.pr.scope_labels] table means no git log call at all,
+    not just no label -- so repos that don't configure it see zero behavior change."""
+    remote = GitHubRemote("owner", "repo")
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
+    monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feature-x")
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    monkeypatch.setattr("bmsdna.devtools.cli.pr_labels.scope_labels", lambda: {})
+
+    def fail_if_called():
+        raise AssertionError("head_commit_subject should not be called when scope_labels is empty")
+
+    monkeypatch.setattr("bmsdna.devtools.cli.head_commit_subject", fail_if_called)
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.has_build_policy", lambda gh, target: False)
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.subprocess.run",
+        lambda cmd, **kwargs: MagicMock(returncode=0, stdout="https://github.com/owner/repo/pull/7\n", stderr=""),
+    )
+
+    result = runner.invoke(app, ["pr", "create", "--target", "main"])
+
+    assert result.exit_code == 0, result.output
+
+
 def test_pr_create_proceeds_when_required_label_group_satisfied(monkeypatch) -> None:
     remote = GitHubRemote("owner", "repo")
     monkeypatch.setattr(

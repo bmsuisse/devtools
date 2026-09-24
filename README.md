@@ -160,6 +160,23 @@ With the above, `bdt pr create --label feature --label breaking` passes,
 but `bdt pr create --label feature` fails with a message naming the unmet
 group (`risk`) and its allowed choices.
 
+`[tool.bdt.pr.scope_labels]` in pyproject.toml can auto-apply a label based on
+the "scope" of the HEAD commit's conventional-commit subject (the
+`type(scope): description` format `bdt commit` itself expects, e.g.
+`feat(customers): ...`):
+
+```toml
+[tool.bdt.pr.scope_labels]
+customers = "e2e-customers"
+billing = "e2e-billing"
+```
+
+With the above, creating a PR whose HEAD commit is `feat(customers): add
+widget` automatically adds the `e2e-customers` label (merged with, not
+replacing, any explicit `--label`). No match, no `[tool.bdt.pr.scope_labels]`
+table, or a commit subject without a `(scope)` all mean no label gets added —
+opt-in, so repos that don't configure it see no change in behavior.
+
 If `--target` has a build policy configured (an Azure DevOps Build policy,
 or a GitHub branch protection rule requiring status checks), a successful
 create prints a reminder to run `bdt pr status` afterward to check whether

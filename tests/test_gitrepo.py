@@ -1,3 +1,5 @@
+import subprocess
+
 import pytest
 
 from bmsdna.devtools.gitrepo import (
@@ -6,6 +8,7 @@ from bmsdna.devtools.gitrepo import (
     NotAzureDevOpsRemoteError,
     NotGitHubRemoteError,
     UnknownRemoteError,
+    head_commit_subject,
     parse_ado_remote,
     parse_github_remote,
     parse_remote,
@@ -62,3 +65,19 @@ def test_parse_remote_dispatches_to_ado() -> None:
 def test_parse_remote_rejects_unknown_host() -> None:
     with pytest.raises(UnknownRemoteError):
         parse_remote("git@gitlab.com:some/repo.git")
+
+
+def test_head_commit_subject_returns_latest_commit_subject(tmp_path) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True, check=True)
+    (tmp_path / "a.txt").write_text("x")
+    subprocess.run(["git", "add", "a.txt"], cwd=tmp_path, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "feat(customers): add widget support"],
+        cwd=tmp_path,
+        capture_output=True,
+        check=True,
+    )
+
+    assert head_commit_subject(cwd=str(tmp_path)) == "feat(customers): add widget support"

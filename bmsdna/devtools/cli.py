@@ -17,10 +17,10 @@ from . import env_config
 from . import find_repo as find_repo_mod
 from . import gh_issue, gh_pr
 from . import logs as logs_mod
-from . import pr_build, pr_issue_link, pr_labels, worktree as worktree_mod
+from . import pr_build, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
 from .cli_tools import detect_agent_session, require_az, require_gh
-from .gitrepo import AdoRemote, GitHubRemote, current_branch, current_remote
+from .gitrepo import AdoRemote, GitHubRemote, current_branch, current_remote, head_commit_subject
 
 # Non-ASCII output (checkmarks, en-dashes in ADO project names, etc.) needs a
 # UTF-8 stream — the default Windows console codepage isn't UTF-8, and would
@@ -181,7 +181,8 @@ def pr_create(
         help="Label to apply to the PR (repeatable). On GitHub the label must already exist on the repo "
         "(`gh label create`); Azure DevOps PR labels are freeform and created on the fly. "
         r"[tool.bdt.pr.required_labels] in pyproject.toml can require at least one label from each "
-        "named group before the PR is created.",
+        "named group before the PR is created. [tool.bdt.pr.scope_labels] can auto-add a label based "
+        "on the HEAD commit's conventional-commit scope (e.g. `feat(customers): ...` -> a configured label).",
     ),
     screenshot: list[str] = typer.Option(
         [], "--screenshot", help="Path to an image to attach to the PR description (repeatable)"
@@ -212,6 +213,14 @@ def pr_create(
     for path in file:
         if not Path(path).is_file():
             raise typer.BadParameter(f"File not found: {path}", param_hint="--file")
+
+    scope_label_map = pr_labels.scope_labels()
+    if scope_label_map:
+        scope = commit_mod.conventional_commit_scope(head_commit_subject())
+        auto_label = pr_labels.label_for_scope(scope_label_map, scope)
+        if auto_label and auto_label.lower() not in {existing.lower() for existing in label}:
+            print(f"Auto-applying label '{auto_label}' for scope '{scope}' ([tool.bdt.pr.scope_labels])")
+            label = [*label, auto_label]
 
     missing_groups = pr_labels.missing_label_groups(pr_labels.required_label_groups(), label)
     if missing_groups:
@@ -715,6 +724,34 @@ def worktree(
     """Create a git worktree under .worktrees/<name>, mirroring the `just worktree` recipe."""
     install_cmd = install.split() if install else None
     worktree_mod.create(name, base=base, env_file=env_file, submodules=submodules, install_cmd=install_cmd)
+
+
+@app.command()
+def pull(
+    remote: str = typer.Option(
+        "origin",
+        "--remote",
+        help="Remote to pull main/master and the default branch from (the current branch's own tracking "
+        "branch step always follows its real configured upstream, regardless of this)",
+    ),
+    no_default: bool = typer.Option(
+        False,
+        "--no-default",
+        help="Don't also pull the repo's DEFAULT branch -- skip this when the current branch was already "
+        "branched from main/master, since pulling it again would be redundant",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print what would be pulled, without doing it"),
+    pull_args: list[str] = typer.Argument(
+        None,
+        help="Extra flags passed through to every `git pull` step, e.g. `-- --rebase --ff-only` (put them after `--`)",
+    ),
+) -> None:
+    """Bring the current branch up to date from three sources: its own remote tracking branch, the
+    remote's main/master branch, and the repo's DEFAULT branch (unless --no-default) -- each a
+    separate `git pull`, stopping with a clear error (and the exact command to re-run) if any step
+    hits a merge conflict.
+    """
+    pull_mod.run(remote=remote, no_default=no_default, dry_run=dry_run, pull_args=pull_args or [])
 
 
 @app.command("find-repo")
