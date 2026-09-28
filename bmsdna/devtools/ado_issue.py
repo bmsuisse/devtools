@@ -423,11 +423,12 @@ def build_search_wiql(
     area_path: str | None = None,
     state: str = "open",
     org_wide: bool = False,
+    tags: list[str] | None = None,
 ) -> str:
     """WIQL for work items whose Title or Description contains every given keyword (ANDed),
-    optionally restricted to items changed on/after `since` (an ISO 'YYYY-MM-DD' date) and/or
-    scoped to a board's Area Path subtree, most recently changed first. `keywords` may be empty,
-    to list work items without a text filter.
+    optionally restricted to items changed on/after `since` (an ISO 'YYYY-MM-DD' date), carrying
+    every given tag (ANDed), and/or scoped to a board's Area Path subtree, most recently changed
+    first. `keywords` may be empty, to list work items without a text filter.
 
     `since` is rendered as a UTC ISO 8601 literal (`'YYYY-MM-DDT00:00:00Z'`) — the one
     DateTime format WIQL accepts regardless of the querying account's locale/date-pattern
@@ -442,11 +443,17 @@ def build_search_wiql(
     `org_wide` drops the `[System.TeamProject] = @project` clause -- `@project` is only valid
     when the query runs against a project-scoped WIQL endpoint (see `run_wiql`'s `org_wide`),
     and dropping it is what actually lets the query match work items outside the current project.
+
+    `tags` is a separate filter from `keywords` -- `Contains Words` against Title/Description
+    doesn't match `System.Tags` at all, so a tag search (e.g. every work item tagged
+    'ready4implementation' across the whole org) needs its own `[System.Tags] Contains` clause.
     """
     clauses = [
         f"([System.Title] Contains Words '{_escape_wiql_string(k)}' OR [System.Description] Contains Words '{_escape_wiql_string(k)}')"
         for k in keywords
     ]
+    for tag in tags or []:
+        clauses.append(f"[System.Tags] Contains '{_escape_wiql_string(tag)}'")
     if since:
         clauses.append(f"[System.ChangedDate] >= '{since}T00:00:00Z'")
     if area_path:
@@ -509,11 +516,13 @@ def search(
     top: int = 10,
     state: str = "open",
     org_wide: bool = False,
+    tags: list[str] | None = None,
 ) -> list[dict]:
     """Search (or, with no keywords, just list) work items by keywords (ANDed, matched against
     Title or Description) and state, most recently changed first. `board` is an Azure Boards team
     name (like `create`'s `--board`) — resolved to its Area Path so results are scoped to that
-    team's subtree instead of the whole project.
+    team's subtree instead of the whole project. `tags` is a separate ANDed filter against
+    `System.Tags` (see `build_search_wiql`) -- a plain keyword doesn't match tags.
 
     `org_wide` searches every project in `remote.org` instead of just `remote.project` --
     mutually exclusive with `board`, since a team's Area Path only means something within a
@@ -522,7 +531,7 @@ def search(
     if org_wide and board:
         sys.exit("--board can't be combined with --org-wide (a board's Area Path is scoped to a single project).")
     area_path = get_team_area_path(session, remote, board) if board else None
-    wiql = build_search_wiql(keywords, since, area_path, state, org_wide=org_wide)
+    wiql = build_search_wiql(keywords, since, area_path, state, org_wide=org_wide, tags=tags)
     ids = run_wiql(session, remote, wiql, top, org_wide=org_wide)
     items = get_work_items(session, remote, ids, org_wide=org_wide)
     for item in items:

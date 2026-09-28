@@ -253,6 +253,22 @@ def test_build_search_wiql_no_area_path_by_default() -> None:
     assert "AreaPath" not in build_search_wiql(["auth"])
 
 
+def test_build_search_wiql_tags_add_contains_clause() -> None:
+    wiql = build_search_wiql([], tags=["ready4implementation"], state="all")
+    assert "[System.Tags] Contains 'ready4implementation'" in wiql
+
+
+def test_build_search_wiql_multiple_tags_are_anded() -> None:
+    wiql = build_search_wiql([], tags=["a", "b"], state="all", org_wide=True)
+    assert "[System.Tags] Contains 'a'" in wiql
+    assert "[System.Tags] Contains 'b'" in wiql
+    assert wiql.count(" AND ") == 1  # just the two tag clauses (org_wide drops the TeamProject one)
+
+
+def test_build_search_wiql_no_tags_clause_by_default() -> None:
+    assert "Tags" not in build_search_wiql(["auth"])
+
+
 def test_build_search_wiql_org_wide_drops_team_project_clause() -> None:
     wiql = build_search_wiql(["auth"], org_wide=True)
     assert "TeamProject" not in wiql
@@ -324,6 +340,16 @@ def test_search_org_wide_prints_project_prefix(capsys) -> None:
     out = capsys.readouterr().out
     assert "[OtherProj] #1 [Active] Some bug" in out
     assert "https://dev.azure.com/myorg/OtherProj/_workitems/edit/1" in out
+
+
+def test_search_tags_flow_into_the_wiql_query() -> None:
+    session = MagicMock()
+    session.post.return_value.json.return_value = {"workItems": []}
+
+    search(session, REMOTE, [], org_wide=True, tags=["ready4implementation"])
+
+    wiql = session.post.call_args.kwargs["json"]["query"]
+    assert "[System.Tags] Contains 'ready4implementation'" in wiql
 
 
 # -- get_work_item_tags / add_tag / add_pr_available_tag --------------------

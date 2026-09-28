@@ -154,6 +154,39 @@ def test_search_org_wide_all_state_omits_state_flag(monkeypatch) -> None:
     assert "--state" not in captured_cmd
 
 
+def test_search_org_wide_passes_labels_as_repeatable_flag(monkeypatch) -> None:
+    import json
+
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout=json.dumps([]), stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
+
+    search("gh", "owner", "repo", [], None, 10, org_wide=True, labels=["bug", "urgent"])
+
+    label_indices = [i for i, arg in enumerate(captured_cmd) if arg == "--label"]
+    assert [captured_cmd[i + 1] for i in label_indices] == ["bug", "urgent"]
+
+
+def test_search_non_org_wide_passes_labels_as_repeatable_flag(monkeypatch) -> None:
+    import json
+
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout=json.dumps([]), stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
+
+    search("gh", "owner", "repo", [], None, 10, labels=["bug"])
+
+    assert captured_cmd[captured_cmd.index("--label") + 1] == "bug"
+
+
 def test_search_org_wide_and_board_together_exits(monkeypatch) -> None:
     with pytest.raises(SystemExit):
         search("gh", "owner", "repo", [], None, 10, board="Roadmap", org_wide=True)
