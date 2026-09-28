@@ -11,6 +11,7 @@ from bmsdna.devtools.pr_build import (
     build_web_url,
     draft_notice,
     find_pending_approvals,
+    get_pr_by_id,
     link_work_item,
     merge_conflict_message,
     pending_approval_records,
@@ -379,6 +380,39 @@ def test_run_exits_cleanly_when_get_pr_request_times_out(monkeypatch) -> None:
         run(remote, pat=None, target_branch="main", wait=False)
 
     assert "timed out" in str(exc_info.value)
+
+
+# -- get_pr_by_id --------------------------------------------------------------
+
+
+def test_get_pr_by_id_queries_the_pr_endpoint_directly_by_id() -> None:
+    """Unlike `get_pr` (which searches by source/target branch), `--pr-id` needs the PR
+    resolved by its own id -- no branch involved at all, so it works even when the PR's
+    branch isn't checked out locally.
+    """
+    remote = AdoRemote("myorg", "MyProj", "myrepo")
+    session = MagicMock()
+    pr = {"pullRequestId": 456, "title": "feat: widgets", "sourceRefName": "refs/heads/feature-x"}
+    session.get.return_value = MagicMock(status_code=200, **{"json.return_value": pr})
+
+    result = get_pr_by_id(session, remote, 456)
+
+    assert result == pr
+    url = session.get.call_args.args[0]
+    assert url == "https://dev.azure.com/myorg/MyProj/_apis/git/repositories/myrepo/pullrequests/456"
+    session.get.return_value.raise_for_status.assert_called_once()
+
+
+def test_get_pr_by_id_exits_on_merge_conflict() -> None:
+    remote = AdoRemote("myorg", "MyProj", "myrepo")
+    session = MagicMock()
+    pr = {"pullRequestId": 456, "title": "feat: widgets", "mergeStatus": "conflicts"}
+    session.get.return_value = MagicMock(status_code=200, **{"json.return_value": pr})
+
+    with pytest.raises(SystemExit) as exc_info:
+        get_pr_by_id(session, remote, 456)
+
+    assert "merge conflicts" in str(exc_info.value)
 
 
 # -- link_work_item -----------------------------------------------------------

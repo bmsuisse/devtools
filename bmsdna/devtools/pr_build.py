@@ -178,6 +178,24 @@ def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, tar
     sys.exit(1)
 
 
+def get_pr_by_id(session: requests.Session, remote: AdoRemote, pr_id: int) -> dict:
+    """Fetch a PR directly by its ID -- for `--pr-id` overrides, where the caller wants to act
+    on a specific PR without needing its source branch checked out locally (unlike `get_pr`,
+    which finds "the" PR by searching for a source/target branch pair).
+    """
+    r = session.get(
+        f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}/pullrequests/{pr_id}",
+        params={"api-version": "7.1"},
+        timeout=HTTP_TIMEOUT_SECS,
+    )
+    r.raise_for_status()
+    pr = r.json()
+    conflict = merge_conflict_message(pr)
+    if conflict:
+        sys.exit(conflict)
+    return pr
+
+
 def upload_attachment(session: requests.Session, remote: AdoRemote, pr_id: int, attachment_name: str, file_path: str) -> str:
     """Upload `file_path` as a pull request attachment named `attachment_name`; returns its download URL.
 
@@ -524,16 +542,33 @@ def retry_failed_build(session: requests.Session, remote: AdoRemote, build_id: i
     r.raise_for_status()
 
 
-def retry(remote: AdoRemote, pat: str | None, target_branch: str, source_branch: str | None = None) -> None:
-    """Retry the failed stage(s)/job(s) of the most recent build(s) for the PR opened
-    from the current branch -- one retry call per pipeline that failed, without queuing
-    any brand new builds.
+def _resolve_pr_and_branch(
+    session: requests.Session, remote: AdoRemote, target_branch: str, source_branch: str | None, pr_id: int | None
+) -> tuple[dict, str]:
+    """(pr, source_branch) -- shared by `retry()` and `run()`: resolves the PR by `pr_id`
+    directly if given, deriving `source_branch` from the PR's own `sourceRefName` (since
+    there may be no matching branch checked out locally at all when acting by id), else by
+    searching `source_branch`/`target_branch` as before, falling back to `current_branch()`
+    if `source_branch` wasn't given either.
     """
+    if pr_id is not None:
+        pr = get_pr_by_id(session, remote, pr_id)
+        return pr, pr["sourceRefName"].removeprefix("refs/heads/")
     source_branch = source_branch or current_branch()
+    return get_pr(session, remote, source_branch, target_branch), source_branch
+
+
+def retry(
+    remote: AdoRemote, pat: str | None, target_branch: str, source_branch: str | None = None, pr_id: int | None = None
+) -> None:
+    """Retry the failed stage(s)/job(s) of the most recent build(s) for the PR opened
+    from the current branch, or for `pr_id` directly if given -- one retry call per
+    pipeline that failed, without queuing any brand new builds.
+    """
     session = requests.Session()
     session.headers.update(auth_header(pat))
 
-    pr = get_pr(session, remote, source_branch, target_branch)
+    pr, source_branch = _resolve_pr_and_branch(session, remote, target_branch, source_branch, pr_id)
     builds = get_builds_for_pr(session, remote, source_branch, pr["pullRequestId"])
     if not builds:
         sys.exit(f"No builds found for PR #{pr['pullRequestId']} -- nothing to retry.")
@@ -630,10 +665,25 @@ def exit_if_blocked_on_approval(
     sys.exit(EXIT_NEEDS_APPROVAL)
 
 
-def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, source_branch: str | None = None) -> None:
-    source_branch = source_branch or current_branch()
+def run(
+    remote: AdoRemote,
+    pat: str | None,
+    target_branch: str,
+    wait: bool,
+    source_branch: str | None = None,
+    pr_id: int | None = None,
+) -> None:
     session = requests.Session()
     session.headers.update(auth_header(pat))
+
+    def fetch_pr() -> dict:
+        """The PR to watch, via `_resolve_pr_and_branch` -- also keeps `source_branch` in
+        sync with the PR's actual source ref when resolving by id, since `get_builds_for_pr`
+        below needs it and there may be no matching branch checked out locally at all.
+        """
+        nonlocal source_branch
+        pr, source_branch = _resolve_pr_and_branch(session, remote, target_branch, source_branch, pr_id)
+        return pr
 
     # When waiting, a pipeline's "latest" build may already be a *completed* run from before
     # this invocation (CI hasn't registered a new build for the current push yet). Only accept
@@ -646,7 +696,7 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
     # this function exists to avoid, for any --wait invoked after the build had already started.
     baseline_completed_ids: dict[int, int] = {}
     if wait:
-        pr = _poll_or_exit(get_pr, session, remote, source_branch, target_branch)
+        pr = _poll_or_exit(fetch_pr)
         for b in _poll_or_exit(get_builds_for_pr, session, remote, source_branch, pr["pullRequestId"]):
             if b.get("status") != "completed":
                 continue
@@ -656,19 +706,19 @@ def run(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool, sour
     draft_notice_shown = False
     heartbeat = PollHeartbeat()
     while True:
-        pr = _poll_or_exit(get_pr, session, remote, source_branch, target_branch)
+        pr = _poll_or_exit(fetch_pr)
         if not draft_notice_shown:
             draft_msg = draft_notice(pr)
             if draft_msg:
                 print(draft_msg)
             draft_notice_shown = True
-        pr_id = pr["pullRequestId"]
+        pr_number = pr["pullRequestId"]
         pr_title = pr.get("title", "?")
         pr_status = pr.get("status", "?")
 
-        msg = f"\rPR #{pr_id}: {pr_title} ({pr_status})"
+        msg = f"\rPR #{pr_number}: {pr_title} ({pr_status})"
 
-        builds = _poll_or_exit(get_builds_for_pr, session, remote, source_branch, pr_id)
+        builds = _poll_or_exit(get_builds_for_pr, session, remote, source_branch, pr_number)
         if builds:
             pipeline_builds = latest_per_pipeline(builds)
             if wait:

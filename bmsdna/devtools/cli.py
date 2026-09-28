@@ -98,11 +98,36 @@ _PG_USER_OPTION = typer.Option(
 )
 
 
-def _resolve_ado_pr(pat: str | None, remote: AdoRemote, source_branch: str, target: str) -> tuple[requests.Session, dict]:
+def _resolve_ado_pr(pat: str | None, remote: AdoRemote, target: str, pr_id: int | None = None) -> tuple[requests.Session, dict]:
+    """Resolve the PR to act on -- by `pr_id` directly if given (no branch involved at all,
+    so this works even without that PR's branch checked out locally), else by searching for
+    the current branch's PR into `target`, as before.
+    """
     session = requests.Session()
     session.headers.update(auth_header(pat))
-    pr = pr_build.get_pr(session, remote, source_branch, target)
+    if pr_id is not None:
+        pr = pr_build.get_pr_by_id(session, remote, pr_id)
+    else:
+        pr = pr_build.get_pr(session, remote, current_branch(), target)
     return session, pr
+
+
+def _gh_branch_for(gh: str, pr_id: int | None, *, needed: bool) -> str:
+    """Branch to namespace uploaded screenshots/files under (see `gh_pr.push_assets`) --
+    the checked-out branch normally, or (when acting on a PR by `--pr-id`, which may not
+    have its branch checked out locally at all) that PR's actual head branch, via `gh`.
+
+    `needed=False` skips that extra `gh pr view` round-trip entirely when the caller isn't
+    attaching anything (a plain message/title/description update needs no branch at all).
+    """
+    if pr_id is None:
+        return current_branch()
+    if not needed:
+        return ""
+    return gh_pr.get_pr(gh, pr_id).get("headRefName") or str(pr_id)
+
+
+_PR_ID_HELP = "Act on this PR by ID/number directly, instead of resolving it from the current git branch (lets you skip having the PR's branch checked out locally)"
 
 
 def _after_create(step: Callable[[], None], label: str) -> None:
@@ -344,6 +369,7 @@ def pr_create(
 @pr_app.command("publish")
 def pr_publish(
     target: str = typer.Option("main", "--target", help="Target branch of the PR (Azure DevOps only)"),
+    pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -351,13 +377,14 @@ def pr_publish(
         help="Azure DevOps PAT (else falls back to `az` login)",
     ),
 ) -> None:
-    """Mark the draft PR opened from the current branch as ready for review (Azure DevOps or GitHub, auto-detected)."""
+    """Mark the draft PR opened from the current branch (or --pr-id, if given) as ready for
+    review (Azure DevOps or GitHub, auto-detected).
+    """
     remote = current_remote()
-    source_branch = current_branch()
     if isinstance(remote, GitHubRemote):
-        gh_pr.publish(require_gh())
+        gh_pr.publish(require_gh(), pr_id=pr_id)
     else:
-        session, pr = _resolve_ado_pr(pat, remote, source_branch, target)
+        session, pr = _resolve_ado_pr(pat, remote, target, pr_id=pr_id)
         pr_build.publish(session, remote, pr)
 
 
@@ -365,19 +392,23 @@ def pr_publish(
 def pr_status(
     target_branch: str = typer.Option("main", "--target-branch", help="Target branch of the PR (Azure DevOps only — gh has no equivalent filter, it always resolves the PR for the current branch)"),
     wait: bool = typer.Option(False, "--wait", help="Poll until all pipelines/checks are completed; stops early and reports status if one needs manual approval"),
+    pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
 ) -> None:
-    """Show build/check status for the PR opened from the current branch (Azure DevOps or GitHub, auto-detected)."""
+    """Show build/check status for the PR opened from the current branch, or for --pr-id
+    directly (Azure DevOps or GitHub, auto-detected).
+    """
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_pr.run(require_gh(), wait)
+        gh_pr.run(require_gh(), wait, pr_id=pr_id)
         return
-    pr_build.run(remote, pat, target_branch, wait)
+    pr_build.run(remote, pat, target_branch, wait, pr_id=pr_id)
 
 
 @pr_app.command("retry")
 def pr_retry(
     target_branch: str = typer.Option("main", "--target-branch", help="Target branch of the PR (Azure DevOps only)"),
+    pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -386,13 +417,14 @@ def pr_retry(
     ),
 ) -> None:
     """Retry only the failed job(s)/stage(s) of the most recent build/run for the PR opened
-    from the current branch (Azure DevOps or GitHub, auto-detected), instead of a full rerun.
+    from the current branch, or for --pr-id directly (Azure DevOps or GitHub, auto-detected),
+    instead of a full rerun.
     """
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_pr.retry(require_gh())
+        gh_pr.retry(require_gh(), pr_id=pr_id)
         return
-    pr_build.retry(remote, pat, target_branch)
+    pr_build.retry(remote, pat, target_branch, pr_id=pr_id)
 
 
 @pr_app.command("watch-deploy")
@@ -410,6 +442,8 @@ def pr_watch_deploy(
     pipeline that only runs on the target branch once a PR merges into it and usually does the
     actual deployment -- as opposed to `bdt pr status`, which watches builds/checks tied to a PR
     (Azure DevOps or GitHub, auto-detected).
+
+    No --pr-id here: this watches a branch-triggered run, not any particular PR.
     """
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
@@ -431,6 +465,7 @@ def pr_update(
         [], "--file", help="Path to an arbitrary file to append to the PR description as a linked attachment (repeatable)"
     ),
     target: str = typer.Option("main", "--target", help="Target branch of the PR (Azure DevOps only)"),
+    pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -438,7 +473,9 @@ def pr_update(
         help="Azure DevOps PAT (else falls back to `az` login)",
     ),
 ) -> None:
-    """Update the title/description of the PR opened from the current branch (Azure DevOps or GitHub, auto-detected)."""
+    """Update the title/description of the PR opened from the current branch, or --pr-id
+    directly (Azure DevOps or GitHub, auto-detected).
+    """
     for path in screenshot:
         if not Path(path).is_file():
             raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
@@ -449,11 +486,15 @@ def pr_update(
         raise typer.BadParameter("Provide at least one of --title, --description, --screenshot, --file")
 
     remote = current_remote()
-    source_branch = current_branch()
     if isinstance(remote, GitHubRemote):
-        gh_pr.update(require_gh(), remote.owner, remote.repo, source_branch, title, description, screenshot, file)
+        gh = require_gh()
+        # `gh_pr.update()` already re-resolves the branch itself from `--pr-id` (it needs the
+        # PR anyway, to fetch its current title/body) -- passing `_gh_branch_for` here would
+        # just be a second, redundant `gh pr view` round-trip for the same PR.
+        branch = current_branch() if pr_id is None else ""
+        gh_pr.update(gh, remote.owner, remote.repo, branch, title, description, screenshot, file, pr_id=pr_id)
     else:
-        session, pr = _resolve_ado_pr(pat, remote, source_branch, target)
+        session, pr = _resolve_ado_pr(pat, remote, target, pr_id=pr_id)
         pr_build.update(session, remote, pr, title, description, screenshot, file)
 
 
@@ -467,6 +508,7 @@ def pr_comment(
         [], "--file", help="Path to an arbitrary file to link in the comment as an attachment (repeatable)"
     ),
     target: str = typer.Option("main", "--target", help="Target branch of the PR (Azure DevOps only)"),
+    pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -474,7 +516,9 @@ def pr_comment(
         help="Azure DevOps PAT (else falls back to `az` login)",
     ),
 ) -> None:
-    """Post a comment on the PR opened from the current branch (Azure DevOps or GitHub, auto-detected)."""
+    """Post a comment on the PR opened from the current branch, or --pr-id directly
+    (Azure DevOps or GitHub, auto-detected).
+    """
     for path in screenshot:
         if not Path(path).is_file():
             raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
@@ -485,11 +529,12 @@ def pr_comment(
         raise typer.BadParameter("Provide at least one of --message, --screenshot, --file")
 
     remote = current_remote()
-    source_branch = current_branch()
     if isinstance(remote, GitHubRemote):
-        gh_pr.comment_with_screenshots(require_gh(), remote.owner, remote.repo, source_branch, message, screenshot, file)
+        gh = require_gh()
+        branch = _gh_branch_for(gh, pr_id, needed=bool(screenshot or file))
+        gh_pr.comment_with_screenshots(gh, remote.owner, remote.repo, branch, message, screenshot, file, pr_id=pr_id)
     else:
-        session, pr = _resolve_ado_pr(pat, remote, source_branch, target)
+        session, pr = _resolve_ado_pr(pat, remote, target, pr_id=pr_id)
         pr_build.comment_with_screenshots(session, remote, pr["pullRequestId"], message, screenshot, file)
 
 
