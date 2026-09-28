@@ -104,7 +104,7 @@ def test_run_wait_exits_1_not_2_when_a_check_already_failed_and_another_needs_ap
             {"__typename": "CheckRun", "name": "build", "status": "COMPLETED", "conclusion": "FAILURE", "workflowName": "CI"},
         ],
     }
-    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh: pr)
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: pr)
 
     with pytest.raises(SystemExit) as exc_info:
         run("gh", wait=True)
@@ -129,7 +129,7 @@ def test_run_wait_does_not_hang_when_a_stuck_pending_check_also_exists(monkeypat
             {"__typename": "CheckRun", "name": "downstream", "status": "QUEUED", "workflowName": "CI"},
         ],
     }
-    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh: pr)
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: pr)
     monkeypatch.setattr("bmsdna.devtools.gh_pr.time.sleep", lambda s: pytest.fail("must not poll — would hang --wait forever"))
 
     with pytest.raises(SystemExit) as exc_info:
@@ -487,7 +487,7 @@ def test_retry_still_attempts_remaining_runs_after_one_fails(monkeypatch, capsys
     other_run_check = {**FAILED_CHECK_RUN_SAME_RUN, "detailsUrl": "https://github.com/owner/repo/actions/runs/999/job/1"}
     monkeypatch.setattr(
         "bmsdna.devtools.gh_pr.get_pr",
-        lambda gh: {"statusCheckRollup": [FAILED_CHECK_RUN, other_run_check]},
+        lambda gh, pr_id=None: {"statusCheckRollup": [FAILED_CHECK_RUN, other_run_check]},
     )
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
 
