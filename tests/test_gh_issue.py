@@ -136,6 +136,24 @@ def test_search_org_wide_uses_gh_search_issues_with_owner(monkeypatch) -> None:
     assert results == items
 
 
+def test_search_org_wide_all_state_omits_state_flag(monkeypatch) -> None:
+    import json
+
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout=json.dumps([]), stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
+
+    search("gh", "owner", "repo", [], None, 10, state="all", org_wide=True)
+
+    # `gh search issues --state` (unlike `gh issue list --state`) has no 'all' value -- it must
+    # be omitted, not forwarded, or `gh` rejects it outright.
+    assert "--state" not in captured_cmd
+
+
 def test_search_org_wide_and_board_together_exits(monkeypatch) -> None:
     with pytest.raises(SystemExit):
         search("gh", "owner", "repo", [], None, 10, board="Roadmap", org_wide=True)

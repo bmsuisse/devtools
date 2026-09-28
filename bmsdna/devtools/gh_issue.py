@@ -243,12 +243,17 @@ def search(
     query = build_search_query(keywords, since)
 
     if org_wide:
-        # `gh search issues`' `--json state` returns lowercase 'open'/'closed' (the GitHub search
-        # API's own casing), unlike `gh issue list`'s 'OPEN'/'CLOSED' below (GraphQL enum casing)
-        # -- both are printed as-is, so the two search modes' output differs in state casing.
+        # `gh search issues --state` only accepts open/closed (unlike `gh issue list --state`
+        # below, which also takes 'all') -- so 'all' is passed by omitting --state entirely
+        # (`gh search issues`'s own default), rather than forwarding a value it would reject.
+        #
+        # `gh search issues`' `--json state` also returns lowercase 'open'/'closed' (the GitHub
+        # search API's own casing), unlike `gh issue list`'s 'OPEN'/'CLOSED' below (GraphQL enum
+        # casing) -- both are printed as-is, so the two search modes' output differs in casing.
+        state_args = [] if state == "all" else ["--state", state]
         out = _run_gh(
             gh,
-            ["search", "issues", query, "--owner", owner, "--state", state, "--limit", str(limit), "--json", "number,title,url,state,repository"],
+            ["search", "issues", query, "--owner", owner, *state_args, "--limit", str(limit), "--json", "number,title,url,state,repository"],
         )
         items = json.loads(out) if out else []
         for item in items:
