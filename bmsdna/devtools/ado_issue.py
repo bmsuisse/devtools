@@ -580,11 +580,19 @@ def update(
     description: str | None = None,
     board: str | None = None,
     tags: list[str] | None = None,
+    remove_tags: list[str] | None = None,
     state: str | None = None,
 ) -> dict | None:
     """Update a work item's fields. Unlike `create`, `board` is only resolved (and the Area Path only
     touched) when explicitly given — it never falls back to `[tool.bdt.ado].board`, so an unrelated
     field update (e.g. just `--title`) can't silently move the item to a different team's board.
+
+    `remove_tags` removes just those tags, leaving the rest untouched -- unlike `tags` (which
+    replaces the whole `System.Tags` field, mirroring GitHub's `--remove-label` alongside the
+    add/replace `--tag`/`--label`). If `tags` is also given, `remove_tags` is applied on top of it
+    (so a value in both wins as "removed"); otherwise the work item's current tags are fetched
+    first as the base to remove from -- see `add_tag` for why there's no single "remove one tag"
+    Azure DevOps patch op.
 
     If `state` isn't one of this work item's type's valid states (state names, and which ones are
     terminal, are defined per work item type per process template — e.g. a Basic-process Issue has
@@ -613,11 +621,32 @@ def update(
             )
             applied_state = None
 
-    if title is None and description is None and area_path is None and tags is None and applied_state is None:
+    has_tag_change = tags is not None or bool(remove_tags)
+    if title is None and description is None and area_path is None and not has_tag_change and applied_state is None:
         if state is not None:
             print(f"Work item #{work_item_id}: '{state}' isn't a valid state here — noted in a comment.")
             return None
-        sys.exit("Nothing to update — provide at least one of --title, --description, --board, --tag, --state.")
+        sys.exit("Nothing to update — provide at least one of --title, --description, --board, --tag, --remove-tag, --state.")
+
+    if remove_tags:
+        removal_set = {t.casefold() for t in remove_tags}
+        if tags is not None:
+            # An explicit `tags` (full replace) always writes, same as plain --tag on its own --
+            # `remove_tags` here is just a filter on top of the caller-given replacement list.
+            tags = [t for t in tags if t.casefold() not in removal_set]
+        else:
+            current_tags = get_work_item_tags(session, remote, work_item_id)
+            filtered_tags = [t for t in current_tags if t.casefold() not in removal_set]
+            if filtered_tags != current_tags:
+                tags = filtered_tags
+            elif title is None and description is None and area_path is None and applied_state is None:
+                # None of `remove_tags` were actually present, and nothing else was given either --
+                # mirrors `add_tag`'s own idempotency check (same file) so this doesn't needlessly
+                # bump the work item's revision/history with a same-value System.Tags PATCH.
+                print(f"Work item #{work_item_id}: none of the given --remove-tag value(s) were present — nothing to do.")
+                return None
+            # else: leave `tags` as None -- other given fields still get their own ops below,
+            # without forcing a redundant, unchanged System.Tags op alongside them.
 
     if description is not None:
         description = ensure_agent_session_note(description, also_check=title)
