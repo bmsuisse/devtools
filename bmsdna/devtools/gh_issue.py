@@ -215,18 +215,66 @@ def build_search_query(keywords: list[str], since: str | None) -> str:
 
 
 def search(
-    gh: str, owner: str, repo: str, keywords: list[str], since: str | None, limit: int, state: str = "open", board: str | None = None
+    gh: str,
+    owner: str,
+    repo: str,
+    keywords: list[str],
+    since: str | None,
+    limit: int,
+    state: str = "open",
+    board: str | None = None,
+    org_wide: bool = False,
+    labels: list[str] | None = None,
 ) -> list[dict]:
     """Search (or, with no keywords, just list) issues by state, most recently updated first.
 
     `state` is `gh issue list`'s own `open|closed|all` flag, not a search qualifier. `board`
     scopes results to a GitHub Projects (v2) board (by title or number) -- `gh issue list` has no
     board filter of its own, so this over-fetches a wider raw pool first and filters down to
-    `limit` afterward, client-side.
+    `limit` afterward, client-side. `labels` is ANDed (an issue must carry every given label) --
+    both `gh issue list` and `gh search issues` support a native, repeatable `--label` flag, so
+    it doesn't need folding into `query` as a `label:` qualifier.
+
+    `org_wide` searches every repo `owner` has, via `gh search issues --owner` (GitHub's
+    cross-repo search endpoint) instead of `gh issue list` (always single-repo, scoped by cwd's
+    git remote) -- mutually exclusive with `board`, whose membership is only resolved against
+    `repo`, not every repo under `owner`.
     """
+    if org_wide and board:
+        sys.exit("--board can't be combined with --org-wide (board membership is only resolved for the current repo).")
+
     query = build_search_query(keywords, since)
+    label_args = [arg for label in labels or [] for arg in ("--label", label)]
+
+    if org_wide:
+        # `gh search issues --state` only accepts open/closed (unlike `gh issue list --state`
+        # below, which also takes 'all') -- so 'all' is passed by omitting --state entirely
+        # (`gh search issues`'s own default), rather than forwarding a value it would reject.
+        #
+        # `gh search issues`' `--json state` also returns lowercase 'open'/'closed' (the GitHub
+        # search API's own casing), unlike `gh issue list`'s 'OPEN'/'CLOSED' below (GraphQL enum
+        # casing) -- both are printed as-is, so the two search modes' output differs in casing.
+        state_args = [] if state == "all" else ["--state", state]
+        out = _run_gh(
+            gh,
+            [
+                "search", "issues", query, "--owner", owner, *state_args, *label_args,
+                "--limit", str(limit), "--json", "number,title,url,state,repository",
+            ],
+        )
+        items = json.loads(out) if out else []
+        for item in items:
+            print(f"{item['repository']['nameWithOwner']}#{item['number']} [{item['state']}] {item['title']}")
+            print(item["url"])
+        if not items:
+            print("No matching issues found.")
+        return items
+
     fetch_limit = limit * _BOARD_SEARCH_OVERFETCH if board else limit
-    out = _run_gh(gh, ["issue", "list", "--search", query, "--state", state, "--limit", str(fetch_limit), "--json", "number,title,url,state"])
+    out = _run_gh(
+        gh,
+        ["issue", "list", "--search", query, "--state", state, *label_args, "--limit", str(fetch_limit), "--json", "number,title,url,state"],
+    )
     items = json.loads(out) if out else []
 
     if board:

@@ -537,6 +537,14 @@ def issue_search(
         r"(falls back to \[tool.bdt.github].board), same as `issue create`",
     ),
     limit: int = typer.Option(10, "--limit", help="Max results to return"),
+    org_wide: bool = typer.Option(
+        False,
+        "--org-wide",
+        help="Search every project in the Azure DevOps org, or every repo owned by the GitHub owner, "
+        "instead of just the current one. Can't be combined with --board.",
+    ),
+    label: list[str] = typer.Option([], "--label", help="Only issues carrying this label, ANDed (GitHub only, repeatable)"),
+    tag: list[str] = typer.Option([], "--tag", help="Only work items carrying this tag, ANDed (Azure DevOps only, repeatable)"),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -554,12 +562,14 @@ def issue_search(
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
         resolved_board = gh_issue.resolve_board(board)
-        gh_issue.search(require_gh(), remote.owner, remote.repo, keywords or [], since, limit, state, board=resolved_board)
+        gh_issue.search(
+            require_gh(), remote.owner, remote.repo, keywords or [], since, limit, state, board=resolved_board, org_wide=org_wide, labels=label
+        )
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
         resolved_board = ado_issue.resolve_board(board)
-        ado_issue.search(session, remote, keywords or [], since=since, board=resolved_board, top=limit, state=state)
+        ado_issue.search(session, remote, keywords or [], since=since, board=resolved_board, top=limit, state=state, org_wide=org_wide, tags=tag)
 
 
 @issue_app.command("update")

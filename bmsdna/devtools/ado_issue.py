@@ -60,8 +60,12 @@ def resolve_board(board: str | None, start: Path | None = None) -> str | None:
     return board or load_bdt_table("ado", start).get("board")
 
 
+def _org_url(remote: AdoRemote) -> str:
+    return f"https://dev.azure.com/{quote(remote.org, safe='')}"
+
+
 def _base_url(remote: AdoRemote) -> str:
-    return f"https://dev.azure.com/{quote(remote.org, safe='')}/{quote(remote.project, safe='')}"
+    return f"{_org_url(remote)}/{quote(remote.project, safe='')}"
 
 
 def get_team_area_path(session: requests.Session, remote: AdoRemote, team: str) -> str:
@@ -395,8 +399,11 @@ def html_url(work_item: dict) -> str | None:
     return work_item.get("_links", {}).get("html", {}).get("href")
 
 
-def edit_url(remote: AdoRemote, work_item_id: int) -> str:
-    return f"{_base_url(remote)}/_workitems/edit/{work_item_id}"
+def edit_url(remote: AdoRemote, work_item_id: int, project: str | None = None) -> str:
+    """`project` overrides `remote.project` -- needed by an org-wide `search()`, whose results
+    can belong to a different project than the one the command was run in.
+    """
+    return f"{_org_url(remote)}/{quote(project or remote.project, safe='')}/_workitems/edit/{work_item_id}"
 
 
 def _escape_wiql_string(value: str) -> str:
@@ -415,11 +422,13 @@ def build_search_wiql(
     since: str | None = None,
     area_path: str | None = None,
     state: str = "open",
+    org_wide: bool = False,
+    tags: list[str] | None = None,
 ) -> str:
     """WIQL for work items whose Title or Description contains every given keyword (ANDed),
-    optionally restricted to items changed on/after `since` (an ISO 'YYYY-MM-DD' date) and/or
-    scoped to a board's Area Path subtree, most recently changed first. `keywords` may be empty,
-    to list work items without a text filter.
+    optionally restricted to items changed on/after `since` (an ISO 'YYYY-MM-DD' date), carrying
+    every given tag (ANDed), and/or scoped to a board's Area Path subtree, most recently changed
+    first. `keywords` may be empty, to list work items without a text filter.
 
     `since` is rendered as a UTC ISO 8601 literal (`'YYYY-MM-DDT00:00:00Z'`) — the one
     DateTime format WIQL accepts regardless of the querying account's locale/date-pattern
@@ -430,11 +439,21 @@ def build_search_wiql(
     CMMI use 'Closed' for their Completed-category state, Scrum and Basic use 'Done' — so
     `_TERMINAL_STATES` is the union across the built-in templates, not a per-project source of
     truth (a custom process with its own state names won't be filtered correctly).
+
+    `org_wide` drops the `[System.TeamProject] = @project` clause -- `@project` is only valid
+    when the query runs against a project-scoped WIQL endpoint (see `run_wiql`'s `org_wide`),
+    and dropping it is what actually lets the query match work items outside the current project.
+
+    `tags` is a separate filter from `keywords` -- `Contains Words` against Title/Description
+    doesn't match `System.Tags` at all, so a tag search (e.g. every work item tagged
+    'ready4implementation' across the whole org) needs its own `[System.Tags] Contains` clause.
     """
     clauses = [
         f"([System.Title] Contains Words '{_escape_wiql_string(k)}' OR [System.Description] Contains Words '{_escape_wiql_string(k)}')"
         for k in keywords
     ]
+    for tag in tags or []:
+        clauses.append(f"[System.Tags] Contains '{_escape_wiql_string(tag)}'")
     if since:
         clauses.append(f"[System.ChangedDate] >= '{since}T00:00:00Z'")
     if area_path:
@@ -443,13 +462,21 @@ def build_search_wiql(
         clauses.append(" AND ".join(f"[System.State] <> '{s}'" for s in _TERMINAL_STATES))
     elif state == "closed":
         clauses.append("(" + " OR ".join(f"[System.State] = '{s}'" for s in _TERMINAL_STATES) + ")")
-    where = " AND ".join(["[System.TeamProject] = @project", *clauses])
-    return f"SELECT [System.Id] FROM WorkItems WHERE {where} ORDER BY [System.ChangedDate] DESC"
+    if not org_wide:
+        clauses.insert(0, "[System.TeamProject] = @project")
+    query = "SELECT [System.Id] FROM WorkItems"
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    return f"{query} ORDER BY [System.ChangedDate] DESC"
 
 
-def run_wiql(session: requests.Session, remote: AdoRemote, wiql: str, top: int) -> list[int]:
+def run_wiql(session: requests.Session, remote: AdoRemote, wiql: str, top: int, org_wide: bool = False) -> list[int]:
+    """`org_wide` runs the query against the org-level WIQL endpoint (no `/{project}` segment),
+    which Azure DevOps resolves across every project in the org instead of just `remote.project`.
+    """
+    base = _org_url(remote) if org_wide else _base_url(remote)
     r = session.post(
-        f"{_base_url(remote)}/_apis/wit/wiql",
+        f"{base}/_apis/wit/wiql",
         params={"api-version": "7.1", "$top": top},
         json={"query": wiql},
     )
@@ -457,16 +484,23 @@ def run_wiql(session: requests.Session, remote: AdoRemote, wiql: str, top: int) 
     return [wi["id"] for wi in r.json()["workItems"]]
 
 
-def get_work_items(session: requests.Session, remote: AdoRemote, ids: list[int]) -> list[dict]:
-    """Batch-fetch Title/State for a set of work item ids, in the given `ids` order — WIQL only
-    returns ids (not field values), and this batch endpoint doesn't guarantee it echoes them back
-    in the order they were requested, so the caller's WIQL `ORDER BY` isn't preserved otherwise.
+def get_work_items(session: requests.Session, remote: AdoRemote, ids: list[int], org_wide: bool = False) -> list[dict]:
+    """Batch-fetch Title/State (plus TeamProject when `org_wide`) for a set of work item ids, in
+    the given `ids` order — WIQL only returns ids (not field values), and this batch endpoint
+    doesn't guarantee it echoes them back in the order they were requested, so the caller's WIQL
+    `ORDER BY` isn't preserved otherwise.
+
+    `org_wide` fetches via the org-level endpoint (ids from an org-wide `run_wiql` may belong to
+    a project other than `remote.project`) and also asks for `System.TeamProject`, so `search()`
+    can show which project each result came from.
     """
     if not ids:
         return []
+    base = _org_url(remote) if org_wide else _base_url(remote)
+    fields = "System.Title,System.State,System.TeamProject" if org_wide else "System.Title,System.State"
     r = session.get(
-        f"{_base_url(remote)}/_apis/wit/workitems",
-        params={"ids": ",".join(map(str, ids)), "fields": "System.Title,System.State", "api-version": "7.1"},
+        f"{base}/_apis/wit/workitems",
+        params={"ids": ",".join(map(str, ids)), "fields": fields, "api-version": "7.1"},
     )
     r.raise_for_status()
     by_id = {item["id"]: item for item in r.json()["value"]}
@@ -481,19 +515,31 @@ def search(
     board: str | None = None,
     top: int = 10,
     state: str = "open",
+    org_wide: bool = False,
+    tags: list[str] | None = None,
 ) -> list[dict]:
     """Search (or, with no keywords, just list) work items by keywords (ANDed, matched against
     Title or Description) and state, most recently changed first. `board` is an Azure Boards team
     name (like `create`'s `--board`) — resolved to its Area Path so results are scoped to that
-    team's subtree instead of the whole project.
+    team's subtree instead of the whole project. `tags` is a separate ANDed filter against
+    `System.Tags` (see `build_search_wiql`) -- a plain keyword doesn't match tags.
+
+    `org_wide` searches every project in `remote.org` instead of just `remote.project` --
+    mutually exclusive with `board`, since a team's Area Path only means something within a
+    single project.
     """
+    if org_wide and board:
+        sys.exit("--board can't be combined with --org-wide (a board's Area Path is scoped to a single project).")
     area_path = get_team_area_path(session, remote, board) if board else None
-    ids = run_wiql(session, remote, build_search_wiql(keywords, since, area_path, state), top)
-    items = get_work_items(session, remote, ids)
+    wiql = build_search_wiql(keywords, since, area_path, state, org_wide=org_wide, tags=tags)
+    ids = run_wiql(session, remote, wiql, top, org_wide=org_wide)
+    items = get_work_items(session, remote, ids, org_wide=org_wide)
     for item in items:
         fields = item["fields"]
-        print(f"#{item['id']} [{fields['System.State']}] {fields['System.Title']}")
-        print(edit_url(remote, item["id"]))
+        project = fields.get("System.TeamProject")
+        prefix = f"[{project}] " if org_wide else ""
+        print(f"{prefix}#{item['id']} [{fields['System.State']}] {fields['System.Title']}")
+        print(edit_url(remote, item["id"], project if org_wide else None))
     if not items:
         print("No matching work items found.")
     return items
