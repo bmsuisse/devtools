@@ -20,7 +20,7 @@ from . import logs as logs_mod
 from . import pr_build, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
 from .cli_tools import detect_agent_session, require_az, require_gh
-from .gitrepo import AdoRemote, GitHubRemote, current_branch, current_remote, head_commit_subject
+from .gitrepo import AdoRemote, GitHubRemote, UnknownRemoteError, current_branch, current_remote, head_commit_subject
 
 # Non-ASCII output (checkmarks, en-dashes in ADO project names, etc.) needs a
 # UTF-8 stream — the default Windows console codepage isn't UTF-8, and would
@@ -143,6 +143,28 @@ def _after_create(step: Callable[[], None], label: str) -> None:
         step()
     except (Exception, SystemExit) as e:
         print(f"Warning: PR created, but {label} failed: {e}")
+
+
+def _merge_tags_and_labels(tag: list[str] | None, label: list[str] | None) -> list[str] | None:
+    """`--tag` (Azure DevOps' term) and `--label` (GitHub's) are aliases of each other -- each
+    should route to whichever backend is actually active instead of being silently ignored by
+    the other one. Merges the two (deduplicated, case-insensitively, first occurrence wins) into
+    a single list handed to `gh_issue.*`'s `labels`/`add_labels`/`remove_labels` or
+    `ado_issue.*`'s `tags`/`remove_tags` params.
+
+    Returns `None` (not `[]`) when both inputs are `None` -- distinct from "explicitly passed as
+    empty" -- so `issue update`'s "omit --tag/--label to leave tags unchanged" contract isn't
+    broken into "replace tags with an empty list" just because this merge ran.
+    """
+    if tag is None and label is None:
+        return None
+    merged: list[str] = []
+    seen: set[str] = set()
+    for value in [*(tag or []), *(label or [])]:
+        if value.casefold() not in seen:
+            seen.add(value.casefold())
+            merged.append(value)
+    return merged
 
 
 def _link_and_label_github(gh: str, remote: GitHubRemote, issue_numbers: list[int]) -> None:
@@ -528,8 +550,12 @@ def issue_create(
         r"(sets its Area Path; overrides \[tool.bdt.ado].board in pyproject.toml) or a GitHub Projects "
         r"(v2) board by title (overrides \[tool.bdt.github].board)",
     ),
-    label: list[str] = typer.Option([], "--label", help="Label to apply (GitHub only, repeatable)"),
-    tag: list[str] = typer.Option([], "--tag", help="Tag to apply (Azure DevOps only, repeatable)"),
+    label: list[str] = typer.Option(
+        [], "--label", help="Label/tag to apply (repeatable). Alias for --tag -- routes to labels on GitHub, tags on Azure DevOps."
+    ),
+    tag: list[str] = typer.Option(
+        [], "--tag", help="Label/tag to apply (repeatable). Alias for --label -- routes to tags on Azure DevOps, labels on GitHub."
+    ),
     screenshot: list[str] = typer.Option(
         [], "--screenshot", help="Path to an image to attach to the issue / work item (repeatable)"
     ),
@@ -552,17 +578,18 @@ def issue_create(
         if not Path(path).is_file():
             raise typer.BadParameter(f"File not found: {path}", param_hint="--file")
 
+    tags_or_labels = _merge_tags_and_labels(tag, label) or []
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
         resolved_board = gh_issue.resolve_board(board)
         gh_issue.create(
-            require_gh(), remote.owner, remote.repo, title, description, label, screenshot, args or [], file_paths=file, board=resolved_board
+            require_gh(), remote.owner, remote.repo, title, description, tags_or_labels, screenshot, args or [], file_paths=file, board=resolved_board
         )
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
         resolved_board = ado_issue.resolve_board(board)
-        ado_issue.create(session, remote, type_, title, description, resolved_board, tag, screenshot, file)
+        ado_issue.create(session, remote, type_, title, description, resolved_board, tags_or_labels, screenshot, file)
 
 
 @issue_app.command("search")
@@ -586,10 +613,33 @@ def issue_search(
         False,
         "--org-wide",
         help="Search every project in the Azure DevOps org, or every repo owned by the GitHub owner, "
-        "instead of just the current one. Can't be combined with --board.",
+        "instead of just the current one. Can't be combined with --board. Outside of any git repo (or "
+        "in one with no recognized origin remote), falls back to --org/--github-org instead of failing.",
     ),
-    label: list[str] = typer.Option([], "--label", help="Only issues carrying this label, ANDed (GitHub only, repeatable)"),
-    tag: list[str] = typer.Option([], "--tag", help="Only work items carrying this tag, ANDed (Azure DevOps only, repeatable)"),
+    org: str | None = typer.Option(
+        None,
+        "--org",
+        envvar=["AZDO_ORG", "BMS_ORG"],
+        help="Azure DevOps org to --org-wide search when there's no git repo (or no recognized remote) "
+        "to detect one from. Ignored whenever the current repo's remote resolves fine -- so it's safe "
+        "to leave set in your shell profile (e.g. for `find-repo`) without affecting a normal, in-repo "
+        "`issue search`.",
+    ),
+    github_org: str | None = typer.Option(
+        None,
+        "--github-org",
+        envvar=["GITHUB_ORG", "BMS_GITHUB_ORG"],
+        help="GitHub owner/org to --org-wide search when there's no git repo (or no recognized remote) "
+        "to detect one from. Ignored whenever the current repo's remote resolves fine -- so it's safe "
+        "to leave set in your shell profile (e.g. for `find-repo`) without affecting a normal, in-repo "
+        "`issue search`.",
+    ),
+    label: list[str] = typer.Option(
+        [], "--label", help="Only issues/work items carrying this label/tag, ANDed (repeatable). Alias for --tag."
+    ),
+    tag: list[str] = typer.Option(
+        [], "--tag", help="Only issues/work items carrying this label/tag, ANDed (repeatable). Alias for --label."
+    ),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -603,18 +653,43 @@ def issue_search(
     if state not in ("open", "closed", "all"):
         raise typer.BadParameter("Must be one of: open, closed, all", param_hint="--state")
     since = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%Y-%m-%d") if since_days > 0 else None
+    tags_or_labels = _merge_tags_and_labels(tag, label) or []
 
-    remote = current_remote()
+    # --org/--github-org are only ever consulted as a *fallback*, when `current_remote()` itself
+    # fails (no git repo, no origin remote, or a remote that's neither GitHub nor Azure DevOps) --
+    # never merely because one happens to be set. Both envvars are shared with the pre-existing
+    # `find-repo` command, which documents setting them persistently in a shell profile (and
+    # having *both* set, to search either host); gating on "is --org/--github-org set" instead of
+    # "did detecting the repo's own remote fail" would make an ordinary, in-repo `bdt issue
+    # search` break for anyone who followed that advice. `--org-wide` without either flag/envvar
+    # keeps today's behavior exactly: `current_remote()`'s own error propagates unchanged.
+    if org_wide:
+        try:
+            remote: AdoRemote | GitHubRemote = current_remote()
+        except (SystemExit, UnknownRemoteError):
+            if org and github_org:
+                raise typer.BadParameter("Pass only one of --org or --github-org", param_hint="--org") from None
+            if github_org:
+                remote = GitHubRemote(github_org, "")
+            elif org:
+                remote = AdoRemote(org, "", "")
+            else:
+                raise
+    else:
+        remote = current_remote()
+
     if isinstance(remote, GitHubRemote):
         resolved_board = gh_issue.resolve_board(board)
         gh_issue.search(
-            require_gh(), remote.owner, remote.repo, keywords or [], since, limit, state, board=resolved_board, org_wide=org_wide, labels=label
+            require_gh(), remote.owner, remote.repo, keywords or [], since, limit, state, board=resolved_board, org_wide=org_wide, labels=tags_or_labels
         )
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
         resolved_board = ado_issue.resolve_board(board)
-        ado_issue.search(session, remote, keywords or [], since=since, board=resolved_board, top=limit, state=state, org_wide=org_wide, tags=tag)
+        ado_issue.search(
+            session, remote, keywords or [], since=since, board=resolved_board, top=limit, state=state, org_wide=org_wide, tags=tags_or_labels
+        )
 
 
 @issue_app.command("update")
@@ -637,9 +712,25 @@ def issue_update(
         "apply where that exact state name exists for the work item's type — elsewhere the state is "
         "left unchanged and a comment records what was requested.",
     ),
-    tag: list[str] | None = typer.Option(None, "--tag", help="Replaces all tags (Azure DevOps only, repeatable); omit to leave unchanged"),
-    label: list[str] | None = typer.Option(None, "--label", help="Label to add (GitHub only, repeatable)"),
-    remove_label: list[str] | None = typer.Option(None, "--remove-label", help="Label to remove (GitHub only, repeatable)"),
+    tag: list[str] | None = typer.Option(
+        None,
+        "--tag",
+        help="Tag/label to add (repeatable); omit to leave unchanged. Alias for --label -- routes to labels on "
+        "GitHub (added alongside existing labels) or tags on Azure DevOps (replaces the full tag list, "
+        "combined with --remove-tag/--remove-label if also given).",
+    ),
+    label: list[str] | None = typer.Option(
+        None, "--label", help="Tag/label to add (repeatable); omit to leave unchanged. Alias for --tag."
+    ),
+    remove_tag: list[str] | None = typer.Option(
+        None,
+        "--remove-tag",
+        help="Tag/label to remove (repeatable). Alias for --remove-label -- on Azure DevOps this removes just "
+        "the named tag(s), leaving the rest untouched (unlike --tag/--label, which replace the whole set).",
+    ),
+    remove_label: list[str] | None = typer.Option(
+        None, "--remove-label", help="Tag/label to remove (repeatable). Alias for --remove-tag."
+    ),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -648,13 +739,15 @@ def issue_update(
     ),
 ) -> None:
     """Update an issue / work item's fields (Azure DevOps or GitHub, auto-detected)."""
+    tags_or_labels = _merge_tags_and_labels(tag, label)
+    removals = _merge_tags_and_labels(remove_tag, remove_label)
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_issue.update(require_gh(), number, title, description, label, remove_label, state)
+        gh_issue.update(require_gh(), number, title, description, tags_or_labels, removals, state)
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
-        ado_issue.update(session, remote, number, title, description, board, tag, state)
+        ado_issue.update(session, remote, number, title, description, board, tags_or_labels, removals, state)
 
 
 @issue_app.command("delete")
