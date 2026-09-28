@@ -297,6 +297,28 @@ def test_update_remove_tag_alone_counts_as_a_real_change() -> None:
     session.patch.assert_called_once()
 
 
+def test_update_remove_tag_not_present_and_nothing_else_given_is_a_noop() -> None:
+    """Mirrors `add_tag`'s own idempotency check: removing a tag that isn't there, with nothing
+    else to update, shouldn't PATCH an unchanged System.Tags value or claim the item was updated.
+    """
+    session = make_session(get_map={"/_apis/wit/workitems/123": {"fields": {"System.Tags": "one; two"}}})
+
+    result = update(session, REMOTE, 123, remove_tags=["not-present"])
+
+    assert result is None
+    session.patch.assert_not_called()
+
+
+def test_update_remove_tag_not_present_still_applies_other_given_fields() -> None:
+    """A no-op removal shouldn't block an otherwise-real update to another field."""
+    session = make_session(get_map={"/_apis/wit/workitems/123": {"fields": {"System.Tags": "one; two"}}})
+
+    update(session, REMOTE, 123, title="New title", remove_tags=["not-present"])
+
+    ops = session.patch.call_args.kwargs["json"]
+    assert ops == [{"op": "add", "path": "/fields/System.Title", "value": "New title"}]
+
+
 def test_delete_hits_work_item_delete_endpoint() -> None:
     session = make_session()
 

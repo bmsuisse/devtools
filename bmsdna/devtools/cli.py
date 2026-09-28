@@ -20,7 +20,7 @@ from . import logs as logs_mod
 from . import pr_build, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
 from .cli_tools import detect_agent_session, require_az, require_gh
-from .gitrepo import AdoRemote, GitHubRemote, current_branch, current_remote, head_commit_subject
+from .gitrepo import AdoRemote, GitHubRemote, UnknownRemoteError, current_branch, current_remote, head_commit_subject
 
 # Non-ASCII output (checkmarks, en-dashes in ADO project names, etc.) needs a
 # UTF-8 stream — the default Windows console codepage isn't UTF-8, and would
@@ -568,22 +568,26 @@ def issue_search(
         False,
         "--org-wide",
         help="Search every project in the Azure DevOps org, or every repo owned by the GitHub owner, "
-        "instead of just the current one. Can't be combined with --board. Pass --org or --github-org "
-        "alongside this to run outside of any git repo.",
+        "instead of just the current one. Can't be combined with --board. Outside of any git repo (or "
+        "in one with no recognized origin remote), falls back to --org/--github-org instead of failing.",
     ),
     org: str | None = typer.Option(
         None,
         "--org",
         envvar=["AZDO_ORG", "BMS_ORG"],
-        help="Azure DevOps org to search --org-wide in, instead of detecting it from the current repo's "
-        "git remote -- lets --org-wide run outside of any git repo. Only meaningful with --org-wide.",
+        help="Azure DevOps org to --org-wide search when there's no git repo (or no recognized remote) "
+        "to detect one from. Ignored whenever the current repo's remote resolves fine -- so it's safe "
+        "to leave set in your shell profile (e.g. for `find-repo`) without affecting a normal, in-repo "
+        "`issue search`.",
     ),
     github_org: str | None = typer.Option(
         None,
         "--github-org",
         envvar=["GITHUB_ORG", "BMS_GITHUB_ORG"],
-        help="GitHub owner/org to search --org-wide in, instead of detecting it from the current repo's "
-        "git remote -- lets --org-wide run outside of any git repo. Only meaningful with --org-wide.",
+        help="GitHub owner/org to --org-wide search when there's no git repo (or no recognized remote) "
+        "to detect one from. Ignored whenever the current repo's remote resolves fine -- so it's safe "
+        "to leave set in your shell profile (e.g. for `find-repo`) without affecting a normal, in-repo "
+        "`issue search`.",
     ),
     label: list[str] = typer.Option(
         [], "--label", help="Only issues/work items carrying this label/tag, ANDed (repeatable). Alias for --tag."
@@ -603,20 +607,29 @@ def issue_search(
     """
     if state not in ("open", "closed", "all"):
         raise typer.BadParameter("Must be one of: open, closed, all", param_hint="--state")
-    if org and github_org:
-        raise typer.BadParameter("Pass only one of --org or --github-org", param_hint="--org")
-    if (org or github_org) and not org_wide:
-        raise typer.BadParameter("--org / --github-org only apply together with --org-wide", param_hint="--org-wide")
     since = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%Y-%m-%d") if since_days > 0 else None
     tags_or_labels = _merge_tags_and_labels(tag, label) or []
 
-    # An explicit --org/--github-org means --org-wide doesn't need a specific repo at all (it
-    # searches the whole org/owner) -- so skip `current_remote()`, which shells out to `git
-    # remote get-url origin` and fails hard outside a git repo, or in one with no matching
-    # remote. The synthesized remote's repo (and, for Azure DevOps, project) fields are never
-    # read in org-wide mode -- see `ado_issue.search`/`gh_issue.search`'s org_wide branches.
-    if org_wide and (org or github_org):
-        remote: AdoRemote | GitHubRemote = GitHubRemote(github_org, "") if github_org else AdoRemote(org or "", "", "")
+    # --org/--github-org are only ever consulted as a *fallback*, when `current_remote()` itself
+    # fails (no git repo, no origin remote, or a remote that's neither GitHub nor Azure DevOps) --
+    # never merely because one happens to be set. Both envvars are shared with the pre-existing
+    # `find-repo` command, which documents setting them persistently in a shell profile (and
+    # having *both* set, to search either host); gating on "is --org/--github-org set" instead of
+    # "did detecting the repo's own remote fail" would make an ordinary, in-repo `bdt issue
+    # search` break for anyone who followed that advice. `--org-wide` without either flag/envvar
+    # keeps today's behavior exactly: `current_remote()`'s own error propagates unchanged.
+    if org_wide:
+        try:
+            remote: AdoRemote | GitHubRemote = current_remote()
+        except (SystemExit, UnknownRemoteError):
+            if org and github_org:
+                raise typer.BadParameter("Pass only one of --org or --github-org", param_hint="--org") from None
+            if github_org:
+                remote = GitHubRemote(github_org, "")
+            elif org:
+                remote = AdoRemote(org, "", "")
+            else:
+                raise
     else:
         remote = current_remote()
 

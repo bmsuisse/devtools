@@ -629,9 +629,24 @@ def update(
         sys.exit("Nothing to update — provide at least one of --title, --description, --board, --tag, --remove-tag, --state.")
 
     if remove_tags:
-        base_tags = tags if tags is not None else get_work_item_tags(session, remote, work_item_id)
         removal_set = {t.casefold() for t in remove_tags}
-        tags = [t for t in base_tags if t.casefold() not in removal_set]
+        if tags is not None:
+            # An explicit `tags` (full replace) always writes, same as plain --tag on its own --
+            # `remove_tags` here is just a filter on top of the caller-given replacement list.
+            tags = [t for t in tags if t.casefold() not in removal_set]
+        else:
+            current_tags = get_work_item_tags(session, remote, work_item_id)
+            filtered_tags = [t for t in current_tags if t.casefold() not in removal_set]
+            if filtered_tags != current_tags:
+                tags = filtered_tags
+            elif title is None and description is None and area_path is None and applied_state is None:
+                # None of `remove_tags` were actually present, and nothing else was given either --
+                # mirrors `add_tag`'s own idempotency check (same file) so this doesn't needlessly
+                # bump the work item's revision/history with a same-value System.Tags PATCH.
+                print(f"Work item #{work_item_id}: none of the given --remove-tag value(s) were present — nothing to do.")
+                return None
+            # else: leave `tags` as None -- other given fields still get their own ops below,
+            # without forcing a redundant, unchanged System.Tags op alongside them.
 
     if description is not None:
         description = ensure_agent_session_note(description, also_check=title)
