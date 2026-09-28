@@ -114,6 +114,33 @@ def test_search_board_overfetches_then_filters_to_limit(monkeypatch) -> None:
     assert all(item["number"] % 2 == 0 for item in results)
 
 
+def test_search_org_wide_uses_gh_search_issues_with_owner(monkeypatch) -> None:
+    import json
+
+    captured_cmd: list[str] = []
+    items = [
+        {"number": 5, "title": "org-wide bug", "url": "https://github.com/owner/other-repo/issues/5", "state": "open", "repository": {"nameWithOwner": "owner/other-repo"}}
+    ]
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout=json.dumps(items), stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
+
+    results = search("gh", "owner", "repo", ["auth"], None, 10, org_wide=True)
+
+    assert captured_cmd[1:3] == ["search", "issues"]
+    assert captured_cmd[captured_cmd.index("--owner") + 1] == "owner"
+    assert "--repo" not in captured_cmd
+    assert results == items
+
+
+def test_search_org_wide_and_board_together_exits(monkeypatch) -> None:
+    with pytest.raises(SystemExit):
+        search("gh", "owner", "repo", [], None, 10, board="Roadmap", org_wide=True)
+
+
 def test_search_board_ignores_same_number_issue_from_a_different_repo(monkeypatch) -> None:
     import json
 

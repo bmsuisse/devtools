@@ -215,7 +215,15 @@ def build_search_query(keywords: list[str], since: str | None) -> str:
 
 
 def search(
-    gh: str, owner: str, repo: str, keywords: list[str], since: str | None, limit: int, state: str = "open", board: str | None = None
+    gh: str,
+    owner: str,
+    repo: str,
+    keywords: list[str],
+    since: str | None,
+    limit: int,
+    state: str = "open",
+    board: str | None = None,
+    org_wide: bool = False,
 ) -> list[dict]:
     """Search (or, with no keywords, just list) issues by state, most recently updated first.
 
@@ -223,8 +231,33 @@ def search(
     scopes results to a GitHub Projects (v2) board (by title or number) -- `gh issue list` has no
     board filter of its own, so this over-fetches a wider raw pool first and filters down to
     `limit` afterward, client-side.
+
+    `org_wide` searches every repo `owner` has, via `gh search issues --owner` (GitHub's
+    cross-repo search endpoint) instead of `gh issue list` (always single-repo, scoped by cwd's
+    git remote) -- mutually exclusive with `board`, whose membership is only resolved against
+    `repo`, not every repo under `owner`.
     """
+    if org_wide and board:
+        sys.exit("--board can't be combined with --org-wide (board membership is only resolved for the current repo).")
+
     query = build_search_query(keywords, since)
+
+    if org_wide:
+        # `gh search issues`' `--json state` returns lowercase 'open'/'closed' (the GitHub search
+        # API's own casing), unlike `gh issue list`'s 'OPEN'/'CLOSED' below (GraphQL enum casing)
+        # -- both are printed as-is, so the two search modes' output differs in state casing.
+        out = _run_gh(
+            gh,
+            ["search", "issues", query, "--owner", owner, "--state", state, "--limit", str(limit), "--json", "number,title,url,state,repository"],
+        )
+        items = json.loads(out) if out else []
+        for item in items:
+            print(f"{item['repository']['nameWithOwner']}#{item['number']} [{item['state']}] {item['title']}")
+            print(item["url"])
+        if not items:
+            print("No matching issues found.")
+        return items
+
     fetch_limit = limit * _BOARD_SEARCH_OVERFETCH if board else limit
     out = _run_gh(gh, ["issue", "list", "--search", query, "--state", state, "--limit", str(fetch_limit), "--json", "number,title,url,state"])
     items = json.loads(out) if out else []

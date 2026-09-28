@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock
 
+import pytest
+
 from bmsdna.devtools.ado_issue import (
     add_pr_available_tag,
     add_tag,
@@ -9,8 +11,11 @@ from bmsdna.devtools.ado_issue import (
     build_update_ops,
     edit_url,
     get_work_item_tags,
+    get_work_items,
     html_url,
     resolve_board,
+    run_wiql,
+    search,
     upload_attachment,
 )
 from bmsdna.devtools.gitrepo import AdoRemote
@@ -246,6 +251,79 @@ def test_build_search_wiql_area_path_scopes_to_board() -> None:
 
 def test_build_search_wiql_no_area_path_by_default() -> None:
     assert "AreaPath" not in build_search_wiql(["auth"])
+
+
+def test_build_search_wiql_org_wide_drops_team_project_clause() -> None:
+    wiql = build_search_wiql(["auth"], org_wide=True)
+    assert "TeamProject" not in wiql
+
+
+def test_build_search_wiql_org_wide_with_no_other_clauses_has_no_where() -> None:
+    assert build_search_wiql([], state="all", org_wide=True) == "SELECT [System.Id] FROM WorkItems ORDER BY [System.ChangedDate] DESC"
+
+
+def test_build_search_wiql_not_org_wide_still_scopes_to_project() -> None:
+    assert "[System.TeamProject] = @project" in build_search_wiql(["auth"], org_wide=False)
+
+
+def test_edit_url_org_wide_uses_given_project_not_remote_project() -> None:
+    assert (
+        edit_url(REMOTE, 42, project="OtherProj")
+        == "https://dev.azure.com/myorg/OtherProj/_workitems/edit/42"
+    )
+
+
+def test_run_wiql_org_wide_hits_org_level_endpoint_without_project() -> None:
+    session = MagicMock()
+    session.post.return_value.json.return_value = {"workItems": [{"id": 1}]}
+
+    run_wiql(session, REMOTE, "SELECT ...", 10, org_wide=True)
+
+    url = session.post.call_args.args[0]
+    assert url == "https://dev.azure.com/myorg/_apis/wit/wiql"
+
+
+def test_run_wiql_project_scoped_by_default() -> None:
+    session = MagicMock()
+    session.post.return_value.json.return_value = {"workItems": []}
+
+    run_wiql(session, REMOTE, "SELECT ...", 10)
+
+    url = session.post.call_args.args[0]
+    assert url == "https://dev.azure.com/myorg/MyProj/_apis/wit/wiql"
+
+
+def test_get_work_items_org_wide_requests_team_project_field() -> None:
+    session = MagicMock()
+    session.get.return_value.json.return_value = {"value": [{"id": 1, "fields": {"System.TeamProject": "OtherProj"}}]}
+
+    get_work_items(session, REMOTE, [1], org_wide=True)
+
+    fields_param = session.get.call_args.kwargs["params"]["fields"]
+    assert "System.TeamProject" in fields_param
+    url = session.get.call_args.args[0]
+    assert url == "https://dev.azure.com/myorg/_apis/wit/workitems"
+
+
+def test_search_org_wide_and_board_together_exits() -> None:
+    session = MagicMock()
+    with pytest.raises(SystemExit):
+        search(session, REMOTE, [], board="SomeTeam", org_wide=True)
+
+
+def test_search_org_wide_prints_project_prefix(capsys) -> None:
+    session = MagicMock()
+    session.post.return_value.json.return_value = {"workItems": [{"id": 1}]}
+    session.get.return_value.json.return_value = {
+        "value": [{"id": 1, "fields": {"System.Title": "Some bug", "System.State": "Active", "System.TeamProject": "OtherProj"}}]
+    }
+
+    items = search(session, REMOTE, [], org_wide=True)
+
+    assert len(items) == 1
+    out = capsys.readouterr().out
+    assert "[OtherProj] #1 [Active] Some bug" in out
+    assert "https://dev.azure.com/myorg/OtherProj/_workitems/edit/1" in out
 
 
 # -- get_work_item_tags / add_tag / add_pr_available_tag --------------------
