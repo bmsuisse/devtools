@@ -25,6 +25,14 @@ dependencies = [
     "pgdevkit[db]>=0.7.1",
 ]
 
+# `sqlglot` is already a transitive dependency of pgdevkit today, but `bdt lint`'s SQL rules
+# (lint_sql.py) import it directly -- an explicit optional extra documents that dependency and
+# keeps `bdt lint` working even if pgdevkit ever drops it, without forcing it on everyone who
+# only uses the PR/issue/worktree commands. `bdt lint` gives a clear install hint (not a raw
+# ImportError) when it's missing either way (see lint_sql.require_sqlglot).
+[project.optional-dependencies]
+lint = ["sqlglot>=27.0.0"]
+
 [project.scripts]
 bdt = "bmsdna.devtools.cli:app"
 

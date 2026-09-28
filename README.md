@@ -3,7 +3,8 @@
 Shared developer tooling for BMS projects: PR build/check status, PR
 creation, issue/work item creation and comments, git worktrees (creation and
 merged-worktree/orphaned-test-DB cleanup), a commit-and-push helper with
-pre-flight checks, and Azure log queries.
+pre-flight checks, Azure log queries, and static checks (`bdt lint`) for
+postgres/psycopg SQL rules, pydantic-model placement, and baseline tooling.
 `bdt pr *` and `bdt issue *` auto-detect whether the current repo's `origin`
 remote is Azure DevOps or GitHub and use `az`/`gh` accordingly.
 Consolidates near-duplicate scripts that used to be copy-pasted across
@@ -454,6 +455,67 @@ slot = "test"
 bdt logs fetch --env prod
 bdt logs fetch --env prod --out logs/ --keep-archive
 ```
+
+## `bdt lint`
+
+Static checks (implementing [bmsuisse/skills#52](https://github.com/bmsuisse/skills/issues/52))
+for the `postgres-best-practices` skill's SQL rules, pydantic-model placement, and
+that the repo has its baseline tooling actually set up:
+
+```bash
+bdt lint                       # scan the current directory, recursively
+bdt lint backend/              # scan one directory
+bdt lint backend/db/a.py b.py  # scan only these files -- e.g. from a prek/pre-commit
+                                # hook's staged-file list, so it can run on the diff only
+bdt lint --no-tooling-check    # skip the tooling-config check for this run
+```
+
+Every `.execute()`/`.executemany()` call whose SQL argument can be resolved to a
+literal or f-string/concatenation/`%`-format expression is checked (an
+unresolvable argument, e.g. a plain function parameter, is silently skipped --
+this can't false-positive on non-psycopg `.execute()` calls, or on dynamic SQL
+it can't see through):
+
+- **`sql-inline-too-complex`** — more than a trivial (≤4 line) query, or a
+  JOIN/CTE/subquery/aggregation, inline instead of `load_sql()`/a `.sql` file.
+- **`sql-fstring-injection`** / **`sql-concat-injection`** /
+  **`sql-percent-format-injection`** / **`sql-format-injection`** — SQL built
+  with an f-string, `+` concatenation, the `%` operator, or `str.format()`
+  instead of a psycopg t-string (3.14+), `psycopg.sql`, or bound params.
+- **`sql-positional-param`** — positional `%s` instead of named `%(name)s`.
+- **`sql-forbidden-join`** — `RIGHT JOIN`/`LATERAL JOIN`/`CROSS APPLY` (same
+  patterns the `prek` skill's `check_files.py` forbids in `.sql` files).
+
+A candidate is only ever flagged once its (resolved) text actually parses with
+[sqlglot](https://github.com/tobymao/sqlglot) as a `SELECT`/`INSERT`/`UPDATE`/
+`DELETE`/`UNION`/`MERGE` — this is what lets `bdt lint` scan *any* `.execute()`
+call, regardless of driver, without flagging e.g. a duckdb `COPY ... TO` export.
+
+**`pydantic-model-misplaced`** — a pydantic model (or `PostgresTableModel`)
+with more than 5 fields defined directly under an `api/` directory, instead of
+an `api/models/`(/`schemas/`/`dto/`) module.
+
+**Tooling config** — the repo must declare `ty`, `ruff` and `pytest` as
+dependencies, have `pytest` configured (`[tool.pytest.ini_options]` or a
+`pytest.ini`/`setup.cfg`), and have a `prek.toml` (see the `prek` skill).
+Never a hard block — bypass it for one run with `--no-tooling-check`, or
+permanently for the repo via `pyproject.toml`:
+
+```toml
+[tool.bdt.lint]
+skip_tooling_check = true
+```
+
+Other `[tool.bdt.lint]` knobs (all optional): `exclude_dirs` (extra directory
+names to skip, beyond the built-in `.venv`/`node_modules`/etc. list),
+`pydantic_field_threshold` (default 5), `pydantic_base_classes` (default
+`["BaseModel", "PostgresTableModel"]`), `pydantic_allowed_subdirs` (default
+`["models", "schemas", "dto"]`), `pydantic_api_dir_names` (default `["api"]`).
+
+Requires [sqlglot](https://pypi.org/project/sqlglot/) for the SQL checks —
+already pulled in transitively via `pgdevkit[db]`, but declared explicitly as
+the `bmsdna-devtools[lint]` extra; a clear install hint is printed (not a raw
+`ImportError`) if it's ever missing.
 
 ## Releasing
 

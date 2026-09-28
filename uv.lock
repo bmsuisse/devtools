@@ -31,6 +31,11 @@ dependencies = [
     { name = "typer" },
 ]
 
+[package.optional-dependencies]
+lint = [
+    { name = "sqlglot" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "ruff" },
@@ -45,8 +50,10 @@ requires-dist = [
     { name = "pgdevkit", extras = ["db"], specifier = ">=0.7.1" },
     { name = "requests", specifier = ">=2.32.0" },
     { name = "rich", specifier = ">=13.0.0" },
+    { name = "sqlglot", marker = "extra == 'lint'", specifier = ">=27.0.0" },
     { name = "typer", specifier = ">=0.26.7" },
 ]
+provides-extras = ["lint"]
 
 [package.metadata.requires-dev]
 dev = [
