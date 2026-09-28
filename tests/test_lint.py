@@ -39,6 +39,15 @@ def test_subset_mode_only_scans_the_given_files(tmp_path: Path) -> None:
     assert {f.rule for f in result.findings} == {"sql-concat-injection"}
 
 
+def test_missing_explicit_path_is_flagged_not_silently_clean(tmp_path: Path) -> None:
+    # A prek/pre-commit hook passing a typo'd or stale (deleted/renamed) filename must not
+    # report a clean pass with zero visibility that nothing was actually scanned.
+    _setup_repo(tmp_path)
+    result = lint.run(["nonexistent_typo.py"], root=tmp_path, skip_tooling_check=True)
+    assert not result.ok
+    assert [f.rule for f in result.findings] == ["lint-path-not-found"]
+
+
 def test_directory_mode_walks_recursively_and_skips_venv(tmp_path: Path) -> None:
     _setup_repo(tmp_path)
     bad = tmp_path / "backend" / "db" / "repo.py"

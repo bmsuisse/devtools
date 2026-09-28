@@ -52,14 +52,21 @@ class LintResult:
         return not self.findings
 
 
-def _iter_python_files(paths: list[Path], exclude_dir_names: frozenset[str]) -> list[Path]:
+def _iter_python_files(paths: list[Path], exclude_dir_names: frozenset[str]) -> tuple[list[Path], list[Path]]:
     """`paths` with directories expanded to every non-excluded `*.py` file under them
     (sorted, for stable output); a path that's already a `.py` file is used as-is
     regardless of exclude_dir_names -- an explicit file (e.g. from a pre-commit hook's
     staged-file list) is always scanned, even if it happens to sit under a normally-excluded
     directory name. Deduplicated so the same file is never scanned twice.
+
+    Also returns every entry of `paths` that doesn't exist at all, so a typo'd or stale
+    filename (e.g. in a pre-commit hook's staged-file list) surfaces as a finding instead of
+    silently scanning nothing and reporting a clean pass. A path that exists but isn't a
+    directory or a `.py` file (e.g. a non-Python file a hook happened to pass through) is
+    intentionally *not* reported here -- skipping it is correct, not an error.
     """
     files: list[Path] = []
+    missing: list[Path] = []
     seen: set[Path] = set()
 
     def add(candidate: Path) -> None:
@@ -73,10 +80,13 @@ def _iter_python_files(paths: list[Path], exclude_dir_names: frozenset[str]) -> 
             for candidate in sorted(path.rglob("*.py")):
                 if not any(part in exclude_dir_names for part in candidate.parts):
                     add(candidate)
-        elif path.suffix == ".py" and path.is_file():
-            add(path)
+        elif path.is_file():
+            if path.suffix == ".py":
+                add(path)
+        else:
+            missing.append(path)
 
-    return files
+    return files, missing
 
 
 def run(paths: list[str], *, root: Path | None = None, skip_tooling_check: bool = False) -> LintResult:
@@ -104,11 +114,13 @@ def run(paths: list[str], *, root: Path | None = None, skip_tooling_check: bool 
     pyproject_path = find_pyproject(root)
     repo_root = pyproject_path.parent if pyproject_path else root
 
-    python_files = _iter_python_files(target_paths, exclude_dir_names)
+    python_files, missing_paths = _iter_python_files(target_paths, exclude_dir_names)
     if python_files:
         require_sqlglot()
 
-    findings: list[Finding] = []
+    findings: list[Finding] = [
+        Finding(path, 0, "lint-path-not-found", f"'{path}' doesn't exist -- nothing was scanned for it.") for path in missing_paths
+    ]
     for path in python_files:
         findings.extend(check_sql_file(path))
         findings.extend(

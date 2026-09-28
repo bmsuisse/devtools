@@ -185,6 +185,27 @@ def f(runner):
     assert _findings(source, tmp_path / "a.py") == []
 
 
+def test_unsafe_branch_shadowed_by_later_safe_reassignment_is_still_flagged(tmp_path: Path) -> None:
+    # An earlier branch assigns an injectable query; a later (unconditional-looking, but
+    # actually just a different branch) reassignment looks safe. Only checking the lexically
+    # last assignment would miss the unsafe branch entirely.
+    source = '''
+async def f(cur, cond, value):
+    query = "select * from t where id = " + str(value)
+    if cond:
+        query = "select * from t where id = %(id)s"
+    await cur.execute(query, {"id": value})
+'''
+    findings = _findings(source, tmp_path / "a.py")
+    assert "sql-concat-injection" in _rules(findings)
+
+
+def test_non_utf8_file_is_skipped_not_crashed(tmp_path: Path) -> None:
+    path = tmp_path / "bad_encoding.py"
+    path.write_bytes(b"\xff\xfe# not valid utf-8\n")
+    assert check_sql_file(path) == []
+
+
 def test_scopes_do_not_leak_between_functions(tmp_path: Path) -> None:
     # `query` in g() must not resolve to f()'s binding of the same name.
     source = '''

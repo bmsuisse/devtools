@@ -11,10 +11,13 @@ non-SQL or non-DML `.execute()` calls (e.g. a duckdb `COPY ... TO` export, which
 parses to `exp.Copy`, deliberately outside the accepted set).
 
 Resolution of the query argument is a light, best-effort dataflow: a `Name` is
-followed back to its nearest enclosing-scope assignment (function/class/module
-scopes tracked separately, last assignment wins -- no branch/loop-aware SSA).
-Anything it can't resolve to a literal/known-safe shape is silently skipped
-rather than guessed at -- a linter that can't be sure must stay quiet, not noisy.
+followed back to every assignment it had in its own scope (function/class/module
+scopes tracked separately -- no real branch/loop-aware SSA, but also deliberately
+*not* "last assignment wins": each candidate assignment is checked independently,
+so an unsafe one a later, safe-looking reassignment happens to shadow at lookup
+time is still caught). Anything that resolves to nothing recognizable (a
+parameter, a helper-function's return value, ...) is silently skipped rather
+than guessed at -- a linter that can't be sure must stay quiet, not noisy.
 """
 
 from __future__ import annotations
@@ -108,18 +111,41 @@ def _is_sql_composed_call(node: ast.AST) -> bool:
     return isinstance(func, ast.Attribute) and func.attr in ("SQL", "Identifier", "Composed")
 
 
-def _resolve(expr: ast.expr, lookup) -> ast.expr:
-    """Follow a `Name` back through `lookup` (nearest enclosing-scope assignment) up to
-    `_MAX_RESOLVE_HOPS` times. Returns `expr` unchanged (possibly still a `Name`) once it
-    can't be resolved further -- callers treat a still-`Name` result as "unresolved"."""
+def _resolve_single(expr: ast.expr, lookup) -> ast.expr:
+    """Follow a `Name` back through `lookup` up to `_MAX_RESOLVE_HOPS` times, taking the
+    *first* candidate assignment at each hop. Used only for secondary/nested resolutions (the
+    left side of a `%`-format, a `.format()` template, a concat operand) where collapsing
+    multiple candidates to one is an acceptable simplification -- the call argument itself
+    (the case that actually matters for injection detection) goes through
+    `_resolve_candidates` instead, which doesn't collapse anything."""
     seen = 0
     while isinstance(expr, ast.Name) and seen < _MAX_RESOLVE_HOPS:
         bound = lookup(expr.id)
-        if bound is None:
+        if not bound:
             break
-        expr = bound
+        expr = bound[0]
         seen += 1
     return expr
+
+
+def _resolve_candidates(expr: ast.expr, lookup, _depth: int = 0) -> list[ast.expr]:
+    """Every value `expr` could resolve to, following `Name` -> assignment(s) through
+    `lookup`. A name assigned more than once in its scope (e.g. once per `if`/`else` branch)
+    yields one candidate per assignment -- deliberately not just the textually-last one: a
+    linter that only checked the last assignment would miss an unsafe branch that a later,
+    safe-looking reassignment (in another branch) happens to shadow at lookup time. Every
+    candidate is checked independently by `_check_query_arg`, so an unsafe one anywhere is
+    still caught regardless of which branch actually runs.
+    """
+    if isinstance(expr, ast.Name) and _depth < _MAX_RESOLVE_HOPS:
+        bound = lookup(expr.id)
+        if not bound:
+            return [expr]
+        results: list[ast.expr] = []
+        for candidate in bound:
+            results.extend(_resolve_candidates(candidate, lookup, _depth + 1))
+        return results
+    return [expr]
 
 
 def _fstring_probe_text(node: ast.JoinedStr) -> str:
@@ -145,7 +171,7 @@ def _concat_probe_text(node: ast.BinOp, lookup) -> str | None:
             visit(operand.left)
             visit(operand.right)
             return
-        resolved = _resolve(operand, lookup)
+        resolved = _resolve_single(operand, lookup)
         if isinstance(resolved, ast.Constant) and isinstance(resolved.value, str):
             parts.append(resolved.value)
             saw_literal = True
@@ -220,9 +246,7 @@ def _literal_findings(text: str, path: Path, lineno: int) -> list[Finding]:
     return findings
 
 
-def _check_query_arg(expr: ast.expr, lookup, path: Path, lineno: int) -> list[Finding]:
-    resolved = _resolve(expr, lookup)
-
+def _check_resolved_candidate(resolved: ast.expr, lookup, path: Path, lineno: int) -> list[Finding]:
     if _is_load_sql_call(resolved) or _is_sql_composed_call(resolved):
         return []
     if isinstance(resolved, getattr(ast, "TemplateStr", ())):
@@ -232,7 +256,7 @@ def _check_query_arg(expr: ast.expr, lookup, path: Path, lineno: int) -> list[Fi
         return _injection_finding(_fstring_probe_text(resolved), path, lineno, "sql-fstring-injection", "an f-string")
 
     if isinstance(resolved, ast.BinOp) and isinstance(resolved.op, ast.Mod):
-        left = _resolve(resolved.left, lookup)
+        left = _resolve_single(resolved.left, lookup)
         if isinstance(left, ast.Constant) and isinstance(left.value, str):
             return _injection_finding(left.value, path, lineno, "sql-percent-format-injection", "the `%` string-formatting operator")
         return []
@@ -242,7 +266,7 @@ def _check_query_arg(expr: ast.expr, lookup, path: Path, lineno: int) -> list[Fi
         return _injection_finding(text, path, lineno, "sql-concat-injection", "string concatenation") if text is not None else []
 
     if isinstance(resolved, ast.Call) and isinstance(resolved.func, ast.Attribute) and resolved.func.attr == "format":
-        template = _resolve(resolved.func.value, lookup)
+        template = _resolve_single(resolved.func.value, lookup)
         if isinstance(template, ast.Constant) and isinstance(template.value, str):
             text = _FORMAT_FIELD_RE.sub(_PROBE_PLACEHOLDER, template.value)
             return _injection_finding(text, path, lineno, "sql-format-injection", "`str.format()`")
@@ -252,6 +276,23 @@ def _check_query_arg(expr: ast.expr, lookup, path: Path, lineno: int) -> list[Fi
         return _literal_findings(resolved.value, path, lineno)
 
     return []  # unresolved (a parameter, a helper-function result, ...) -- stay quiet
+
+
+def _check_query_arg(expr: ast.expr, lookup, path: Path, lineno: int) -> list[Finding]:
+    """Checks every candidate `expr` could resolve to (see `_resolve_candidates`) and returns
+    the union of findings, deduplicated by rule -- so a name reassigned differently per branch
+    (e.g. an unsafe default that one `if` branch overwrites with a safe literal) is still
+    caught via whichever branch is unsafe, not silently cleared by whichever assignment
+    happens to be lexically last.
+    """
+    findings: list[Finding] = []
+    seen_rules: set[str] = set()
+    for candidate in _resolve_candidates(expr, lookup):
+        for finding in _check_resolved_candidate(candidate, lookup, path, lineno):
+            if finding.rule not in seen_rules:
+                seen_rules.add(finding.rule)
+                findings.append(finding)
+    return findings
 
 
 def _execute_query_arg(call: ast.Call) -> ast.expr | None:
@@ -264,19 +305,21 @@ def _execute_query_arg(call: ast.Call) -> ast.expr | None:
 
 class _ExecuteCallVisitor(ast.NodeVisitor):
     """Walks a module, tracking a stack of (function/class/module) local-variable scopes so a
-    `cur.execute(query, ...)` call can resolve `query` back to its nearest assignment, then
-    applies the SQL rules to every `.execute()`/`.executemany()` call found."""
+    `cur.execute(query, ...)` call can resolve `query` back to every assignment it had in that
+    scope (see `_resolve_candidates` -- deliberately not just the nearest/last one, so a
+    branch-shadowed unsafe assignment is still seen), then applies the SQL rules to every
+    `.execute()`/`.executemany()` call found."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
         self.findings: list[Finding] = []
-        self._scopes: list[dict[str, ast.expr]] = [{}]
+        self._scopes: list[dict[str, list[ast.expr]]] = [{}]
 
-    def _lookup(self, name: str) -> ast.expr | None:
+    def _lookup(self, name: str) -> list[ast.expr]:
         for scope in reversed(self._scopes):
             if name in scope:
                 return scope[name]
-        return None
+        return []
 
     def _visit_scoped(self, node: ast.AST) -> None:
         self._scopes.append({})
@@ -289,7 +332,7 @@ class _ExecuteCallVisitor(ast.NodeVisitor):
 
     def visit_Assign(self, node: ast.Assign) -> None:
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            self._scopes[-1][node.targets[0].id] = node.value
+            self._scopes[-1].setdefault(node.targets[0].id, []).append(node.value)
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
@@ -304,7 +347,13 @@ def check_sql_file(path: Path, source: str | None = None) -> list[Finding]:
     content (e.g. from a staged-file snapshot); defaults to reading `path`."""
     if sqlglot is None:
         return []
-    text = source if source is not None else path.read_text(encoding="utf-8")
+    if source is not None:
+        text = source
+    else:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return []  # not a readable UTF-8 Python file -- skip it like a syntax error
     try:
         tree = ast.parse(text, filename=str(path))
     except SyntaxError:

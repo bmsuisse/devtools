@@ -74,7 +74,13 @@ def check_models_file(
     if not _is_disallowed_api_location(rel_parts[:-1], api_dir_names, allowed_subdirs):
         return []
 
-    text = source if source is not None else path.read_text(encoding="utf-8")
+    if source is not None:
+        text = source
+    else:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return []  # not a readable UTF-8 Python file -- skip it like a syntax error
     try:
         tree = ast.parse(text, filename=str(path))
     except SyntaxError:

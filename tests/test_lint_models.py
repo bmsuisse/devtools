@@ -116,3 +116,10 @@ def test_syntax_error_file_is_skipped(tmp_path: Path) -> None:
     path = tmp_path / "backend" / "api" / "bad.py"
     path.parent.mkdir(parents=True)
     assert check_models_file(path, repo_root=tmp_path, source="def f(:\n") == []
+
+
+def test_non_utf8_file_is_skipped_not_crashed(tmp_path: Path) -> None:
+    path = tmp_path / "backend" / "api" / "bad_encoding.py"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"\xff\xfe# not valid utf-8\n")
+    assert check_models_file(path, repo_root=tmp_path) == []
