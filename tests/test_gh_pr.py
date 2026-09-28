@@ -24,6 +24,7 @@ from bmsdna.devtools.gh_pr import (
     link_issue_to_pr,
     merge_conflict_message,
     protection_requires_status_checks,
+    publish,
     push_assets,
     retry,
     retry_hint,
@@ -227,6 +228,64 @@ def test_create_returns_none_url_on_failure(monkeypatch, capsys) -> None:
     assert "not found" in capsys.readouterr().err
 
 
+def test_publish_without_pr_id_uses_the_current_branchs_pr(monkeypatch) -> None:
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    publish("gh")
+
+    assert captured_cmd == ["gh", "pr", "ready"]
+
+
+def test_publish_with_pr_id_targets_that_pr_number(monkeypatch) -> None:
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    publish("gh", pr_id=99)
+
+    assert captured_cmd == ["gh", "pr", "ready", "99"]
+
+
+def test_publish_exits_with_gh_error_message(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.subprocess.run",
+        lambda cmd, **kwargs: MagicMock(returncode=1, stdout="", stderr="no PR found"),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        publish("gh", pr_id=99)
+
+    assert "no PR found" in str(exc_info.value)
+
+
+def test_set_draft_with_pr_id_views_and_undoes_that_pr_number(monkeypatch) -> None:
+    captured_cmds: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmds.append(cmd)
+        if "view" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps({"number": 99, "isDraft": False}), stderr="")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    assert set_draft("gh", pr_id=99) is True
+    view_cmd = next(cmd for cmd in captured_cmds if "view" in cmd)
+    undo_cmd = next(cmd for cmd in captured_cmds if "ready" in cmd)
+    assert "99" in view_cmd
+    assert undo_cmd == ["gh", "pr", "ready", "--undo", "99"]
+
+
 def test_set_draft_converts_ready_pr_to_draft(monkeypatch) -> None:
     calls: list[list[str]] = []
 
@@ -386,6 +445,34 @@ def test_update_skips_session_note_if_already_in_current_title(monkeypatch) -> N
     assert body == "new body"
 
 
+def test_update_with_pr_id_views_that_pr_and_ignores_the_passed_in_branch(monkeypatch) -> None:
+    """With `--pr-id`, `update()` must resolve the given PR directly (not the current
+    branch's), and namespace any uploaded screenshots/files under that PR's actual head
+    branch -- not the `branch` argument the caller passed in, which may be stale or just
+    plain wrong if that PR's branch isn't checked out locally at all.
+    """
+    _fake_push_assets(monkeypatch)
+    captured_cmds: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmds.append(cmd)
+        if "view" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps({"number": 99, "body": "existing body", "headRefName": "feature-y"}), stderr="")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    update("gh", "owner", "repo", "wrong-branch", screenshot_paths=["/tmp/shot.png"], pr_id=99)
+
+    view_cmd = next(cmd for cmd in captured_cmds if "view" in cmd)
+    edit_cmd = next(cmd for cmd in captured_cmds if "edit" in cmd)
+    assert "99" in view_cmd
+    assert edit_cmd[3] == "99"
+    body = edit_cmd[edit_cmd.index("--body") + 1]
+    assert "feature-y" in body
+    assert "wrong-branch" not in body
+
+
 def test_comment_with_screenshots_and_files_builds_both_sections(monkeypatch) -> None:
     _fake_push_assets(monkeypatch)
     captured_cmd: list[str] = []
@@ -402,6 +489,20 @@ def test_comment_with_screenshots_and_files_builds_both_sections(monkeypatch) ->
     assert "Fixed" in body
     assert "## Screenshots" in body
     assert "## Attachments" in body
+
+
+def test_comment_with_screenshots_with_pr_id_targets_that_pr_number(monkeypatch) -> None:
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    comment_with_screenshots("gh", "owner", "repo", "feature-x", "Fixed", [], pr_id=99)
+
+    assert captured_cmd == ["gh", "pr", "comment", "99", "--body", "Fixed"]
 
 
 def test_failed_run_ids_dedupes_and_ignores_non_failing_checks() -> None:
@@ -443,6 +544,23 @@ def test_retry_reruns_each_distinct_failed_run(monkeypatch) -> None:
     rerun_cmds = [cmd for cmd in captured_cmds if "rerun" in cmd]
     assert len(rerun_cmds) == 1
     assert rerun_cmds[0] == ["gh", "run", "rerun", "34882319228", "--failed"]
+
+
+def test_retry_with_pr_id_views_that_pr_instead_of_the_current_branch(monkeypatch) -> None:
+    captured_cmds: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmds.append(cmd)
+        if "view" in cmd:
+            return MagicMock(returncode=0, stdout=json.dumps({"statusCheckRollup": [FAILED_CHECK_RUN]}), stderr="")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    retry("gh", pr_id=99)
+
+    view_cmd = next(cmd for cmd in captured_cmds if "view" in cmd)
+    assert "99" in view_cmd
 
 
 def test_retry_exits_when_no_failed_run_found(monkeypatch) -> None:
@@ -771,6 +889,40 @@ def test_run_skips_deploy_hint_when_check_failed(monkeypatch, capsys) -> None:
 
     assert hint_calls == []
     assert "should not print" not in capsys.readouterr().out
+
+
+def test_get_pr_with_pr_id_views_that_pr_number_directly(monkeypatch) -> None:
+    """`--pr-id` must resolve the given PR directly via `gh pr view <number>`, not whatever
+    `gh` would otherwise resolve from the current branch -- so it works even without that
+    PR's branch checked out locally.
+    """
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout='{"number": 99}', stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    result = get_pr("gh", pr_id=99)
+
+    assert result == {"number": 99}
+    assert captured_cmd == ["gh", "pr", "view", "99", "--json", "number,title,baseRefName,headRefName,mergeable,statusCheckRollup,isDraft"]
+
+
+def test_get_pr_without_pr_id_views_the_current_branch(monkeypatch) -> None:
+    captured_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd[:] = cmd
+        return MagicMock(returncode=0, stdout='{"number": 7}', stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
+
+    get_pr("gh")
+
+    assert "99" not in captured_cmd
+    assert captured_cmd[:3] == ["gh", "pr", "view"]
 
 
 def test_get_pr_times_out_with_clear_message_not_a_hang(monkeypatch) -> None:

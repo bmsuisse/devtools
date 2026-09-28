@@ -64,6 +64,12 @@ is shown in the output. Check status is computed from
 `gh pr view --json statusCheckRollup` rather than `gh pr checks --json`,
 since the latter flag isn't available in all `gh` releases.
 
+Pass `--pr-id <number>` to check a specific PR directly instead of resolving
+it from the current branch — useful when that PR's branch isn't checked out
+locally at all. `bdt pr retry`, `pr publish`, `pr update`, and `pr comment`
+all accept the same option, for the same reason. (`pr watch-deploy` doesn't:
+it watches a branch-triggered build/workflow run, not any particular PR.)
+
 ## `bdt pr retry`
 
 Retry only the **failed** job(s)/stage(s) of the most recent build/run for the
@@ -75,7 +81,8 @@ bdt pr retry [--target-branch main]
 ```
 
 No build/run ID needed — like `bdt pr status`, it resolves the PR (and its
-latest build/run per pipeline/workflow) from the current branch.
+latest build/run per pipeline/workflow) from the current branch, or from
+`--pr-id` directly if given.
 
 **Azure DevOps**: uses the `retry=true` query parameter on the "Update
 Build" REST API
