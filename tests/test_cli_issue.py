@@ -16,12 +16,25 @@ GitHub issue #49:
    tags vs GitHub labels), instead of being silently ignored by the other backend.
 """
 
+import re
+
 from typer.testing import CliRunner
 
 from bmsdna.devtools.cli import _merge_tags_and_labels, app
 from bmsdna.devtools.gitrepo import AdoRemote, GitHubRemote, UnknownRemoteError
 
 runner = CliRunner()
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """Strip ANSI escape codes from Typer/Rich's error output before a substring check --
+    whether Rich colors/bolds a `CliRunner` invocation's captured output (and where it splits
+    escape codes across a flag name like `--org`) depends on env-var-driven color detection that
+    differs between a local shell and CI, even though the underlying plain text is identical.
+    """
+    return _ANSI_RE.sub("", text)
 
 
 def _not_a_repo():
@@ -180,7 +193,7 @@ def test_issue_search_org_and_github_org_together_errors_only_when_actually_need
     result = runner.invoke(app, ["issue", "search", "--org-wide", "--org", "bmeurope", "--github-org", "bmsuisse"])
 
     assert result.exit_code != 0
-    assert "only one of --org or --github-org" in result.output
+    assert "only one of --org or --github-org" in _plain(result.output)
 
 
 # -- --tag/--label aliasing ----------------------------------------------------
