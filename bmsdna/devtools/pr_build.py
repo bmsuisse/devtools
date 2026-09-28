@@ -542,6 +542,22 @@ def retry_failed_build(session: requests.Session, remote: AdoRemote, build_id: i
     r.raise_for_status()
 
 
+def _resolve_pr_and_branch(
+    session: requests.Session, remote: AdoRemote, target_branch: str, source_branch: str | None, pr_id: int | None
+) -> tuple[dict, str]:
+    """(pr, source_branch) -- shared by `retry()` and `run()`: resolves the PR by `pr_id`
+    directly if given, deriving `source_branch` from the PR's own `sourceRefName` (since
+    there may be no matching branch checked out locally at all when acting by id), else by
+    searching `source_branch`/`target_branch` as before, falling back to `current_branch()`
+    if `source_branch` wasn't given either.
+    """
+    if pr_id is not None:
+        pr = get_pr_by_id(session, remote, pr_id)
+        return pr, pr["sourceRefName"].removeprefix("refs/heads/")
+    source_branch = source_branch or current_branch()
+    return get_pr(session, remote, source_branch, target_branch), source_branch
+
+
 def retry(
     remote: AdoRemote, pat: str | None, target_branch: str, source_branch: str | None = None, pr_id: int | None = None
 ) -> None:
@@ -552,14 +568,7 @@ def retry(
     session = requests.Session()
     session.headers.update(auth_header(pat))
 
-    if pr_id is not None:
-        pr = get_pr_by_id(session, remote, pr_id)
-        # No local branch to go on when resolving by id (there may be no matching branch
-        # checked out at all) -- derive it from the PR itself instead.
-        source_branch = pr["sourceRefName"].removeprefix("refs/heads/")
-    else:
-        source_branch = source_branch or current_branch()
-        pr = get_pr(session, remote, source_branch, target_branch)
+    pr, source_branch = _resolve_pr_and_branch(session, remote, target_branch, source_branch, pr_id)
     builds = get_builds_for_pr(session, remote, source_branch, pr["pullRequestId"])
     if not builds:
         sys.exit(f"No builds found for PR #{pr['pullRequestId']} -- nothing to retry.")
@@ -668,18 +677,13 @@ def run(
     session.headers.update(auth_header(pat))
 
     def fetch_pr() -> dict:
-        """The PR to watch -- by `pr_id` directly if given, else resolved from
-        `source_branch`/`target_branch` as before. Also keeps `source_branch` in sync with
-        the PR's actual source ref when resolving by id, since `get_builds_for_pr` below
-        needs it and there may be no matching branch checked out locally at all.
+        """The PR to watch, via `_resolve_pr_and_branch` -- also keeps `source_branch` in
+        sync with the PR's actual source ref when resolving by id, since `get_builds_for_pr`
+        below needs it and there may be no matching branch checked out locally at all.
         """
         nonlocal source_branch
-        if pr_id is not None:
-            pr = get_pr_by_id(session, remote, pr_id)
-            source_branch = pr["sourceRefName"].removeprefix("refs/heads/")
-            return pr
-        source_branch = source_branch or current_branch()
-        return get_pr(session, remote, source_branch, target_branch)
+        pr, source_branch = _resolve_pr_and_branch(session, remote, target_branch, source_branch, pr_id)
+        return pr
 
     # When waiting, a pipeline's "latest" build may already be a *completed* run from before
     # this invocation (CI hasn't registered a new build for the current push yet). Only accept

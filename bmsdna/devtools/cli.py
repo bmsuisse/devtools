@@ -98,26 +98,33 @@ _PG_USER_OPTION = typer.Option(
 )
 
 
-def _resolve_ado_pr(
-    pat: str | None, remote: AdoRemote, source_branch: str | None, target: str, pr_id: int | None = None
-) -> tuple[requests.Session, dict]:
+def _resolve_ado_pr(pat: str | None, remote: AdoRemote, target: str, pr_id: int | None = None) -> tuple[requests.Session, dict]:
+    """Resolve the PR to act on -- by `pr_id` directly if given (no branch involved at all,
+    so this works even without that PR's branch checked out locally), else by searching for
+    the current branch's PR into `target`, as before.
+    """
     session = requests.Session()
     session.headers.update(auth_header(pat))
     if pr_id is not None:
         pr = pr_build.get_pr_by_id(session, remote, pr_id)
     else:
-        pr = pr_build.get_pr(session, remote, source_branch or current_branch(), target)
+        pr = pr_build.get_pr(session, remote, current_branch(), target)
     return session, pr
 
 
-def _gh_branch_for(gh: str, pr_id: int | None) -> str:
+def _gh_branch_for(gh: str, pr_id: int | None, *, needed: bool) -> str:
     """Branch to namespace uploaded screenshots/files under (see `gh_pr.push_assets`) --
     the checked-out branch normally, or (when acting on a PR by `--pr-id`, which may not
     have its branch checked out locally at all) that PR's actual head branch, via `gh`.
+
+    `needed=False` skips that extra `gh pr view` round-trip entirely when the caller isn't
+    attaching anything (a plain message/title/description update needs no branch at all).
     """
-    if pr_id is not None:
-        return gh_pr.get_pr(gh, pr_id).get("headRefName") or str(pr_id)
-    return current_branch()
+    if pr_id is None:
+        return current_branch()
+    if not needed:
+        return ""
+    return gh_pr.get_pr(gh, pr_id).get("headRefName") or str(pr_id)
 
 
 _PR_ID_HELP = "Act on this PR by ID/number directly, instead of resolving it from the current git branch (lets you skip having the PR's branch checked out locally)"
@@ -355,8 +362,7 @@ def pr_publish(
     if isinstance(remote, GitHubRemote):
         gh_pr.publish(require_gh(), pr_id=pr_id)
     else:
-        source_branch = current_branch() if pr_id is None else None
-        session, pr = _resolve_ado_pr(pat, remote, source_branch, target, pr_id=pr_id)
+        session, pr = _resolve_ado_pr(pat, remote, target, pr_id=pr_id)
         pr_build.publish(session, remote, pr)
 
 
@@ -460,11 +466,13 @@ def pr_update(
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
-        branch = _gh_branch_for(gh, pr_id)
+        # `gh_pr.update()` already re-resolves the branch itself from `--pr-id` (it needs the
+        # PR anyway, to fetch its current title/body) -- passing `_gh_branch_for` here would
+        # just be a second, redundant `gh pr view` round-trip for the same PR.
+        branch = current_branch() if pr_id is None else ""
         gh_pr.update(gh, remote.owner, remote.repo, branch, title, description, screenshot, file, pr_id=pr_id)
     else:
-        source_branch = current_branch() if pr_id is None else None
-        session, pr = _resolve_ado_pr(pat, remote, source_branch, target, pr_id=pr_id)
+        session, pr = _resolve_ado_pr(pat, remote, target, pr_id=pr_id)
         pr_build.update(session, remote, pr, title, description, screenshot, file)
 
 
@@ -501,11 +509,10 @@ def pr_comment(
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
-        branch = _gh_branch_for(gh, pr_id)
+        branch = _gh_branch_for(gh, pr_id, needed=bool(screenshot or file))
         gh_pr.comment_with_screenshots(gh, remote.owner, remote.repo, branch, message, screenshot, file, pr_id=pr_id)
     else:
-        source_branch = current_branch() if pr_id is None else None
-        session, pr = _resolve_ado_pr(pat, remote, source_branch, target, pr_id=pr_id)
+        session, pr = _resolve_ado_pr(pat, remote, target, pr_id=pr_id)
         pr_build.comment_with_screenshots(session, remote, pr["pullRequestId"], message, screenshot, file)
 
 

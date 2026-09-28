@@ -92,6 +92,13 @@ def _run_gh_json(gh: str, args: list[str]) -> dict:
     return json.loads(r.stdout)
 
 
+def _pr_id_args(pr_id: int | None) -> list[str]:
+    """`[str(pr_id)]` if given, else `[]` -- the optional positional PR number several `gh pr`
+    subcommands accept in place of resolving the PR from the current branch.
+    """
+    return [str(pr_id)] if pr_id is not None else []
+
+
 def get_pr(gh: str, pr_id: int | None = None) -> dict:
     """The PR for the current branch, however `gh` resolves it — there's no
     target-branch filter on `gh pr view` the way ADO's search API has one.
@@ -99,7 +106,7 @@ def get_pr(gh: str, pr_id: int | None = None) -> dict:
     If `pr_id` is given, resolves that PR directly instead -- lets a caller act on a
     specific PR without needing its branch checked out locally at all.
     """
-    args = ["pr", "view", *([str(pr_id)] if pr_id is not None else []), "--json", PR_VIEW_FIELDS]
+    args = ["pr", "view", *_pr_id_args(pr_id), "--json", PR_VIEW_FIELDS]
     return _run_gh_json(gh, args)
 
 
@@ -528,7 +535,7 @@ def link_issue_to_pr(gh: str, pr_number: int, body: str, issue_number: int) -> s
 
 def publish(gh: str, pr_id: int | None = None) -> None:
     """Mark the current branch's draft PR -- or `pr_id`'s, if given -- as ready for review."""
-    args = [gh, "pr", "ready", *([str(pr_id)] if pr_id is not None else [])]
+    args = [gh, "pr", "ready", *_pr_id_args(pr_id)]
     r = _run(args, capture_output=True, encoding="utf-8")
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or "`gh pr ready` failed")
@@ -547,7 +554,7 @@ def set_draft(gh: str, pr_id: int | None = None) -> bool:
     pr = get_pr(gh, pr_id)
     if pr.get("isDraft"):
         return False
-    args = [gh, "pr", "ready", "--undo", *([str(pr_id)] if pr_id is not None else [])]
+    args = [gh, "pr", "ready", "--undo", *_pr_id_args(pr_id)]
     r = _run(args, capture_output=True, encoding="utf-8")
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or "`gh pr ready --undo` failed")
@@ -677,7 +684,7 @@ def update(
     overridden with the PR's actual head branch rather than trusting the caller's guess,
     since there may be no matching branch checked out locally at all.
     """
-    view_args = ["pr", "view", *([str(pr_id)] if pr_id is not None else []), "--json", "number,title,body,headRefName"]
+    view_args = ["pr", "view", *_pr_id_args(pr_id), "--json", "number,title,body,headRefName"]
     pr = _run_gh_json(gh, view_args)
     if pr_id is not None:
         branch = pr.get("headRefName") or branch
@@ -717,7 +724,7 @@ def comment_with_screenshots(
     images = _screenshot_images(owner, repo, branch, screenshot_paths) if screenshot_paths else []
     files = _file_links(owner, repo, branch, file_paths) if file_paths else []
     content = ensure_agent_session_note(build_comment_content(message, images, files)) or ""
-    args = [gh, "pr", "comment", *([str(pr_id)] if pr_id is not None else []), "--body", content]
+    args = [gh, "pr", "comment", *_pr_id_args(pr_id), "--body", content]
     r = _run(args, capture_output=True, encoding="utf-8")
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or "`gh pr comment` failed")

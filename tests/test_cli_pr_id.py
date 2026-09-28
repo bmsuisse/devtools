@@ -64,10 +64,17 @@ def test_pr_publish_with_pr_id_passes_it_to_gh_pr_publish(monkeypatch) -> None:
     assert captured == {"gh": "gh", "pr_id": 99}
 
 
-def test_pr_update_with_pr_id_resolves_branch_via_gh_and_forwards_pr_id(monkeypatch) -> None:
+def test_pr_update_with_pr_id_skips_the_redundant_branch_lookup(monkeypatch) -> None:
+    """`gh_pr.update()` already re-resolves the branch itself from `--pr-id` (it needs the
+    PR anyway, to fetch its current title/body) -- the CLI must not pay for a second,
+    redundant `gh pr view` round-trip (`gh_pr.get_pr`) just to compute a `branch` value
+    `update()` is going to overwrite internally anyway.
+    """
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.get_pr", lambda gh, pr_id=None: {"headRefName": "feature-y"})
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.get_pr", lambda gh, pr_id=None: pytest.fail("must not resolve branch via gh_pr.get_pr")
+    )
     captured = {}
     monkeypatch.setattr(
         "bmsdna.devtools.cli.gh_pr.update",
@@ -79,13 +86,19 @@ def test_pr_update_with_pr_id_resolves_branch_via_gh_and_forwards_pr_id(monkeypa
     result = runner.invoke(app, ["pr", "update", "--pr-id", "99", "--title", "New title"])
 
     assert result.exit_code == 0, result.output
-    assert captured == {"branch": "feature-y", "title": "New title", "pr_id": 99}
+    assert captured == {"branch": "", "title": "New title", "pr_id": 99}
 
 
-def test_pr_comment_with_pr_id_resolves_branch_via_gh_and_forwards_pr_id(monkeypatch) -> None:
+def test_pr_comment_with_pr_id_and_no_attachments_skips_branch_resolution(monkeypatch) -> None:
+    """A message-only comment never uses `branch` (it only namespaces uploaded
+    screenshots/files) -- with `--pr-id`, resolving it would cost an extra `gh pr view`
+    round-trip for nothing, so it must be skipped entirely.
+    """
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.get_pr", lambda gh, pr_id=None: {"headRefName": "feature-y"})
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.get_pr", lambda gh, pr_id=None: pytest.fail("must not resolve branch via gh_pr.get_pr")
+    )
     captured = {}
     monkeypatch.setattr(
         "bmsdna.devtools.cli.gh_pr.comment_with_screenshots",
@@ -97,7 +110,29 @@ def test_pr_comment_with_pr_id_resolves_branch_via_gh_and_forwards_pr_id(monkeyp
     result = runner.invoke(app, ["pr", "comment", "--pr-id", "99", "--message", "hi"])
 
     assert result.exit_code == 0, result.output
-    assert captured == {"branch": "feature-y", "message": "hi", "pr_id": 99}
+    assert captured == {"branch": "", "message": "hi", "pr_id": 99}
+
+
+def test_pr_comment_with_pr_id_and_a_screenshot_resolves_the_real_head_branch(monkeypatch, tmp_path) -> None:
+    """With an attachment to namespace, `--pr-id` *does* need the PR's actual head branch --
+    resolved via `gh_pr.get_pr`, not whatever's checked out locally (which may not even be
+    this PR's branch).
+    """
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.get_pr", lambda gh, pr_id=None: {"headRefName": "feature-y"})
+    captured = {}
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.comment_with_screenshots",
+        lambda gh, owner, repo, branch, message, screenshot, file, pr_id=None: captured.update(branch=branch, pr_id=pr_id),
+    )
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"fake-png-bytes")
+
+    result = runner.invoke(app, ["pr", "comment", "--pr-id", "99", "--screenshot", str(shot)])
+
+    assert result.exit_code == 0, result.output
+    assert captured == {"branch": "feature-y", "pr_id": 99}
 
 
 # -- Azure DevOps -------------------------------------------------------------
