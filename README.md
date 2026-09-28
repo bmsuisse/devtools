@@ -204,10 +204,20 @@ Destructive commands (`issue delete`, `issue comment delete`) require an
 explicit `--yes` — there's no interactive confirmation prompt, since `bdt` is
 also invoked by AI-agent callers that can't answer one.
 
+`--tag` and `--label` are aliases of each other (repeatable on `create`,
+`search`, and `update`) — pass whichever reads naturally; the values are
+merged and routed to tags on Azure DevOps or labels on GitHub, whichever
+backend is actually active, instead of being silently ignored by the other
+one. Same for `update`'s `--remove-tag`/`--remove-label`.
+
 **Azure DevOps**: `--type` selects the work item type on `create` (`Bug`,
 `Task`, `User Story`, ... — whatever the project's process defines; default
-`Bug`). `--tag` sets/replaces the full tag list (repeatable; omit on
-`update` to leave tags unchanged). `--state` (`update` only) sets
+`Bug`). `--tag`/`--label` set/replace the full tag list (repeatable; omit
+both on `update` to leave tags unchanged). `update`'s `--remove-tag`/
+`--remove-label` instead removes just the named tag(s) and leaves the rest —
+unlike `--tag`/`--label`, which replace the whole set — by reading the work
+item's current tags first (there's no Azure DevOps "remove one tag" patch
+op). `--state` (`update` only) sets
 `System.State`, e.g. `Active`, `Resolved`, `Closed`. `--screenshot` uploads
 each image as a work item attachment (visible in the Attachments tab) and
 posts a comment embedding them inline with Markdown — the Description field
@@ -231,9 +241,9 @@ never falls back to `pyproject.toml`, so an unrelated field update (e.g.
 just `--title`) can't silently relocate the item to a different board.
 
 **GitHub**: a thin wrapper around `gh issue create` / `edit` / `delete` /
-`comment`. `--label` adds a label on `create`, or adds/removes one on
-`update` (paired with `--remove-label`); labels must already exist in the
-repo. `--screenshot` pushes images to a `pr-assets` branch (same trick `bdt
+`comment`. `--label`/`--tag` add a label on `create`, or add/remove one on
+`update` (paired with `--remove-label`/`--remove-tag`); labels must already
+exist in the repo. `--screenshot` pushes images to a `pr-assets` branch (same trick `bdt
 pr create --screenshot` uses, since GitHub has no API for uploading an image
 into an issue) and appends them to the issue body / comment as Markdown.
 `issue delete` is **permanent** — GitHub has no recycle bin for issues.

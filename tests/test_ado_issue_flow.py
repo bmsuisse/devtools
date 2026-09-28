@@ -265,6 +265,38 @@ def test_update_with_board_resolves_area_path() -> None:
     assert ops == [{"op": "add", "path": "/fields/System.AreaPath", "value": "MyProj\\Other Team"}]
 
 
+def test_update_remove_tag_fetches_current_tags_and_removes_named_one() -> None:
+    """`--remove-tag` (no `--tag`/`--label` given) must not fall back to `build_update_ops`'s
+    "replace the whole set" behavior -- it should read the work item's current tags first and
+    only drop the ones named, leaving the rest untouched.
+    """
+    session = make_session(get_map={"/_apis/wit/workitems/123": {"fields": {"System.Tags": "one; two; three"}}})
+
+    update(session, REMOTE, 123, remove_tags=["Two"])  # case-insensitive match against "two"
+
+    ops = session.patch.call_args.kwargs["json"]
+    assert ops == [{"op": "add", "path": "/fields/System.Tags", "value": "one; three"}]
+
+
+def test_update_remove_tag_combined_with_tags_filters_the_given_list_without_fetching() -> None:
+    session = make_session()
+
+    update(session, REMOTE, 123, tags=["one", "two", "three"], remove_tags=["two"])
+
+    session.get.assert_not_called()  # tags already given explicitly -- no need to fetch current ones
+    ops = session.patch.call_args.kwargs["json"]
+    assert ops == [{"op": "add", "path": "/fields/System.Tags", "value": "one; three"}]
+
+
+def test_update_remove_tag_alone_counts_as_a_real_change() -> None:
+    session = make_session(get_map={"/_apis/wit/workitems/123": {"fields": {"System.Tags": "one"}}})
+
+    result = update(session, REMOTE, 123, remove_tags=["one"])
+
+    assert result is not None
+    session.patch.assert_called_once()
+
+
 def test_delete_hits_work_item_delete_endpoint() -> None:
     session = make_session()
 
