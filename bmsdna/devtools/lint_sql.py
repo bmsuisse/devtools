@@ -151,9 +151,6 @@ def _is_trusted_sql_call(node: ast.AST, trust: _Trust = _NO_TRUST) -> bool:
             return True
         if _call_root_name(func) in trust.sqlglot_names:
             return True
-    if (isinstance(func, ast.Name) and func.id == "cast") or (isinstance(func, ast.Attribute) and func.attr == "cast"):
-        if node.args and _is_literal_string_ref(node.args[0]):
-            return True
     if isinstance(func, ast.Name):
         return func.id in trust.literal_funcs
     return (
@@ -162,6 +159,15 @@ def _is_trusted_sql_call(node: ast.AST, trust: _Trust = _NO_TRUST) -> bool:
         and func.value.id in ("self", "cls")
         and func.attr in trust.literal_funcs
     )
+
+
+def _literal_string_cast_inner(node: ast.Call) -> ast.expr | None:
+    """`cast(LiteralString, x)` -> `x`. The cast itself proves nothing: it is only as safe as `x`."""
+    func = node.func
+    is_cast = (isinstance(func, ast.Name) and func.id == "cast") or (isinstance(func, ast.Attribute) and func.attr == "cast")
+    if is_cast and len(node.args) == 2 and _is_literal_string_ref(node.args[0]):
+        return node.args[1]
+    return None
 
 
 def _unwrap_str_call(node: ast.Call) -> ast.expr | None:
@@ -360,6 +366,12 @@ def _check_resolved_candidate(
         return _literal_findings(resolved.value, path, lineno)
 
     if isinstance(resolved, ast.Call):
+        cast_inner = _literal_string_cast_inner(resolved)
+        if cast_inner is not None:
+            findings = _check_query_arg(cast_inner, lookup, path, lineno, trust, review)
+            if review and not findings and any(isinstance(c, (ast.Name, ast.Attribute, ast.Subscript)) for c in _resolve_candidates(cast_inner, lookup)):
+                findings = [_unverified_cast_finding(path, lineno)]
+            return findings
         inner = _unwrap_str_call(resolved)
         if inner is not None:
             return _check_query_arg(inner, lookup, path, lineno, trust, review)
@@ -377,6 +389,18 @@ def _unverified_call_finding(call: ast.Call, path: Path, lineno: int) -> Finding
         f"SQL text comes from `{ast.unparse(call.func)}(...)`, which isn't load_sql()/sql.SQL/sqlglot/a `-> LiteralString` function. "
         "AI reviewer: verify that no user-controlled value can reach this query (injection risk); if it is safe, "
         "type the producer `-> LiteralString`, build it with sqlglot, or add `# bdt-lint: ignore sql-unverified-call`.",
+        severity="review",
+    )
+
+
+def _unverified_cast_finding(path: Path, lineno: int) -> Finding:
+    return Finding(
+        path,
+        lineno,
+        "sql-unverified-cast",
+        "`cast(LiteralString, ...)` wraps a value that isn't visibly a sqlglot expression or a literal. AI reviewer: verify it "
+        "cannot carry user-controlled text (the cast doesn't make it safe); pass a sqlglot expression, or add "
+        "`# bdt-lint: ignore sql-unverified-cast`.",
         severity="review",
     )
 
