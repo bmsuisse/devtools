@@ -242,6 +242,37 @@ def test_retry_exits_when_no_builds_found(monkeypatch) -> None:
 FAILED_BUILD_2 = {"id": 200, "status": "completed", "result": "failed", "definition": {"id": 4, "name": "E2E"}}
 
 
+def test_retry_with_pr_id_resolves_by_id_instead_of_branch(monkeypatch, capsys) -> None:
+    """`--pr-id` resolves the PR directly by id (`get_pr_by_id`), deriving the source branch
+    to poll builds for from the PR's own `sourceRefName` -- not from `current_branch()` or
+    a `--target-branch`/branch-search lookup, since the PR's branch may not be checked out
+    locally at all.
+    """
+    retried: list[int] = []
+    pr_by_id = {**PR, "sourceRefName": "refs/heads/feature-x"}
+
+    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock())
+    monkeypatch.setattr("bmsdna.devtools.pr_build.auth_header", lambda pat: {})
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_pr", lambda *a, **k: pytest.fail("must not resolve by branch when --pr-id is given")
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.current_branch", lambda: pytest.fail("must not need a checked-out branch")
+    )
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr_by_id", lambda session, remote, pr_id: pr_by_id)
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_builds_for_pr", lambda session, remote, source, pr_id: [FAILED_BUILD]
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.retry_failed_build", lambda session, remote, build_id: retried.append(build_id)
+    )
+
+    retry(REMOTE, pat="fake-pat", target_branch="main", pr_id=42)
+
+    assert retried == [100]
+    assert "build #100" in capsys.readouterr().out
+
+
 def test_retry_still_attempts_remaining_builds_after_one_fails(monkeypatch, capsys) -> None:
     """A retry failure on one pipeline's build shouldn't stop bdt from attempting the others."""
     attempted: list[int] = []
@@ -430,6 +461,36 @@ def test_run_prints_deploy_hint_after_reporting_pr_success(monkeypatch, capsys) 
     run(REMOTE, "fake-pat", "main", wait=False, source_branch="feature-x")
 
     assert "HINT: run `bdt pr watch-deploy`" in capsys.readouterr().out
+
+
+def test_run_with_pr_id_resolves_by_id_and_derives_source_branch(monkeypatch, capsys) -> None:
+    """`--pr-id` resolves the PR via `get_pr_by_id` -- not `get_pr`'s branch search, and not
+    `current_branch()` -- deriving the source branch `get_builds_for_pr` needs from the
+    resolved PR's own `sourceRefName` instead.
+    """
+    pr = {"pullRequestId": 7, "title": "feat: y", "status": "active", "isDraft": False, "sourceRefName": "refs/heads/feature-y"}
+    ci_build = {**DEPLOY_BUILD, "id": 9, "definition": {"id": 3, "name": "CI"}}
+
+    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock())
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_pr", lambda *a, **k: pytest.fail("must not resolve by branch when --pr-id is given")
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.current_branch", lambda: pytest.fail("must not need a checked-out branch")
+    )
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr_by_id", lambda session, remote, pr_id: pr)
+
+    def fake_get_builds_for_pr(session, remote, source, pr_id):
+        assert source == "feature-y"
+        assert pr_id == 7
+        return [ci_build]
+
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_builds_for_pr", fake_get_builds_for_pr)
+
+    run(REMOTE, "fake-pat", "main", wait=False, pr_id=7)
+
+    out = capsys.readouterr().out
+    assert "PR #7" in out
 
 
 def test_run_prints_deploy_hint_when_pr_has_no_builds_at_all(monkeypatch, capsys) -> None:

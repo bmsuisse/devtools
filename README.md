@@ -65,6 +65,12 @@ is shown in the output. Check status is computed from
 `gh pr view --json statusCheckRollup` rather than `gh pr checks --json`,
 since the latter flag isn't available in all `gh` releases.
 
+Pass `--pr-id <number>` to check a specific PR directly instead of resolving
+it from the current branch — useful when that PR's branch isn't checked out
+locally at all. `bdt pr retry`, `pr publish`, `pr update`, and `pr comment`
+all accept the same option, for the same reason. (`pr watch-deploy` doesn't:
+it watches a branch-triggered build/workflow run, not any particular PR.)
+
 ## `bdt pr retry`
 
 Retry only the **failed** job(s)/stage(s) of the most recent build/run for the
@@ -76,7 +82,8 @@ bdt pr retry [--target-branch main]
 ```
 
 No build/run ID needed — like `bdt pr status`, it resolves the PR (and its
-latest build/run per pipeline/workflow) from the current branch.
+latest build/run per pipeline/workflow) from the current branch, or from
+`--pr-id` directly if given.
 
 **Azure DevOps**: uses the `retry=true` query parameter on the "Update
 Build" REST API
@@ -205,10 +212,20 @@ Destructive commands (`issue delete`, `issue comment delete`) require an
 explicit `--yes` — there's no interactive confirmation prompt, since `bdt` is
 also invoked by AI-agent callers that can't answer one.
 
+`--tag` and `--label` are aliases of each other (repeatable on `create`,
+`search`, and `update`) — pass whichever reads naturally; the values are
+merged and routed to tags on Azure DevOps or labels on GitHub, whichever
+backend is actually active, instead of being silently ignored by the other
+one. Same for `update`'s `--remove-tag`/`--remove-label`.
+
 **Azure DevOps**: `--type` selects the work item type on `create` (`Bug`,
 `Task`, `User Story`, ... — whatever the project's process defines; default
-`Bug`). `--tag` sets/replaces the full tag list (repeatable; omit on
-`update` to leave tags unchanged). `--state` (`update` only) sets
+`Bug`). `--tag`/`--label` set/replace the full tag list (repeatable; omit
+both on `update` to leave tags unchanged). `update`'s `--remove-tag`/
+`--remove-label` instead removes just the named tag(s) and leaves the rest —
+unlike `--tag`/`--label`, which replace the whole set — by reading the work
+item's current tags first (there's no Azure DevOps "remove one tag" patch
+op). `--state` (`update` only) sets
 `System.State`, e.g. `Active`, `Resolved`, `Closed`. `--screenshot` uploads
 each image as a work item attachment (visible in the Attachments tab) and
 posts a comment embedding them inline with Markdown — the Description field
@@ -232,9 +249,9 @@ never falls back to `pyproject.toml`, so an unrelated field update (e.g.
 just `--title`) can't silently relocate the item to a different board.
 
 **GitHub**: a thin wrapper around `gh issue create` / `edit` / `delete` /
-`comment`. `--label` adds a label on `create`, or adds/removes one on
-`update` (paired with `--remove-label`); labels must already exist in the
-repo. `--screenshot` pushes images to a `pr-assets` branch (same trick `bdt
+`comment`. `--label`/`--tag` add a label on `create`, or add/remove one on
+`update` (paired with `--remove-label`/`--remove-tag`); labels must already
+exist in the repo. `--screenshot` pushes images to a `pr-assets` branch (same trick `bdt
 pr create --screenshot` uses, since GitHub has no API for uploading an image
 into an issue) and appends them to the issue body / comment as Markdown.
 `issue delete` is **permanent** — GitHub has no recycle bin for issues.

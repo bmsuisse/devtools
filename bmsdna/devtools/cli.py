@@ -21,7 +21,7 @@ from . import logs as logs_mod
 from . import pr_build, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
 from .cli_tools import detect_agent_session, require_az, require_gh
-from .gitrepo import AdoRemote, GitHubRemote, current_branch, current_remote, head_commit_subject
+from .gitrepo import AdoRemote, GitHubRemote, UnknownRemoteError, current_branch, current_remote, head_commit_subject
 
 # Non-ASCII output (checkmarks, en-dashes in ADO project names, etc.) needs a
 # UTF-8 stream — the default Windows console codepage isn't UTF-8, and would
@@ -99,11 +99,36 @@ _PG_USER_OPTION = typer.Option(
 )
 
 
-def _resolve_ado_pr(pat: str | None, remote: AdoRemote, source_branch: str, target: str) -> tuple[requests.Session, dict]:
+def _resolve_ado_pr(pat: str | None, remote: AdoRemote, target: str, pr_id: int | None = None) -> tuple[requests.Session, dict]:
+    """Resolve the PR to act on -- by `pr_id` directly if given (no branch involved at all,
+    so this works even without that PR's branch checked out locally), else by searching for
+    the current branch's PR into `target`, as before.
+    """
     session = requests.Session()
     session.headers.update(auth_header(pat))
-    pr = pr_build.get_pr(session, remote, source_branch, target)
+    if pr_id is not None:
+        pr = pr_build.get_pr_by_id(session, remote, pr_id)
+    else:
+        pr = pr_build.get_pr(session, remote, current_branch(), target)
     return session, pr
+
+
+def _gh_branch_for(gh: str, pr_id: int | None, *, needed: bool) -> str:
+    """Branch to namespace uploaded screenshots/files under (see `gh_pr.push_assets`) --
+    the checked-out branch normally, or (when acting on a PR by `--pr-id`, which may not
+    have its branch checked out locally at all) that PR's actual head branch, via `gh`.
+
+    `needed=False` skips that extra `gh pr view` round-trip entirely when the caller isn't
+    attaching anything (a plain message/title/description update needs no branch at all).
+    """
+    if pr_id is None:
+        return current_branch()
+    if not needed:
+        return ""
+    return gh_pr.get_pr(gh, pr_id).get("headRefName") or str(pr_id)
+
+
+_PR_ID_HELP = "Act on this PR by ID/number directly, instead of resolving it from the current git branch (lets you skip having the PR's branch checked out locally)"
 
 
 def _after_create(step: Callable[[], None], label: str) -> None:
@@ -119,6 +144,28 @@ def _after_create(step: Callable[[], None], label: str) -> None:
         step()
     except (Exception, SystemExit) as e:
         print(f"Warning: PR created, but {label} failed: {e}")
+
+
+def _merge_tags_and_labels(tag: list[str] | None, label: list[str] | None) -> list[str] | None:
+    """`--tag` (Azure DevOps' term) and `--label` (GitHub's) are aliases of each other -- each
+    should route to whichever backend is actually active instead of being silently ignored by
+    the other one. Merges the two (deduplicated, case-insensitively, first occurrence wins) into
+    a single list handed to `gh_issue.*`'s `labels`/`add_labels`/`remove_labels` or
+    `ado_issue.*`'s `tags`/`remove_tags` params.
+
+    Returns `None` (not `[]`) when both inputs are `None` -- distinct from "explicitly passed as
+    empty" -- so `issue update`'s "omit --tag/--label to leave tags unchanged" contract isn't
+    broken into "replace tags with an empty list" just because this merge ran.
+    """
+    if tag is None and label is None:
+        return None
+    merged: list[str] = []
+    seen: set[str] = set()
+    for value in [*(tag or []), *(label or [])]:
+        if value.casefold() not in seen:
+            seen.add(value.casefold())
+            merged.append(value)
+    return merged
 
 
 def _link_and_label_github(gh: str, remote: GitHubRemote, issue_numbers: list[int]) -> None:
@@ -323,6 +370,7 @@ def pr_create(
 @pr_app.command("publish")
 def pr_publish(
     target: str = typer.Option("main", "--target", help="Target branch of the PR (Azure DevOps only)"),
+    pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -330,13 +378,14 @@ def pr_publish(
         help="Azure DevOps PAT (else falls back to `az` login)",
     ),
 ) -> None:
-    """Mark the draft PR opened from the current branch as ready for review (Azure DevOps or GitHub, auto-detected)."""
+    """Mark the draft PR opened from the current branch (or --pr-id, if given) as ready for
+    review (Azure DevOps or GitHub, auto-detected).
+    """
     remote = current_remote()
-    source_branch = current_branch()
     if isinstance(remote, GitHubRemote):
-        gh_pr.publish(require_gh())
+        gh_pr.publish(require_gh(), pr_id=pr_id)
     else:
-        session, pr = _resolve_ado_pr(pat, remote, source_branch, target)
+        session, pr = _resolve_ado_pr(pat, remote, target, pr_id=pr_id)
         pr_build.publish(session, remote, pr)
 
 
@@ -344,19 +393,23 @@ def pr_publish(
 def pr_status(
     target_branch: str = typer.Option("main", "--target-branch", help="Target branch of the PR (Azure DevOps only — gh has no equivalent filter, it always resolves the PR for the current branch)"),
     wait: bool = typer.Option(False, "--wait", help="Poll until all pipelines/checks are completed; stops early and reports status if one needs manual approval"),
+    pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
 ) -> None:
-    """Show build/check status for the PR opened from the current branch (Azure DevOps or GitHub, auto-detected)."""
+    """Show build/check status for the PR opened from the current branch, or for --pr-id
+    directly (Azure DevOps or GitHub, auto-detected).
+    """
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_pr.run(require_gh(), wait)
+        gh_pr.run(require_gh(), wait, pr_id=pr_id)
         return
-    pr_build.run(remote, pat, target_branch, wait)
+    pr_build.run(remote, pat, target_branch, wait, pr_id=pr_id)
 
 
 @pr_app.command("retry")
 def pr_retry(
     target_branch: str = typer.Option("main", "--target-branch", help="Target branch of the PR (Azure DevOps only)"),
+    pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -365,13 +418,14 @@ def pr_retry(
     ),
 ) -> None:
     """Retry only the failed job(s)/stage(s) of the most recent build/run for the PR opened
-    from the current branch (Azure DevOps or GitHub, auto-detected), instead of a full rerun.
+    from the current branch, or for --pr-id directly (Azure DevOps or GitHub, auto-detected),
+    instead of a full rerun.
     """
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_pr.retry(require_gh())
+        gh_pr.retry(require_gh(), pr_id=pr_id)
         return
-    pr_build.retry(remote, pat, target_branch)
+    pr_build.retry(remote, pat, target_branch, pr_id=pr_id)
 
 
 @pr_app.command("watch-deploy")
@@ -389,6 +443,8 @@ def pr_watch_deploy(
     pipeline that only runs on the target branch once a PR merges into it and usually does the
     actual deployment -- as opposed to `bdt pr status`, which watches builds/checks tied to a PR
     (Azure DevOps or GitHub, auto-detected).
+
+    No --pr-id here: this watches a branch-triggered run, not any particular PR.
     """
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
@@ -410,6 +466,7 @@ def pr_update(
         [], "--file", help="Path to an arbitrary file to append to the PR description as a linked attachment (repeatable)"
     ),
     target: str = typer.Option("main", "--target", help="Target branch of the PR (Azure DevOps only)"),
+    pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -417,7 +474,9 @@ def pr_update(
         help="Azure DevOps PAT (else falls back to `az` login)",
     ),
 ) -> None:
-    """Update the title/description of the PR opened from the current branch (Azure DevOps or GitHub, auto-detected)."""
+    """Update the title/description of the PR opened from the current branch, or --pr-id
+    directly (Azure DevOps or GitHub, auto-detected).
+    """
     for path in screenshot:
         if not Path(path).is_file():
             raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
@@ -428,11 +487,15 @@ def pr_update(
         raise typer.BadParameter("Provide at least one of --title, --description, --screenshot, --file")
 
     remote = current_remote()
-    source_branch = current_branch()
     if isinstance(remote, GitHubRemote):
-        gh_pr.update(require_gh(), remote.owner, remote.repo, source_branch, title, description, screenshot, file)
+        gh = require_gh()
+        # `gh_pr.update()` already re-resolves the branch itself from `--pr-id` (it needs the
+        # PR anyway, to fetch its current title/body) -- passing `_gh_branch_for` here would
+        # just be a second, redundant `gh pr view` round-trip for the same PR.
+        branch = current_branch() if pr_id is None else ""
+        gh_pr.update(gh, remote.owner, remote.repo, branch, title, description, screenshot, file, pr_id=pr_id)
     else:
-        session, pr = _resolve_ado_pr(pat, remote, source_branch, target)
+        session, pr = _resolve_ado_pr(pat, remote, target, pr_id=pr_id)
         pr_build.update(session, remote, pr, title, description, screenshot, file)
 
 
@@ -446,6 +509,7 @@ def pr_comment(
         [], "--file", help="Path to an arbitrary file to link in the comment as an attachment (repeatable)"
     ),
     target: str = typer.Option("main", "--target", help="Target branch of the PR (Azure DevOps only)"),
+    pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -453,7 +517,9 @@ def pr_comment(
         help="Azure DevOps PAT (else falls back to `az` login)",
     ),
 ) -> None:
-    """Post a comment on the PR opened from the current branch (Azure DevOps or GitHub, auto-detected)."""
+    """Post a comment on the PR opened from the current branch, or --pr-id directly
+    (Azure DevOps or GitHub, auto-detected).
+    """
     for path in screenshot:
         if not Path(path).is_file():
             raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
@@ -464,11 +530,12 @@ def pr_comment(
         raise typer.BadParameter("Provide at least one of --message, --screenshot, --file")
 
     remote = current_remote()
-    source_branch = current_branch()
     if isinstance(remote, GitHubRemote):
-        gh_pr.comment_with_screenshots(require_gh(), remote.owner, remote.repo, source_branch, message, screenshot, file)
+        gh = require_gh()
+        branch = _gh_branch_for(gh, pr_id, needed=bool(screenshot or file))
+        gh_pr.comment_with_screenshots(gh, remote.owner, remote.repo, branch, message, screenshot, file, pr_id=pr_id)
     else:
-        session, pr = _resolve_ado_pr(pat, remote, source_branch, target)
+        session, pr = _resolve_ado_pr(pat, remote, target, pr_id=pr_id)
         pr_build.comment_with_screenshots(session, remote, pr["pullRequestId"], message, screenshot, file)
 
 
@@ -484,8 +551,12 @@ def issue_create(
         r"(sets its Area Path; overrides \[tool.bdt.ado].board in pyproject.toml) or a GitHub Projects "
         r"(v2) board by title (overrides \[tool.bdt.github].board)",
     ),
-    label: list[str] = typer.Option([], "--label", help="Label to apply (GitHub only, repeatable)"),
-    tag: list[str] = typer.Option([], "--tag", help="Tag to apply (Azure DevOps only, repeatable)"),
+    label: list[str] = typer.Option(
+        [], "--label", help="Label/tag to apply (repeatable). Alias for --tag -- routes to labels on GitHub, tags on Azure DevOps."
+    ),
+    tag: list[str] = typer.Option(
+        [], "--tag", help="Label/tag to apply (repeatable). Alias for --label -- routes to tags on Azure DevOps, labels on GitHub."
+    ),
     screenshot: list[str] = typer.Option(
         [], "--screenshot", help="Path to an image to attach to the issue / work item (repeatable)"
     ),
@@ -508,17 +579,18 @@ def issue_create(
         if not Path(path).is_file():
             raise typer.BadParameter(f"File not found: {path}", param_hint="--file")
 
+    tags_or_labels = _merge_tags_and_labels(tag, label) or []
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
         resolved_board = gh_issue.resolve_board(board)
         gh_issue.create(
-            require_gh(), remote.owner, remote.repo, title, description, label, screenshot, args or [], file_paths=file, board=resolved_board
+            require_gh(), remote.owner, remote.repo, title, description, tags_or_labels, screenshot, args or [], file_paths=file, board=resolved_board
         )
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
         resolved_board = ado_issue.resolve_board(board)
-        ado_issue.create(session, remote, type_, title, description, resolved_board, tag, screenshot, file)
+        ado_issue.create(session, remote, type_, title, description, resolved_board, tags_or_labels, screenshot, file)
 
 
 @issue_app.command("search")
@@ -542,10 +614,33 @@ def issue_search(
         False,
         "--org-wide",
         help="Search every project in the Azure DevOps org, or every repo owned by the GitHub owner, "
-        "instead of just the current one. Can't be combined with --board.",
+        "instead of just the current one. Can't be combined with --board. Outside of any git repo (or "
+        "in one with no recognized origin remote), falls back to --org/--github-org instead of failing.",
     ),
-    label: list[str] = typer.Option([], "--label", help="Only issues carrying this label, ANDed (GitHub only, repeatable)"),
-    tag: list[str] = typer.Option([], "--tag", help="Only work items carrying this tag, ANDed (Azure DevOps only, repeatable)"),
+    org: str | None = typer.Option(
+        None,
+        "--org",
+        envvar=["AZDO_ORG", "BMS_ORG"],
+        help="Azure DevOps org to --org-wide search when there's no git repo (or no recognized remote) "
+        "to detect one from. Ignored whenever the current repo's remote resolves fine -- so it's safe "
+        "to leave set in your shell profile (e.g. for `find-repo`) without affecting a normal, in-repo "
+        "`issue search`.",
+    ),
+    github_org: str | None = typer.Option(
+        None,
+        "--github-org",
+        envvar=["GITHUB_ORG", "BMS_GITHUB_ORG"],
+        help="GitHub owner/org to --org-wide search when there's no git repo (or no recognized remote) "
+        "to detect one from. Ignored whenever the current repo's remote resolves fine -- so it's safe "
+        "to leave set in your shell profile (e.g. for `find-repo`) without affecting a normal, in-repo "
+        "`issue search`.",
+    ),
+    label: list[str] = typer.Option(
+        [], "--label", help="Only issues/work items carrying this label/tag, ANDed (repeatable). Alias for --tag."
+    ),
+    tag: list[str] = typer.Option(
+        [], "--tag", help="Only issues/work items carrying this label/tag, ANDed (repeatable). Alias for --label."
+    ),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -559,18 +654,43 @@ def issue_search(
     if state not in ("open", "closed", "all"):
         raise typer.BadParameter("Must be one of: open, closed, all", param_hint="--state")
     since = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%Y-%m-%d") if since_days > 0 else None
+    tags_or_labels = _merge_tags_and_labels(tag, label) or []
 
-    remote = current_remote()
+    # --org/--github-org are only ever consulted as a *fallback*, when `current_remote()` itself
+    # fails (no git repo, no origin remote, or a remote that's neither GitHub nor Azure DevOps) --
+    # never merely because one happens to be set. Both envvars are shared with the pre-existing
+    # `find-repo` command, which documents setting them persistently in a shell profile (and
+    # having *both* set, to search either host); gating on "is --org/--github-org set" instead of
+    # "did detecting the repo's own remote fail" would make an ordinary, in-repo `bdt issue
+    # search` break for anyone who followed that advice. `--org-wide` without either flag/envvar
+    # keeps today's behavior exactly: `current_remote()`'s own error propagates unchanged.
+    if org_wide:
+        try:
+            remote: AdoRemote | GitHubRemote = current_remote()
+        except (SystemExit, UnknownRemoteError):
+            if org and github_org:
+                raise typer.BadParameter("Pass only one of --org or --github-org", param_hint="--org") from None
+            if github_org:
+                remote = GitHubRemote(github_org, "")
+            elif org:
+                remote = AdoRemote(org, "", "")
+            else:
+                raise
+    else:
+        remote = current_remote()
+
     if isinstance(remote, GitHubRemote):
         resolved_board = gh_issue.resolve_board(board)
         gh_issue.search(
-            require_gh(), remote.owner, remote.repo, keywords or [], since, limit, state, board=resolved_board, org_wide=org_wide, labels=label
+            require_gh(), remote.owner, remote.repo, keywords or [], since, limit, state, board=resolved_board, org_wide=org_wide, labels=tags_or_labels
         )
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
         resolved_board = ado_issue.resolve_board(board)
-        ado_issue.search(session, remote, keywords or [], since=since, board=resolved_board, top=limit, state=state, org_wide=org_wide, tags=tag)
+        ado_issue.search(
+            session, remote, keywords or [], since=since, board=resolved_board, top=limit, state=state, org_wide=org_wide, tags=tags_or_labels
+        )
 
 
 @issue_app.command("update")
@@ -593,9 +713,25 @@ def issue_update(
         "apply where that exact state name exists for the work item's type — elsewhere the state is "
         "left unchanged and a comment records what was requested.",
     ),
-    tag: list[str] | None = typer.Option(None, "--tag", help="Replaces all tags (Azure DevOps only, repeatable); omit to leave unchanged"),
-    label: list[str] | None = typer.Option(None, "--label", help="Label to add (GitHub only, repeatable)"),
-    remove_label: list[str] | None = typer.Option(None, "--remove-label", help="Label to remove (GitHub only, repeatable)"),
+    tag: list[str] | None = typer.Option(
+        None,
+        "--tag",
+        help="Tag/label to add (repeatable); omit to leave unchanged. Alias for --label -- routes to labels on "
+        "GitHub (added alongside existing labels) or tags on Azure DevOps (replaces the full tag list, "
+        "combined with --remove-tag/--remove-label if also given).",
+    ),
+    label: list[str] | None = typer.Option(
+        None, "--label", help="Tag/label to add (repeatable); omit to leave unchanged. Alias for --tag."
+    ),
+    remove_tag: list[str] | None = typer.Option(
+        None,
+        "--remove-tag",
+        help="Tag/label to remove (repeatable). Alias for --remove-label -- on Azure DevOps this removes just "
+        "the named tag(s), leaving the rest untouched (unlike --tag/--label, which replace the whole set).",
+    ),
+    remove_label: list[str] | None = typer.Option(
+        None, "--remove-label", help="Tag/label to remove (repeatable). Alias for --remove-tag."
+    ),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -604,13 +740,15 @@ def issue_update(
     ),
 ) -> None:
     """Update an issue / work item's fields (Azure DevOps or GitHub, auto-detected)."""
+    tags_or_labels = _merge_tags_and_labels(tag, label)
+    removals = _merge_tags_and_labels(remove_tag, remove_label)
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_issue.update(require_gh(), number, title, description, label, remove_label, state)
+        gh_issue.update(require_gh(), number, title, description, tags_or_labels, removals, state)
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
-        ado_issue.update(session, remote, number, title, description, board, tag, state)
+        ado_issue.update(session, remote, number, title, description, board, tags_or_labels, removals, state)
 
 
 @issue_app.command("delete")

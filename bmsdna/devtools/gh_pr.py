@@ -22,7 +22,7 @@ from . import pr_issue_link
 from .cli_tools import CLI_TIMEOUT_SECS, EXIT_NEEDS_APPROVAL, PollHeartbeat, detect_agent_session, ensure_agent_session_note, is_claude_code
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
-PR_VIEW_FIELDS = "number,title,baseRefName,mergeable,statusCheckRollup,isDraft"
+PR_VIEW_FIELDS = "number,title,baseRefName,headRefName,mergeable,statusCheckRollup,isDraft"
 
 # GitHub has no API for uploading images to a PR description (only the web
 # UI's drag-and-drop, which needs a browser session). The standard
@@ -92,11 +92,22 @@ def _run_gh_json(gh: str, args: list[str]) -> dict:
     return json.loads(r.stdout)
 
 
-def get_pr(gh: str) -> dict:
+def _pr_id_args(pr_id: int | None) -> list[str]:
+    """`[str(pr_id)]` if given, else `[]` -- the optional positional PR number several `gh pr`
+    subcommands accept in place of resolving the PR from the current branch.
+    """
+    return [str(pr_id)] if pr_id is not None else []
+
+
+def get_pr(gh: str, pr_id: int | None = None) -> dict:
     """The PR for the current branch, however `gh` resolves it — there's no
     target-branch filter on `gh pr view` the way ADO's search API has one.
+
+    If `pr_id` is given, resolves that PR directly instead -- lets a caller act on a
+    specific PR without needing its branch checked out locally at all.
     """
-    return _run_gh_json(gh, ["pr", "view", "--json", PR_VIEW_FIELDS])
+    args = ["pr", "view", *_pr_id_args(pr_id), "--json", PR_VIEW_FIELDS]
+    return _run_gh_json(gh, args)
 
 
 def check_bucket(check: dict) -> str:
@@ -168,12 +179,12 @@ def failed_run_ids(checks: list[dict]) -> list[int]:
     return ids
 
 
-def retry(gh: str) -> None:
+def retry(gh: str, pr_id: int | None = None) -> None:
     """Rerun only the failed job(s) (and whatever depends on them) of the current
-    branch's PR's failing workflow run(s), via `gh run rerun --failed` -- not a full
-    rerun of the whole run.
+    branch's PR's failing workflow run(s) -- or `pr_id`'s, if given -- via
+    `gh run rerun --failed` -- not a full rerun of the whole run.
     """
-    pr = get_pr(gh)
+    pr = get_pr(gh, pr_id)
     run_ids = failed_run_ids(pr.get("statusCheckRollup") or [])
     if not run_ids:
         sys.exit("No failed GitHub Actions run found on the PR to retry.")
@@ -270,11 +281,11 @@ def exit_needs_approval(msg: str, item_lines: list[str], rerun_cmd: str) -> None
     sys.exit(EXIT_NEEDS_APPROVAL)
 
 
-def run(gh: str, wait: bool) -> None:
+def run(gh: str, wait: bool, pr_id: int | None = None) -> None:
     heartbeat = PollHeartbeat()
     draft_notice_shown = False
     while True:
-        pr = get_pr(gh)
+        pr = get_pr(gh, pr_id)
 
         # GitHub hasn't finished computing mergeability yet (usually resolves
         # within a couple seconds); worth a short wait even outside --wait mode
@@ -522,26 +533,29 @@ def link_issue_to_pr(gh: str, pr_number: int, body: str, issue_number: int) -> s
     return new_body
 
 
-def publish(gh: str) -> None:
-    """Mark the current branch's draft PR as ready for review."""
-    r = _run([gh, "pr", "ready"], capture_output=True, encoding="utf-8")
+def publish(gh: str, pr_id: int | None = None) -> None:
+    """Mark the current branch's draft PR -- or `pr_id`'s, if given -- as ready for review."""
+    args = [gh, "pr", "ready", *_pr_id_args(pr_id)]
+    r = _run(args, capture_output=True, encoding="utf-8")
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or "`gh pr ready` failed")
     print("Marked PR as ready for review")
     print("\nRun `bdt pr status --wait` to watch the PR's CI.")
 
 
-def set_draft(gh: str) -> bool:
-    """Convert the current branch's ready PR back to a draft (`gh pr ready --undo`).
+def set_draft(gh: str, pr_id: int | None = None) -> bool:
+    """Convert the current branch's ready PR -- or `pr_id`'s, if given -- back to a draft
+    (`gh pr ready --undo`).
 
     Returns True if it was just converted, False if it was already a draft --
     a caller announcing "converted to draft" shouldn't do so for a PR that
     already was one.
     """
-    pr = get_pr(gh)
+    pr = get_pr(gh, pr_id)
     if pr.get("isDraft"):
         return False
-    r = _run([gh, "pr", "ready", "--undo"], capture_output=True, encoding="utf-8")
+    args = [gh, "pr", "ready", "--undo", *_pr_id_args(pr_id)]
+    r = _run(args, capture_output=True, encoding="utf-8")
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or "`gh pr ready --undo` failed")
     return True
@@ -661,9 +675,19 @@ def update(
     description: str | None = None,
     screenshot_paths: list[str] | None = None,
     file_paths: list[str] | None = None,
+    pr_id: int | None = None,
 ) -> None:
-    """Update a PR's title and/or body, optionally appending screenshots/files to the body."""
-    pr = _run_gh_json(gh, ["pr", "view", "--json", "number,title,body"])
+    """Update a PR's title and/or body, optionally appending screenshots/files to the body.
+
+    Acts on the current branch's PR, or on `pr_id` directly if given -- in which case
+    `branch` (used only to namespace uploaded screenshots/files, see `push_assets`) is
+    overridden with the PR's actual head branch rather than trusting the caller's guess,
+    since there may be no matching branch checked out locally at all.
+    """
+    view_args = ["pr", "view", *_pr_id_args(pr_id), "--json", "number,title,body,headRefName"]
+    pr = _run_gh_json(gh, view_args)
+    if pr_id is not None:
+        branch = pr.get("headRefName") or branch
     args = [gh, "pr", "edit", str(pr["number"])]
     if title:
         args += ["--title", title]
@@ -691,16 +715,21 @@ def comment_with_screenshots(
     message: str | None,
     screenshot_paths: list[str],
     file_paths: list[str] | None = None,
+    pr_id: int | None = None,
 ) -> None:
-    """Post a comment, with a message and/or screenshots/files, on the current branch's PR."""
+    """Post a comment, with a message and/or screenshots/files, on the current branch's PR --
+    or on `pr_id` directly, if given.
+    """
     file_paths = file_paths or []
     images = _screenshot_images(owner, repo, branch, screenshot_paths) if screenshot_paths else []
     files = _file_links(owner, repo, branch, file_paths) if file_paths else []
     content = ensure_agent_session_note(build_comment_content(message, images, files)) or ""
-    r = _run([gh, "pr", "comment", "--body", content], capture_output=True, encoding="utf-8")
+    args = [gh, "pr", "comment", *_pr_id_args(pr_id), "--body", content]
+    r = _run(args, capture_output=True, encoding="utf-8")
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or "`gh pr comment` failed")
-    print(f"Added comment ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) to the current PR")
+    target = f"PR #{pr_id}" if pr_id is not None else "the current PR"
+    print(f"Added comment ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) to {target}")
 
 
 def protection_requires_status_checks(protection: dict) -> bool:
