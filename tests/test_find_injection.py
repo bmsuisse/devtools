@@ -236,3 +236,65 @@ def test_diff_mode_from_subdirectory_finds_untracked_files(tmp_path: Path) -> No
     (tmp_path / "backend" / "café.py").write_text("eval(y)\n")
     result = find_injection.run([], root=tmp_path / "backend", diff=True, base="main")
     assert [f.path.name for f in result.findings] == ["café.py"]
+
+
+def _rules_by_file(result) -> set[str]:
+    return {f.path.name for f in result.findings}
+
+
+def test_exclude_dir_name_path_and_glob(tmp_path: Path) -> None:
+    for d in ("vendor", "lib/generated", "web"):
+        (tmp_path / d).mkdir(parents=True)
+        (tmp_path / d / "bad.py").write_text("eval(x)\n")
+    (tmp_path / "web" / "bundle.js").write_text("eval(x);\n")
+    (tmp_path / "web.config").write_text("Content-Security-Policy: default-src 'self'")
+    assert len(find_injection.run([], root=tmp_path).findings) == 4
+    assert len(find_injection.run([], root=tmp_path, exclude=["vendor"]).findings) == 3
+    assert len(find_injection.run([], root=tmp_path, exclude=["lib/generated"]).findings) == 3
+    assert len(find_injection.run([], root=tmp_path, exclude=["web/*.js", "vendor/"]).findings) == 2
+    assert [f.path.name for f in find_injection.run([], root=tmp_path, exclude=["vendor", "lib", "web/*.js"]).findings] == ["bad.py"]
+
+
+def test_exclude_dirs_from_pyproject(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.lint]\nexclude_dirs = ["legacy"]\n')
+    (tmp_path / "legacy").mkdir()
+    (tmp_path / "legacy" / "bad.py").write_text("eval(x)\n")
+    assert find_injection.run([], root=tmp_path).findings == []
+
+
+def test_gitignored_files_are_skipped_unless_disabled(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True)
+    (tmp_path / ".gitignore").write_text("built/\n")
+    (tmp_path / "built").mkdir()
+    (tmp_path / "built" / "bad.py").write_text("eval(x)\n")
+    (tmp_path / "src.py").write_text("eval(y)\n")
+    assert [f.path.name for f in find_injection.run([], root=tmp_path).findings] == ["src.py"]
+    assert len(find_injection.run([], root=tmp_path, respect_gitignore=False).findings) == 2
+
+
+def test_min_js_is_skipped_long_lines_are_not_and_findings_deduplicated(tmp_path: Path) -> None:
+    (tmp_path / "app.min.js").write_text("eval(x);")
+    (tmp_path / "bundle.js").write_text("a=1;" * 400 + "eval(x);\n")
+    (tmp_path / "dup.js").write_text("el.innerHTML = a; el.innerHTML = b;\n")
+    (tmp_path / "web.config").write_text("Content-Security-Policy: default-src 'self'")
+    result = find_injection.run([], root=tmp_path)
+    assert [(f.path.name, f.rule) for f in result.findings] == [("bundle.js", "fe-eval"), ("dup.js", "fe-inner-html")]
+
+
+def test_sqlglot_expression_sql_is_not_flagged(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text(
+        """import sqlglot
+from sqlglot import exp, select
+from typing import cast, LiteralString
+
+
+def run(conn, t):
+    expr = select("a").from_(t).where(exp.column("b").eq(1))
+    conn.execute(expr.sql())
+    conn.execute(sqlglot.parse_one("select 1").sql(dialect="postgres"))
+    sql = exp.select("*").from_(exp.to_table(t)).sql("tsql")
+    conn.execute(sql)
+    conn.execute(cast(LiteralString, select("a").from_(t).sql(pretty=True)))
+"""
+    )
+    assert find_injection.run([], root=tmp_path).findings == []

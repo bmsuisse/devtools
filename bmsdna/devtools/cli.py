@@ -933,13 +933,20 @@ def find_injection_cmd(
     diff: bool = typer.Option(False, "--diff", help="Scan only files changed on this branch vs --base, plus uncommitted and untracked files."),
     base: str = typer.Option(None, "--base", help="Branch/ref to diff against with --diff (default: origin's default branch)."),
     strict: bool = typer.Option(False, "--strict", help="Also exit 1 when there are items to review (default: only definite errors fail)."),
+    exclude: list[str] = typer.Option(
+        None,
+        "--exclude",
+        help="Directory name (any depth), root-relative path, or glob to skip (repeatable), e.g. --exclude vendor --exclude 'assets/**/*.js'. "
+        "Also configurable via [tool.bdt.lint] exclude_dirs in pyproject.toml.",
+    ),
+    no_gitignore: bool = typer.Option(False, "--no-gitignore", help="Also scan files ignored by .gitignore (default: they are skipped)."),
 ) -> None:
     """Find injection risks (bmsuisse/devtools#54) in backend and frontend code: SQL built from f-strings/
     concatenation or from an unverifiable function call, eval/exec/shell/unsafe deserialization in Python,
     innerHTML/dangerouslySetInnerHTML/eval/new Function/un-sandboxed iframes in the frontend, and a missing
     or weakened Content-Security-Policy. Definite problems are errors; the rest are listed for a human/AI to verify.
     """
-    result = find_injection_mod.run(paths or [], diff=diff, base=base)
+    result = find_injection_mod.run(paths or [], diff=diff, base=base, exclude=exclude or [], respect_gitignore=not no_gitignore)
     raise typer.Exit(find_injection_mod.print_report(result, strict=strict))
 
 

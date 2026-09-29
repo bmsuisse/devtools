@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import os
 import re
+from fnmatch import fnmatch
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from .bdt_config import load_bdt_table
 from .injection_frontend import (
     FRONTEND_SUFFIXES,
     check_frontend_file,
@@ -165,21 +167,79 @@ def _scan_python(path: Path) -> list[Finding]:
     return sql + check_python_sinks(path)
 
 
-def _walk_repo_text_files(root: Path, exclude_dirs: frozenset[str]):
+_GLOB_CHARS = frozenset("*?[")
+
+
+class _ScanFilter:
+    """Which files are in scope: not under an excluded directory name, not matching an `--exclude`
+    path/glob (relative to the repo root), and -- in a git repo, unless disabled -- not gitignored
+    (tracked files always count, like git itself)."""
+
+    def __init__(self, root: Path, exclude: list[str], respect_gitignore: bool) -> None:
+        self.root = root
+        self.dir_names = _DEFAULT_EXCLUDE_DIR_NAMES | {".next", "coverage", "storybook-static"}
+        self._patterns: list[str] = []
+        for entry in exclude:
+            entry = entry.replace("\\", "/").strip().strip("/")
+            if entry.startswith("./"):
+                entry = entry[2:]
+            if not entry:
+                continue
+            if "/" not in entry and not _GLOB_CHARS & set(entry):
+                self.dir_names = self.dir_names | {entry}
+            else:
+                self._patterns.append(entry)
+        self._visible = _git_visible_files(root) if respect_gitignore else None
+
+    def allows(self, path: Path) -> bool:
+        resolved = path.resolve()
+        try:
+            rel = resolved.relative_to(self.root)
+        except ValueError:
+            return True
+        if any(part in self.dir_names for part in rel.parts[:-1]):
+            return False
+        posix = rel.as_posix()
+        if any(fnmatch(posix, pat) or fnmatch(posix, pat + "/*") for pat in self._patterns):
+            return False
+        return self._visible is None or resolved in self._visible
+
+
+def _git_visible_files(root: Path) -> set[Path] | None:
+    """Tracked plus untracked-but-not-ignored files under `root`, or None outside a git repo."""
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            cwd=root,
+            capture_output=True,
+            encoding="utf-8",
+        )
+    except FileNotFoundError:
+        return None
+    if out.returncode != 0:
+        return None
+    return {(root / name).resolve() for name in out.stdout.split("\0") if name}
+
+
+def _is_minified(path: Path) -> bool:
+    return path.name.endswith(".min.js")
+
+
+def _walk_repo_text_files(root: Path, scope: _ScanFilter):
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in exclude_dirs]
+        dirnames[:] = [d for d in dirnames if d not in scope.dir_names]
         for name in filenames:
             if name in _SKIP_NAMES or name.endswith(".min.js") or not (name in _CONFIG_NAMES or name.endswith(_CONFIG_SUFFIXES)):
                 continue
             candidate = Path(dirpath, name)
             try:
-                if candidate.stat().st_size <= _MAX_CSP_FILE_BYTES:
+                if candidate.stat().st_size <= _MAX_CSP_FILE_BYTES and scope.allows(candidate):
                     yield candidate
             except OSError:
                 continue
 
 
-def check_csp(root: Path, scanned: list[Path], exclude_dirs: frozenset[str], only: set[Path] | None = None) -> list[Finding]:
+def check_csp(root: Path, scanned: list[Path], scope: _ScanFilter, only: set[Path] | None = None) -> list[Finding]:
     """Warns when the project serves a web UI/API (frontend files scanned, or a Python web framework
     imported) but no file anywhere under `root` mentions a Content-Security-Policy. Always searches the
     whole repo -- a diff that doesn't touch the header config mustn't look like "no CSP configured".
@@ -198,7 +258,7 @@ def check_csp(root: Path, scanned: list[Path], exclude_dirs: frozenset[str], onl
         return []
     weakened: list[Finding] = []
     found = False
-    for candidate in _walk_repo_text_files(root, exclude_dirs):
+    for candidate in _walk_repo_text_files(root, scope):
         try:
             text = candidate.read_text(encoding="utf-8")
         except OSError, UnicodeDecodeError:
@@ -227,36 +287,31 @@ def run(
     root: Path | None = None,
     diff: bool = False,
     base: str | None = None,
+    exclude: list[str] | None = None,
+    respect_gitignore: bool = True,
 ) -> InjectionResult:
+    """`exclude`: directory names or root-relative paths/globs to skip, on top of `[tool.bdt.lint] exclude_dirs`
+    in pyproject.toml and the built-in list (node_modules, .venv, dist, ...)."""
     root = (root or Path.cwd()).resolve()
-    exclude_dirs = _DEFAULT_EXCLUDE_DIR_NAMES | {
-        ".next",
-        "coverage",
-        "storybook-static",
-    }
+    configured = [str(d) for d in load_bdt_table("lint", root).get("exclude_dirs", []) or []]
+    scope = _ScanFilter(root, configured + list(exclude or []), respect_gitignore)
     findings: list[Finding] = []
     changed: list[Path] = []
 
     if diff:
-        changed = [p for p in diff_files(root, base) if not _in_excluded_dir(p, root, exclude_dirs)]
+        changed = [p for p in diff_files(root, base) if scope.allows(p)]
         py_files = [p for p in changed if p.suffix == ".py"]
         fe_files = [p for p in changed if p.suffix.lower() in FRONTEND_SUFFIXES]
     else:
         targets = [Path(p).resolve() for p in paths] if paths else [root]
-        py_files, missing = _iter_files(targets, exclude_dirs, (".py",))
-        fe_files, _ = _iter_files(targets, exclude_dirs, FRONTEND_SUFFIXES)
-        findings.extend(
-            Finding(
-                p,
-                0,
-                "path-not-found",
-                f"'{p}' doesn't exist -- nothing was scanned for it.",
-            )
-            for p in missing
-        )
+        py_files, missing = _iter_files(targets, scope.dir_names, (".py",))
+        fe_files, _ = _iter_files(targets, scope.dir_names, FRONTEND_SUFFIXES)
+        py_files = [p for p in py_files if scope.allows(p)]
+        fe_files = [p for p in fe_files if scope.allows(p)]
+        findings.extend(Finding(p, 0, "path-not-found", f"'{p}' doesn't exist -- nothing was scanned for it.") for p in missing)
 
     py_files = [p for p in py_files if not _is_test_file(p, root)]
-    fe_files = [p for p in fe_files if not _is_test_file(p, root)]
+    fe_files = [p for p in fe_files if not _is_test_file(p, root) and not _is_minified(p)]
 
     if py_files:
         require_sqlglot()
@@ -265,16 +320,19 @@ def run(
     for path in fe_files:
         findings.extend(check_frontend_file(path))
 
-    findings.extend(check_csp(root, py_files + fe_files, exclude_dirs, {p.resolve() for p in changed} if diff else None))
-    return InjectionResult(findings=_filter_ignored(findings))
+    findings.extend(check_csp(root, py_files + fe_files, scope, {p.resolve() for p in changed} if diff else None))
+    return InjectionResult(findings=_dedupe(_filter_ignored(findings)))
 
 
-def _in_excluded_dir(path: Path, root: Path, exclude_dirs: frozenset[str]) -> bool:
-    try:
-        parts = path.relative_to(root).parts[:-1]
-    except ValueError:
-        parts = path.parts[:-1]
-    return any(part in exclude_dirs for part in parts)
+def _dedupe(findings: list[Finding]) -> list[Finding]:
+    seen: set[tuple[Path, int, str]] = set()
+    unique: list[Finding] = []
+    for f in findings:
+        key = (f.path, f.line, f.rule)
+        if key not in seen:
+            seen.add(key)
+            unique.append(f)
+    return unique
 
 
 def _is_test_file(path: Path, root: Path) -> bool:
