@@ -4,7 +4,8 @@ Shared developer tooling for BMS projects: PR build/check status, PR
 creation, issue/work item creation and comments, git worktrees (creation and
 merged-worktree/orphaned-test-DB cleanup), a commit-and-push helper with
 pre-flight checks, Azure log queries, and static checks (`bdt lint`) for
-postgres/psycopg SQL rules, pydantic-model placement, and baseline tooling.
+postgres/psycopg SQL rules, pydantic-model placement, hand-wired HTTP access in
+TypeScript, and baseline tooling.
 `bdt pr *` and `bdt issue *` auto-detect whether the current repo's `origin`
 remote is Azure DevOps or GitHub and use `az`/`gh` accordingly.
 Consolidates near-duplicate scripts that used to be copy-pasted across
@@ -512,6 +513,30 @@ call, regardless of driver, without flagging e.g. a duckdb `COPY ... TO` export.
 with more than 5 fields defined directly under an `api/` directory, instead of
 an `api/models/`(/`schemas/`/`dto/`) module.
 
+**`ts-handwired-http`** / **`ts-handwired-model`** (TypeScript, `.ts`/`.tsx`/`.mts`,
+[bmsuisse/devtools#52](https://github.com/bmsuisse/devtools/issues/52)) — a frontend
+package that already generates an API client from the backend's OpenAPI schema
+(its nearest `package.json` depends on `openapi-typescript`/`openapi-fetch`,
+`@hey-api/openapi-ts`, `orval`, ... or has an `openapi` script) should use it. The
+rule flags hand-wired `fetch(...)`, `axios`/`axios.create(...)` and
+`new XMLHttpRequest()` (`ts-handwired-http`), and a `.json()` result typed by
+casting/annotating a hand-written model (`ts-handwired-model`, only reported
+outside the block of a `fetch`/`axios` call, which the http rule already covers). Packages without a generator are skipped, as
+are generated code (`generated/`, `*.gen.ts`, `*.generated.ts`, `api-types.ts`,
+`*.d.ts`; also their `.mts`/`.tsx` variants), tests (`*.test.*`, `*.spec.*`, `__tests__/`, `e2e/`, `tests/`) and
+third-party URLs (`fetch("https://...")`). Hand-wired access is fine for files and
+other non-JSON traffic, since generators handle those badly, so a call is *not*
+flagged when its enclosing block mentions `FormData`, `Blob`/`.blob()`/
+`.arrayBuffer()`, `getReader()`/`response.body`/`TextDecoder`/`EventSource`/`SSE`,
+`createObjectURL`, `new File(`, an `application/octet-stream`/`multipart/`/
+`text/event-stream` content type, or returns `.text()` (a plain-text response), or sits in a `createClient(...)` setup (a `fetch` passed to the generated client).
+It's a tokenizer-level heuristic, not a type-aware analysis; to silence a
+legitimate exception, put a comment on (or right above) the line:
+
+```ts
+// bdt-lint: ignore ts-handwired-http -- websocket handshake, not in the schema
+```
+
 **Tooling config** — the repo must declare `ty`, `ruff` and `pytest` as
 dependencies, have `pytest` configured (`[tool.pytest.ini_options]` or a
 `pytest.ini`/`setup.cfg`), and have a `prek.toml` (see the `prek` skill).
@@ -527,7 +552,10 @@ Other `[tool.bdt.lint]` knobs (all optional): `exclude_dirs` (extra directory
 names to skip, beyond the built-in `.venv`/`node_modules`/etc. list),
 `pydantic_field_threshold` (default 5), `pydantic_base_classes` (default
 `["BaseModel", "PostgresTableModel"]`), `pydantic_allowed_subdirs` (default
-`["models", "schemas", "dto"]`), `pydantic_api_dir_names` (default `["api"]`).
+`["models", "schemas", "dto"]`), `pydantic_api_dir_names` (default `["api"]`),
+`ts_exclude_globs` (repo-relative globs of TypeScript files to skip, e.g.
+`["src/legacy/*"]`), `ts_non_json_markers` (extra strings that mark a call's
+enclosing block as non-JSON traffic).
 
 Requires [sqlglot](https://pypi.org/project/sqlglot/) for the SQL checks —
 already pulled in transitively via `pgdevkit[db]`, but declared explicitly as
