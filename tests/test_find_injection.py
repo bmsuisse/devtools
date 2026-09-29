@@ -330,3 +330,65 @@ def test_csp_weakening_in_test_files_is_ignored(tmp_path: Path) -> None:
     (tmp_path / "web.config").write_text("Content-Security-Policy: default-src 'self'")
     (tmp_path / "test_headers.py").write_text("H = \"Content-Security-Policy: script-src 'unsafe-eval'\"\n")
     assert find_injection.run([], root=tmp_path).findings == []
+
+
+def _lines(tmp_path: Path, src: str) -> list[int]:
+    path = tmp_path / "m.py"
+    path.write_text(src)
+    return [f.line for f in check_python_sinks(path)]
+
+
+def test_names_assigned_only_constants_are_constant(tmp_path: Path) -> None:
+    src = """import os, subprocess
+GREETING = "echo hi"
+CMD = GREETING + " there"
+
+
+def ok(flag):
+    os.system(CMD)
+    cmd = "ls" if flag else "pwd"
+    os.system(cmd)
+    for c in ("a", "b"):
+        os.system(c)
+    os.system(f"{GREETING} now")
+    prog = "bun"
+    subprocess.check_call([prog, "x"], shell=True)
+
+
+def bad(arg, flag):
+    cmd = "ls"
+    cmd += arg
+    os.system(cmd)
+    other = "ls"
+    if flag:
+        other = arg
+    os.system(other)
+    os.system(arg)
+    for c in arg:
+        os.system(c)
+    os.system(undefined_name)
+"""
+    assert _lines(tmp_path, src) == [20, 24, 25, 27, 28]
+
+
+def test_global_rebinding_and_class_scope_defeat_constness(tmp_path: Path) -> None:
+    src = """import os
+GREETING = "echo hi"
+
+
+def rebind():
+    global GREETING
+    GREETING = input()
+
+
+def use():
+    os.system(GREETING)
+
+
+class K:
+    x = "ls"
+
+    def m(self):
+        os.system(x)
+"""
+    assert _lines(tmp_path, src) == [11, 18]
