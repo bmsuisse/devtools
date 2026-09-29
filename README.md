@@ -594,8 +594,7 @@ code 0 unless `--strict`).
   `staticwebapp.config.json`, nginx/web.config, ...); `csp-weakened` for `'unsafe-inline'`,
   `'unsafe-eval'` or a wildcard `script-src`. The CSP lookup always covers the whole repo, even with `--diff`.
 
-Skipped automatically: test files, generated code, minified bundles (`*.min.js` or any line over
-1000 characters), the usual build/vendor directories (`node_modules`, `.venv`, `dist`, ...) and,
+Skipped automatically: test files, generated code, `*.min.js` files, the usual build/vendor directories (`node_modules`, `.venv`, `dist`, ...) and,
 inside a git repo, anything ignored by `.gitignore` (pass `--no-gitignore` to scan it anyway).
 Add more with `--exclude` (repeatable; a directory name at any depth, a root-relative path, or a glob
 such as `'assets/**/*.js'`) or `[tool.bdt.lint] exclude_dirs = [...]` in `pyproject.toml`.

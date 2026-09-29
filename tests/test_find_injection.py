@@ -272,10 +272,10 @@ def test_gitignored_files_are_skipped_unless_disabled(tmp_path: Path) -> None:
     assert len(find_injection.run([], root=tmp_path, respect_gitignore=False).findings) == 2
 
 
-def test_minified_files_are_skipped_and_findings_deduplicated(tmp_path: Path) -> None:
+def test_min_js_is_skipped_long_lines_are_not_and_findings_deduplicated(tmp_path: Path) -> None:
     (tmp_path / "app.min.js").write_text("eval(x);")
     (tmp_path / "bundle.js").write_text("a=1;" * 400 + "eval(x);\n")
     (tmp_path / "dup.js").write_text("el.innerHTML = a; el.innerHTML = b;\n")
     (tmp_path / "web.config").write_text("Content-Security-Policy: default-src 'self'")
     result = find_injection.run([], root=tmp_path)
-    assert [(f.path.name, f.rule) for f in result.findings] == [("dup.js", "fe-inner-html")]
+    assert [(f.path.name, f.rule) for f in result.findings] == [("bundle.js", "fe-eval"), ("dup.js", "fe-inner-html")]

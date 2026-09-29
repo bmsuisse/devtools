@@ -168,7 +168,6 @@ def _scan_python(path: Path) -> list[Finding]:
 
 
 _GLOB_CHARS = frozenset("*?[")
-_MINIFIED_LINE_LEN = 1000
 
 
 class _ScanFilter:
@@ -223,12 +222,7 @@ def _git_visible_files(root: Path) -> set[Path] | None:
 
 
 def _is_minified(path: Path) -> bool:
-    if path.name.endswith((".min.js", ".min.mjs", ".min.css")):
-        return True
-    try:
-        return any(len(line) > _MINIFIED_LINE_LEN for line in path.read_text(encoding="utf-8").splitlines())
-    except (OSError, UnicodeDecodeError):
-        return False
+    return path.name.endswith(".min.js")
 
 
 def _walk_repo_text_files(root: Path, scope: _ScanFilter):
