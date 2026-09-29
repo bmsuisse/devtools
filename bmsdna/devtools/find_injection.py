@@ -71,6 +71,8 @@ _CONFIG_NAMES = frozenset(
     }
 )
 _EXCLUDE_TEST_DIR_NAMES = DEFAULT_TS_EXCLUDE_DIR_NAMES - {"generated", "__generated__"}
+_SKIP_NAMES = frozenset({"package-lock.json", "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock", "npm-shrinkwrap.json"})
+_MAX_CSP_FILE_BYTES = 1_000_000
 _TS_LIKE = (".ts", ".tsx", ".mts", ".js", ".jsx", ".mjs")
 
 AI_INSTRUCTION = (
@@ -123,9 +125,9 @@ def diff_files(root: Path, base: str | None = None) -> list[Path]:
     if chosen is None:
         sys.exit(f"Couldn't find a base branch to diff against (tried {', '.join(c for c in candidates if c)}); pass --base.")
     names: set[str] = set()
-    names.update(_git(["diff", "--name-only", "--diff-filter=ACMR", f"{chosen}...HEAD"], root).splitlines())
-    names.update(_git(["diff", "--name-only", "--diff-filter=ACMR", "HEAD"], root).splitlines())
-    names.update(_git(["ls-files", "--others", "--exclude-standard"], root).splitlines())
+    names.update(_git(["diff", "--name-only", "-z", "--diff-filter=ACMR", f"{chosen}...HEAD"], root).split("\0"))
+    names.update(_git(["diff", "--name-only", "-z", "--diff-filter=ACMR", "HEAD"], root).split("\0"))
+    names.update(_git(["ls-files", "--others", "--exclude-standard", "--full-name", "-z"], root).split("\0"))
     return sorted(p for p in (repo / n for n in names if n) if p.is_file())
 
 
@@ -167,14 +169,21 @@ def _walk_repo_text_files(root: Path, exclude_dirs: frozenset[str]):
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in exclude_dirs]
         for name in filenames:
-            if name in _CONFIG_NAMES or name.endswith(_CONFIG_SUFFIXES):
-                yield Path(dirpath, name)
+            if name in _SKIP_NAMES or name.endswith(".min.js") or not (name in _CONFIG_NAMES or name.endswith(_CONFIG_SUFFIXES)):
+                continue
+            candidate = Path(dirpath, name)
+            try:
+                if candidate.stat().st_size <= _MAX_CSP_FILE_BYTES:
+                    yield candidate
+            except OSError:
+                continue
 
 
-def check_csp(root: Path, scanned: list[Path], exclude_dirs: frozenset[str]) -> list[Finding]:
+def check_csp(root: Path, scanned: list[Path], exclude_dirs: frozenset[str], only: set[Path] | None = None) -> list[Finding]:
     """Warns when the project serves a web UI/API (frontend files scanned, or a Python web framework
     imported) but no file anywhere under `root` mentions a Content-Security-Policy. Always searches the
-    whole repo -- a diff that doesn't touch the header config mustn't look like "no CSP configured"."""
+    whole repo -- a diff that doesn't touch the header config mustn't look like "no CSP configured".
+    `only` (diff mode) restricts `csp-weakened` findings to the changed files."""
     is_web = any(p.suffix.lower() in FRONTEND_SUFFIXES for p in scanned)
     if not is_web:
         for p in scanned:
@@ -198,8 +207,7 @@ def check_csp(root: Path, scanned: list[Path], exclude_dirs: frozenset[str]) -> 
             found = True
             weakened.extend(find_csp_weakening(candidate, text))
     if found:
-        scanned_set = {p.resolve() for p in scanned}
-        return [f for f in weakened if f.path.resolve() in scanned_set]
+        return [f for f in weakened if only is None or f.path.resolve() in only]
     return [
         Finding(
             root,
@@ -227,13 +235,14 @@ def run(
         "storybook-static",
     }
     findings: list[Finding] = []
+    changed: list[Path] = []
 
     if diff:
         changed = [p for p in diff_files(root, base) if not _in_excluded_dir(p, root, exclude_dirs)]
         py_files = [p for p in changed if p.suffix == ".py"]
         fe_files = [p for p in changed if p.suffix.lower() in FRONTEND_SUFFIXES]
     else:
-        targets = [Path(p) for p in paths] if paths else [root]
+        targets = [Path(p).resolve() for p in paths] if paths else [root]
         py_files, missing = _iter_files(targets, exclude_dirs, (".py",))
         fe_files, _ = _iter_files(targets, exclude_dirs, FRONTEND_SUFFIXES)
         findings.extend(
@@ -256,7 +265,7 @@ def run(
     for path in fe_files:
         findings.extend(check_frontend_file(path))
 
-    findings.extend(check_csp(root, py_files + fe_files, exclude_dirs))
+    findings.extend(check_csp(root, py_files + fe_files, exclude_dirs, {p.resolve() for p in changed} if diff else None))
     return InjectionResult(findings=_filter_ignored(findings))
 
 

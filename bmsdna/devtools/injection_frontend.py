@@ -30,7 +30,7 @@ _HTML_SUFFIXES = (".html", ".htm")
 _MASKABLE_SUFFIXES = (".ts", ".tsx", ".mts", ".js", ".jsx", ".mjs")
 
 _CSP_RE = re.compile(r"content-security-policy", re.IGNORECASE)
-_CSP_WEAK_RE = re.compile(r"'unsafe-(?:inline|eval)'|script-src[^;\"'`\n]*\s\*(?:\s|;|$)", re.IGNORECASE)
+_CSP_WEAK_RE = re.compile(r"'unsafe-(?:inline|eval)'|(?:script|default)-src[^;\n]*\s\*(?=[\s;\"'`]|$)", re.IGNORECASE)
 
 _INNER_HTML_ASSIGN_RE = re.compile(r"\.\s*(?:inner|outer)HTML\s*\+?=(?!=)")
 _INSERT_HTML_RE = re.compile(r"\.\s*insertAdjacentHTML\s*\(")
@@ -40,8 +40,8 @@ _NEW_FUNCTION_RE = re.compile(r"(?<![\w$.])new\s+Function\s*\(")
 _TIMER_STRING_RE = re.compile(r"(?<![\w$.])(?:setTimeout|setInterval)\s*\(\s*(?:['\"`]|[\w$.]+\s*\+)")
 _DANGEROUS_HTML_RE = re.compile(r"\bdangerouslySetInnerHTML\b")
 _V_HTML_RE = re.compile(r"\bv-html\s*=|\{@html\b")
-_JS_URL_RE = re.compile(r"""javascript\s*:""", re.IGNORECASE)
-_POST_MESSAGE_STAR_RE = re.compile(r"""postMessage\s*\([^)]*,\s*['"]\*['"]\s*\)""")
+_JS_URL_ATTR_RE = re.compile(r"""(?:href|src|action|formaction)\s*=\s*\{?\s*[`'"]\s*javascript\s*:""", re.IGNORECASE)
+_POST_MESSAGE_STAR_RE = re.compile(r"""postMessage\s*\([^;]*?,\s*['"]\*['"]\s*[,)]""")
 _IFRAME_RE = re.compile(r"<iframe\b", re.IGNORECASE)
 _SRCDOC_RE = re.compile(r"\bsrc[dD]oc\b\s*=")
 
@@ -75,7 +75,7 @@ def _check_iframes(path: Path, code: str, skeleton: str) -> list[Finding]:
     for match in _IFRAME_RE.finditer(skeleton):
         tag = _iframe_tag(code, match.start())
         sandbox = re.search(
-            r"\bsandbox\b(?:\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|\{\s*[\"'`]([^\"'`]*)[\"'`]\s*\}))?",
+            r"(?<=\s)sandbox(?![\w-])(?:\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|\{\s*[\"'`]([^\"'`]*)[\"'`]\s*\}))?",
             tag,
         )
         if sandbox is None:
@@ -200,25 +200,13 @@ def check_frontend_file(path: Path, source: str | None = None) -> list[Finding]:
             "`v-html`/`{@html}` renders raw HTML -- XSS if it contains user data. AI reviewer: verify it's sanitised.",
             "review",
         )
-    if suffix in (".vue", ".svelte", *_HTML_SUFFIXES):
-        scan(
-            _JS_URL_RE,
-            "fe-javascript-url",
-            "`javascript:` URL executes code on click -- use an event handler.",
-            "error",
-            code,
-        )
-    else:
-        scan(
-            re.compile(
-                r"""(?:href|src|action)\s*=\s*\{?\s*[`'"]javascript\s*:""",
-                re.IGNORECASE,
-            ),
-            "fe-javascript-url",
-            "`javascript:` URL executes code on click -- use an event handler.",
-            "error",
-            code,
-        )
+    scan(
+        _JS_URL_ATTR_RE,
+        "fe-javascript-url",
+        "`javascript:` URL executes code on click -- use an event handler.",
+        "error",
+        code,
+    )
     return findings
 
 

@@ -269,3 +269,9 @@ def run(cur):
     path = tmp_path / "a.py"
     path.write_text(source)
     assert check_sql_file(path, review=True) == []
+
+
+def test_sql_call_is_not_trusted_without_a_sqlglot_import(tmp_path: Path) -> None:
+    path = tmp_path / "a.py"
+    path.write_text("def run(cur, builder):\n    cur.execute(builder.sql())\n    cur.execute(exp.text)\n")
+    assert [f.rule for f in check_sql_file(path, review=True)] == ["sql-unverified-call"]

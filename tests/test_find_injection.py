@@ -144,8 +144,7 @@ def test_pragma_ignore_and_severity_exit_codes(tmp_path: Path) -> None:
 
 def test_sql_injection_is_error_and_unverified_call_is_review(tmp_path: Path) -> None:
     (tmp_path / "db.py").write_text(
-        'def a(cur, x):\n    cur.execute(f"select * from t where a = {x}")\n\n'
-        "def b(cur, x):\n    cur.execute(build(x))\n\n"
+        'def a(cur, x):\n    cur.execute(f"select * from t where a = {x}")\n\ndef b(cur, x):\n    cur.execute(build(x))\n\n'
     )
     result = _run(tmp_path)
     assert [f.rule for f in result.errors] == ["sql-fstring-injection"]
@@ -181,3 +180,59 @@ def test_diff_mode_without_base_branch_exits(tmp_path: Path) -> None:
     subprocess.run(["git", "init", "-b", "odd"], cwd=tmp_path, check=True, capture_output=True)
     with pytest.raises(SystemExit):
         find_injection.run([], root=tmp_path, diff=True)
+
+
+def test_python_aliased_imports_and_keyword_args(tmp_path: Path) -> None:
+    src = """
+from os import system
+from subprocess import run as sp_run
+import subprocess as sp
+from yaml import load
+system(cmd)
+sp_run(cmd, shell=True)
+sp.run(args=cmd, shell=True)
+os_cmd = system("a" + "b")
+load(data)
+"""
+    assert [r for r, _ in _py(tmp_path, src)] == [
+        "py-shell-command",
+        "py-shell-command",
+        "py-shell-command",
+        "py-unsafe-yaml",
+    ]
+
+
+def test_frontend_regex_edge_cases(tmp_path: Path) -> None:
+    assert "fe-post-message-star" in _fe(tmp_path, "win.postMessage(JSON.stringify(payload), '*');", "a.ts")
+    assert _fe(tmp_path, '<iframe src="https://host/sandbox/embed" data-sandbox="x" />') == {"fe-iframe-no-sandbox"}
+    assert _fe(tmp_path, "<p>JavaScript: disabled</p><!-- javascript: x -->", "a.html") == set()
+    assert _fe(tmp_path, '<a href="javascript:alert(1)">x</a>', "a.html") == {"fe-javascript-url"}
+
+
+def test_csp_wildcard_after_quoted_source(tmp_path: Path) -> None:
+    (tmp_path / "staticwebapp.config.json").write_text('{"globalHeaders": {"Content-Security-Policy": "script-src \'self\' *; img-src *"}}')
+    (tmp_path / "app.py").write_text("from fastapi import FastAPI\n")
+    result = _run(tmp_path)
+    assert [f.rule for f in result.findings] == ["csp-weakened"]
+    assert result.findings[0].path.name == "staticwebapp.config.json"
+
+
+def test_relative_paths_still_skip_test_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "helpers.py").write_text("eval(x)\n")
+    monkeypatch.chdir(tmp_path)
+    assert find_injection.run(["."], root=tmp_path).findings == []
+
+
+def test_diff_mode_from_subdirectory_finds_untracked_files(tmp_path: Path) -> None:
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-c", "user.email=a@b.c", "-c", "user.name=t", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    git("init", "-b", "main")
+    (tmp_path / "backend").mkdir()
+    (tmp_path / "backend" / "keep.py").write_text("x = 1\n")
+    git("add", ".")
+    git("commit", "-m", "base")
+    (tmp_path / "backend" / "café.py").write_text("eval(y)\n")
+    result = find_injection.run([], root=tmp_path / "backend", diff=True, base="main")
+    assert [f.path.name for f in result.findings] == ["café.py"]

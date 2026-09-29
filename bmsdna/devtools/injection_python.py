@@ -17,18 +17,37 @@ _SAFE_YAML_LOADERS = frozenset({"SafeLoader", "CSafeLoader", "BaseLoader"})
 _MARKUP_FUNCS = frozenset({"Markup", "mark_safe", "format_html_join"})
 
 
-def _dotted(func: ast.expr) -> str:
+_FIRST_ARG_KEYWORDS = ("command", "cmd", "args", "source", "string", "template_source", "data", "s")
+
+
+def _import_aliases(tree: ast.AST) -> dict[str, str]:
+    """Local name -> the dotted name it was imported as (`from os import system as sh` -> `sh: os.system`)."""
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.asname:
+                    aliases[a.asname] = a.name
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            for a in node.names:
+                aliases[a.asname or a.name] = f"{node.module}.{a.name}"
+    return aliases
+
+
+def _dotted(func: ast.expr, aliases: dict[str, str]) -> str:
     parts: list[str] = []
     while isinstance(func, ast.Attribute):
         parts.append(func.attr)
         func = func.value
     if isinstance(func, ast.Name):
-        parts.append(func.id)
+        parts.append(aliases.get(func.id, func.id))
     return ".".join(reversed(parts))
 
 
 def _is_literal(node: ast.expr) -> bool:
-    return isinstance(node, ast.Constant) and isinstance(node.value, str)
+    if isinstance(node, ast.Constant):
+        return isinstance(node.value, str)
+    return isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add) and _is_literal(node.left) and _is_literal(node.right)
 
 
 def _shell_true(call: ast.Call) -> bool:
@@ -39,10 +58,10 @@ def _finding(path: Path, node: ast.Call, rule: str, message: str, severity: str)
     return Finding(path, node.lineno, rule, message, severity=severity)
 
 
-def _check_call(path: Path, node: ast.Call) -> list[Finding]:
-    name = _dotted(node.func)
+def _check_call(path: Path, node: ast.Call, aliases: dict[str, str]) -> list[Finding]:
+    name = _dotted(node.func, aliases)
     last = name.rsplit(".", 1)[-1]
-    first_arg = node.args[0] if node.args else None
+    first_arg = node.args[0] if node.args else next((kw.value for kw in node.keywords if kw.arg in _FIRST_ARG_KEYWORDS), None)
     dynamic = first_arg is not None and not _is_literal(first_arg)
 
     if name in ("eval", "exec") and dynamic:
@@ -107,7 +126,7 @@ def _check_call(path: Path, node: ast.Call) -> list[Finding]:
         loader = next((kw.value for kw in node.keywords if kw.arg == "Loader"), None)
         if loader is None and len(node.args) > 1:
             loader = node.args[1]
-        if name == "yaml.unsafe_load" or loader is None or _dotted(loader).rsplit(".", 1)[-1] not in _SAFE_YAML_LOADERS:
+        if name == "yaml.unsafe_load" or loader is None or _dotted(loader, aliases).rsplit(".", 1)[-1] not in _SAFE_YAML_LOADERS:
             return [
                 _finding(
                     path,
@@ -162,8 +181,9 @@ def check_python_sinks(path: Path, source: str | None = None) -> list[Finding]:
         tree = ast.parse(source, filename=str(path))
     except SyntaxError:
         return []
+    aliases = _import_aliases(tree)
     findings: list[Finding] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
-            findings.extend(_check_call(path, node))
+            findings.extend(_check_call(path, node, aliases))
     return findings
