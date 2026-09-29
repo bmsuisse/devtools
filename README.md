@@ -594,7 +594,12 @@ code 0 unless `--strict`).
   `staticwebapp.config.json`, nginx/web.config, ...); `csp-weakened` for `'unsafe-inline'`,
   `'unsafe-eval'` or a wildcard `script-src`. The CSP lookup always covers the whole repo, even with `--diff`.
 
-Test files and generated code are skipped. Silence a confirmed-safe finding with
+Skipped automatically: test files, generated code, minified bundles (`*.min.js` or any line over
+1000 characters), the usual build/vendor directories (`node_modules`, `.venv`, `dist`, ...) and,
+inside a git repo, anything ignored by `.gitignore` (pass `--no-gitignore` to scan it anyway).
+Add more with `--exclude` (repeatable; a directory name at any depth, a root-relative path, or a glob
+such as `'assets/**/*.js'`) or `[tool.bdt.lint] exclude_dirs = [...]` in `pyproject.toml`.
+Identical findings on the same line are reported once. Silence a confirmed-safe finding with
 `# bdt-lint: ignore <rule>` (Python) or `// bdt-lint: ignore <rule>` (TS/JS) on, or directly above, the line.
 
 ## Releasing
