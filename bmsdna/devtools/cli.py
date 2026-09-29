@@ -16,6 +16,7 @@ from . import ado_issue, app_service_logs, commit as commit_mod
 from . import env_config
 from . import find_repo as find_repo_mod
 from . import gh_issue, gh_pr
+from . import lint as lint_mod
 from . import logs as logs_mod
 from . import pr_build, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
@@ -900,6 +901,29 @@ def pull(
     hits a merge conflict.
     """
     pull_mod.run(remote=remote, no_default=no_default, dry_run=dry_run, pull_args=pull_args or [])
+
+
+@app.command("lint")
+def lint(
+    paths: list[str] = typer.Argument(
+        None,
+        help="Files and/or directories to scan (default: current directory, recursive). Pass an explicit "
+        "list of files -- e.g. from a prek/pre-commit hook's staged-file list -- to lint only those.",
+    ),
+    no_tooling_check: bool = typer.Option(
+        False,
+        "--no-tooling-check",
+        help="Skip the ty/ruff/pytest/prek tooling-config check. Also bypassable per-repo via "
+        "[tool.bdt.lint] skip_tooling_check = true in pyproject.toml.",
+    ),
+) -> None:
+    """Static checks (bmsuisse/skills#52): postgres/psycopg SQL rules on every `.execute()` call
+    (must use load_sql()/a .sql file, a t-string, or psycopg.sql for anything beyond a trivial
+    query; never an f-string/concatenation/`%`-formatting), pydantic-model placement under api/
+    directories, and that the repo declares/configures ty, ruff, pytest and prek.
+    """
+    result = lint_mod.run(paths or [], skip_tooling_check=no_tooling_check)
+    raise typer.Exit(lint_mod.print_report(result))
 
 
 @app.command("find-repo")
