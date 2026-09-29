@@ -109,7 +109,8 @@ def _is_sql_composed_call(node: ast.AST) -> bool:
     if not isinstance(node, ast.Call):
         return False
     func = node.func
-    return isinstance(func, ast.Attribute) and func.attr in ("SQL", "Identifier", "Composed")
+    name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
+    return name in ("SQL", "Identifier", "Composed")
 
 
 _UNWRAP_METHODS = frozenset({"strip", "lstrip", "rstrip"})

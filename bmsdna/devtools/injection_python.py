@@ -50,6 +50,11 @@ def _is_literal(node: ast.expr) -> bool:
     return isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add) and _is_literal(node.left) and _is_literal(node.right)
 
 
+def _is_arg_list(node: ast.expr | None) -> bool:
+    """A list/tuple command whose program is a literal: extra (even dynamic) items are arguments, not shell code."""
+    return isinstance(node, (ast.List, ast.Tuple)) and bool(node.elts) and _is_literal(node.elts[0])
+
+
 def _shell_true(call: ast.Call) -> bool:
     return any(kw.arg == "shell" and isinstance(kw.value, ast.Constant) and kw.value.value is True for kw in call.keywords)
 
@@ -84,7 +89,7 @@ def _check_call(path: Path, node: ast.Call, aliases: dict[str, str]) -> list[Fin
                 "error",
             )
         ]
-    if name.startswith("subprocess.") and _shell_true(node):
+    if name.startswith("subprocess.") and _shell_true(node) and not _is_arg_list(first_arg):
         if dynamic or isinstance(first_arg, (ast.JoinedStr, ast.BinOp)):
             return [
                 _finding(

@@ -298,3 +298,35 @@ def run(conn, t):
 """
     )
     assert find_injection.run([], root=tmp_path).findings == []
+
+
+def test_subprocess_arg_list_with_shell_true_and_bare_sql(tmp_path: Path) -> None:
+    (tmp_path / "ok.py").write_text(
+        """import subprocess
+from psycopg.sql import SQL
+
+
+def run(conn, target):
+    subprocess.check_call(["bun", "run", "build"], shell=True)
+    subprocess.check_call(["bun", "run", target], cwd=target, shell=True)
+    conn.execute(SQL("UPDATE t SET a = 1 WHERE id = %s"), (1,))
+"""
+    )
+    (tmp_path / "bad.py").write_text(
+        """import subprocess
+
+
+def run(cmd, target):
+    subprocess.check_call([cmd, "x"], shell=True)
+    subprocess.check_call(f"bun run {target}", shell=True)
+"""
+    )
+    result = find_injection.run([], root=tmp_path)
+    assert [(f.path.name, f.line, f.rule) for f in result.findings] == [("bad.py", 5, "py-shell-command"), ("bad.py", 6, "py-shell-command")]
+
+
+def test_csp_weakening_in_test_files_is_ignored(tmp_path: Path) -> None:
+    (tmp_path / "app.js").write_text("run();\n")
+    (tmp_path / "web.config").write_text("Content-Security-Policy: default-src 'self'")
+    (tmp_path / "test_headers.py").write_text("H = \"Content-Security-Policy: script-src 'unsafe-eval'\"\n")
+    assert find_injection.run([], root=tmp_path).findings == []
