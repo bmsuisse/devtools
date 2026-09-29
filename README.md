@@ -562,6 +562,41 @@ already pulled in transitively via `pgdevkit[db]`, but declared explicitly as
 the `bmsdna-devtools[lint]` extra; a clear install hint is printed (not a raw
 `ImportError`) if it's ever missing.
 
+## `bdt find-injection`
+
+Scans backend and frontend code for injection risks, and warns when a web project has no
+Content-Security-Policy.
+
+```bash
+bdt find-injection [PATHS...]            # files/folders, default: current directory
+bdt find-injection --diff [--base main]  # only files changed on this branch + uncommitted/untracked
+bdt find-injection --strict              # also fail on "review" items
+```
+
+Findings have two severities: **error** (a definite unsafe pattern, exit code 1) and **review**
+(depends on where a value comes from; listed with an instruction for an AI/human to verify, exit
+code 0 unless `--strict`).
+
+- **SQL** (Python `.execute()`): f-string / `%` / concatenation / `.format()` SQL is an error.
+  SQL from `load_sql()`, `sql.SQL`, sqlglot (`expr.sql()`, `sqlglot.*`), `cast(LiteralString, ...)` or
+  a function in the same file annotated `-> LiteralString` is trusted; SQL from any other function
+  call is a `sql-unverified-call` review item. (`bdt lint` accepts the same trusted forms but never
+  reports unverified calls.)
+- **Other Python sinks**: `eval`/`exec`, `os.system`, `subprocess(..., shell=True)`, `yaml.load`
+  without a safe loader, `pickle.loads`, `Markup()`/`mark_safe()`, Jinja `autoescape=False`,
+  `render_template_string`.
+- **Frontend** (TS/JS/JSX/Vue/Svelte/HTML): `innerHTML`/`outerHTML`/`insertAdjacentHTML`,
+  `dangerouslySetInnerHTML`, `v-html`, `document.write`, `eval`, `new Function`, string
+  `setTimeout`/`setInterval`, `javascript:` URLs, `postMessage(..., "*")`, `srcdoc`, and `<iframe>`
+  without `sandbox` (or with `allow-scripts` + `allow-same-origin`).
+- **CSP**: `csp-missing` when a web project (frontend files or a Python web framework) has no
+  `Content-Security-Policy` anywhere in the repo (header in code, `<meta http-equiv>`,
+  `staticwebapp.config.json`, nginx/web.config, ...); `csp-weakened` for `'unsafe-inline'`,
+  `'unsafe-eval'` or a wildcard `script-src`. The CSP lookup always covers the whole repo, even with `--diff`.
+
+Test files and generated code are skipped. Silence a confirmed-safe finding with
+`# bdt-lint: ignore <rule>` (Python) or `// bdt-lint: ignore <rule>` (TS/JS) on, or directly above, the line.
+
 ## Releasing
 
 Bump `version` in `pyproject.toml` as part of your PR, same as any other

@@ -223,3 +223,49 @@ async def g(cur, query, params):
 
 def test_syntax_error_file_is_skipped(tmp_path: Path) -> None:
     assert check_sql_file(tmp_path / "bad.py", source="def f(:\n") == []
+
+
+def test_sqlglot_and_literalstring_queries_are_trusted(tmp_path: Path) -> None:
+    source = '''
+from typing import LiteralString, cast
+import sqlglot
+
+def build() -> LiteralString:
+    return "select 1"
+
+def run(cur, expr, user_input):
+    cur.execute(expr.sql(dialect="postgres"))
+    cur.execute(sqlglot.select("a").from_("t").sql())
+    cur.execute(cast(LiteralString, expr))
+    cur.execute(build())
+    q = expr.sql()
+    cur.execute(q)
+'''
+    path = tmp_path / "a.py"
+    path.write_text(source)
+    assert check_sql_file(path, review=True) == []
+
+
+def test_unverified_call_is_only_reported_in_review_mode(tmp_path: Path) -> None:
+    source = '''
+def run(cur, user_input):
+    cur.execute(make_query(user_input))
+'''
+    path = tmp_path / "a.py"
+    path.write_text(source)
+    assert check_sql_file(path) == []
+    findings = check_sql_file(path, review=True)
+    assert [(f.rule, f.severity) for f in findings] == [("sql-unverified-call", "review")]
+
+
+def test_dedent_and_strip_of_literal_are_unwrapped(tmp_path: Path) -> None:
+    source = '''
+import textwrap
+
+def run(cur):
+    cur.execute(textwrap.dedent("select 1 from t"), {})
+    cur.execute("select 1 from t".strip())
+'''
+    path = tmp_path / "a.py"
+    path.write_text(source)
+    assert check_sql_file(path, review=True) == []

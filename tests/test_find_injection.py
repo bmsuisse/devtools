@@ -1,0 +1,183 @@
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from bmsdna.devtools import find_injection
+from bmsdna.devtools.injection_frontend import check_frontend_file
+from bmsdna.devtools.injection_python import check_python_sinks
+
+
+def _py(tmp_path: Path, source: str) -> list[tuple[str, str]]:
+    path = tmp_path / "m.py"
+    path.write_text(source)
+    return [(f.rule, f.severity) for f in check_python_sinks(path)]
+
+
+def _fe(tmp_path: Path, source: str, name: str = "c.tsx") -> set[str]:
+    path = tmp_path / name
+    path.write_text(source)
+    return {f.rule for f in check_frontend_file(path)}
+
+
+def test_python_eval_and_shell(tmp_path: Path) -> None:
+    src = """
+import os, subprocess
+eval(user)
+eval("1+1")
+os.system("ls " + name)
+subprocess.run(cmd, shell=True)
+subprocess.run("ls", shell=True)
+subprocess.run(["ls", name])
+"""
+    assert _py(tmp_path, src) == [
+        ("py-eval-exec", "error"),
+        ("py-shell-command", "error"),
+        ("py-shell-command", "error"),
+        ("py-shell-true", "review"),
+    ]
+
+
+def test_python_yaml_pickle_markup_jinja(tmp_path: Path) -> None:
+    src = """
+import yaml, pickle
+from markupsafe import Markup
+yaml.load(data)
+yaml.load(data, Loader=yaml.SafeLoader)
+yaml.safe_load(data)
+pickle.loads(blob)
+Markup(user_html)
+Markup("<b>x</b>")
+Environment(autoescape=False)
+render_template_string(request_arg)
+"""
+    assert _py(tmp_path, src) == [
+        ("py-unsafe-yaml", "error"),
+        ("py-unsafe-deserialization", "review"),
+        ("py-unescaped-markup", "review"),
+        ("py-autoescape-off", "error"),
+        ("py-template-injection", "error"),
+    ]
+
+
+def test_frontend_dom_sinks(tmp_path: Path) -> None:
+    src = """
+export function A({ html }) {
+  el.innerHTML = html;
+  el.insertAdjacentHTML("beforeend", html);
+  document.write(html);
+  eval(code);
+  new Function("a", code);
+  setTimeout("run()", 10);
+  win.postMessage(data, "*");
+  return <div dangerouslySetInnerHTML={{ __html: html }} />;
+}
+"""
+    assert _fe(tmp_path, src) == {
+        "fe-inner-html",
+        "fe-document-write",
+        "fe-eval",
+        "fe-new-function",
+        "fe-timer-string",
+        "fe-post-message-star",
+        "fe-dangerously-set-inner-html",
+    }
+
+
+def test_frontend_ignores_comments_and_strings(tmp_path: Path) -> None:
+    src = """
+// el.innerHTML = x; eval(y)
+const s = "eval(x) and document.write(y)";
+const ok = el.textContent === 'a';
+setTimeout(() => run(), 10);
+"""
+    assert _fe(tmp_path, src) == set()
+
+
+def test_iframe_sandbox_rules(tmp_path: Path) -> None:
+    assert _fe(tmp_path, '<iframe src="/x" />') == {"fe-iframe-no-sandbox"}
+    assert _fe(tmp_path, '<iframe src="/x" sandbox />') == set()
+    assert _fe(tmp_path, '<iframe src="/x" sandbox="allow-forms" />') == set()
+    assert _fe(tmp_path, "<iframe onLoad={() => a > b} />") == {"fe-iframe-no-sandbox"}
+    assert _fe(tmp_path, '<iframe sandbox="allow-scripts allow-same-origin" />') == {"fe-iframe-sandbox-escape"}
+    assert _fe(tmp_path, '<iframe src="https://x.test/a"></iframe>', "i.html") == {"fe-iframe-no-sandbox"}
+
+
+def test_vue_v_html_and_javascript_url(tmp_path: Path) -> None:
+    src = '<template><div v-html="x"></div><a href="javascript:void(0)">x</a></template>'
+    assert _fe(tmp_path, src, "a.vue") == {"fe-v-html", "fe-javascript-url"}
+
+
+def _run(tmp_path: Path, **kwargs):
+    return find_injection.run([str(tmp_path)], root=tmp_path, **kwargs)
+
+
+def test_csp_missing_for_web_project(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n")
+    assert [f.rule for f in _run(tmp_path).findings] == ["csp-missing"]
+    (tmp_path / "web.config").write_text('<add name="Content-Security-Policy" value="default-src \'self\'" />')
+    assert _run(tmp_path).findings == []
+
+
+def test_csp_not_required_for_non_web_project(tmp_path: Path) -> None:
+    (tmp_path / "lib.py").write_text("def f():\n    return 1\n")
+    assert _run(tmp_path).findings == []
+
+
+def test_csp_weakened_is_reported(tmp_path: Path) -> None:
+    (tmp_path / "index.html").write_text("<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'self' 'unsafe-inline'\"><p>hi</p>")
+    assert [f.rule for f in _run(tmp_path).findings] == ["csp-weakened"]
+
+
+def test_pragma_ignore_and_severity_exit_codes(tmp_path: Path) -> None:
+    (tmp_path / "web.config").write_text("Content-Security-Policy: default-src 'self'")
+    (tmp_path / "a.ts").write_text("el.innerHTML = x;\n")
+    result = _run(tmp_path)
+    assert [f.rule for f in result.reviews] == ["fe-inner-html"]
+    assert find_injection.print_report(result) == 0
+    assert find_injection.print_report(result, strict=True) == 1
+    (tmp_path / "a.ts").write_text("// bdt-lint: ignore fe-inner-html -- static markup\nel.innerHTML = x;\n")
+    assert _run(tmp_path).findings == []
+    (tmp_path / "a.ts").write_text("eval(x);\n")
+    assert find_injection.print_report(_run(tmp_path)) == 1
+
+
+def test_sql_injection_is_error_and_unverified_call_is_review(tmp_path: Path) -> None:
+    (tmp_path / "db.py").write_text(
+        'def a(cur, x):\n    cur.execute(f"select * from t where a = {x}")\n\n'
+        "def b(cur, x):\n    cur.execute(build(x))\n\n"
+    )
+    result = _run(tmp_path)
+    assert [f.rule for f in result.errors] == ["sql-fstring-injection"]
+    assert [f.rule for f in result.reviews] == ["sql-unverified-call"]
+
+
+def test_tests_and_missing_paths(tmp_path: Path) -> None:
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_x.py").write_text("eval(x)\n")
+    assert _run(tmp_path).findings == []
+    result = find_injection.run([str(tmp_path / "nope")], root=tmp_path)
+    assert [f.rule for f in result.findings] == ["path-not-found"]
+
+
+def test_diff_mode_scans_changed_and_untracked_files(tmp_path: Path) -> None:
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-c", "user.email=a@b.c", "-c", "user.name=t", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    git("init", "-b", "main")
+    (tmp_path / "old.py").write_text("eval(x)\n")
+    git("add", ".")
+    git("commit", "-m", "base")
+    git("checkout", "-b", "feature")
+    (tmp_path / "new.py").write_text("exec(y)\n")
+    git("add", ".")
+    git("commit", "-m", "change")
+    (tmp_path / "untracked.py").write_text("eval(z)\n")
+    result = find_injection.run([], root=tmp_path, diff=True, base="main")
+    assert sorted(f.path.name for f in result.findings) == ["new.py", "untracked.py"]
+
+
+def test_diff_mode_without_base_branch_exits(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-b", "odd"], cwd=tmp_path, check=True, capture_output=True)
+    with pytest.raises(SystemExit):
+        find_injection.run([], root=tmp_path, diff=True)
