@@ -236,7 +236,7 @@ def build() -> LiteralString:
 def run(cur, expr, user_input):
     cur.execute(expr.sql(dialect="postgres"))
     cur.execute(sqlglot.select("a").from_("t").sql())
-    cur.execute(cast(LiteralString, expr))
+    cur.execute(cast(LiteralString, expr.sql()))
     cur.execute(build())
     q = expr.sql()
     cur.execute(q)
@@ -275,3 +275,22 @@ def test_sql_call_is_not_trusted_without_a_sqlglot_import(tmp_path: Path) -> Non
     path = tmp_path / "a.py"
     path.write_text("def run(cur, builder):\n    cur.execute(builder.sql())\n    cur.execute(exp.text)\n")
     assert [f.rule for f in check_sql_file(path, review=True)] == ["sql-unverified-call"]
+
+
+def test_literalstring_cast_is_only_as_safe_as_its_argument(tmp_path: Path) -> None:
+    source = '''
+from typing import LiteralString, cast
+
+def a(cur, user):
+    cur.execute(cast(LiteralString, f"select * from t where a = {user}"))
+
+def b(cur, user):
+    cur.execute(cast(LiteralString, user))
+
+def c(cur):
+    cur.execute(cast(LiteralString, "select 1 from t"))
+'''
+    path = tmp_path / "a.py"
+    path.write_text(source)
+    assert sorted(f.rule for f in check_sql_file(path)) == ["sql-fstring-injection"]
+    assert sorted(f.rule for f in check_sql_file(path, review=True)) == ["sql-fstring-injection", "sql-unverified-cast"]

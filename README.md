@@ -578,7 +578,7 @@ Findings have two severities: **error** (a definite unsafe pattern, exit code 1)
 code 0 unless `--strict`).
 
 - **SQL** (Python `.execute()`): f-string / `%` / concatenation / `.format()` SQL is an error.
-  SQL from `load_sql()`, `sql.SQL`, sqlglot (`expr.sql()`, `sqlglot.*`), `cast(LiteralString, ...)` or
+  SQL from `load_sql()`, `sql.SQL`, sqlglot (`expr.sql()`, `sqlglot.*`), `cast(LiteralString, <sqlglot expr>)` (the cast is only as safe as its argument) or
   a function in the same file annotated `-> LiteralString` is trusted; SQL from any other function
   call is a `sql-unverified-call` review item. (`bdt lint` accepts the same trusted forms but never
   reports unverified calls.)
