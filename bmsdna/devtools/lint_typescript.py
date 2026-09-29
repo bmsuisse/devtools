@@ -29,7 +29,7 @@ TS_SUFFIXES = (".ts", ".tsx", ".mts")
 DEFAULT_TS_EXCLUDE_DIR_NAMES = frozenset(
     {"generated", "__generated__", "__tests__", "__mocks__", "tests", "test", "e2e", "coverage", ".next", "storybook-static"}
 )
-_EXCLUDE_FILE_SUFFIXES = (".gen.ts", ".generated.ts", ".d.ts", ".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx")
+_EXCLUDE_FILE_RE = re.compile(r"\.(?:gen|generated|test|spec)\.m?tsx?$|\.d\.m?ts$")
 _EXCLUDE_FILE_NAMES = frozenset({"api-types.ts", "openapi-ts.config.ts"})
 
 _GENERATOR_PACKAGES = frozenset(
@@ -51,6 +51,7 @@ _GENERATOR_PACKAGES = frozenset(
 # Response/request shapes that generators handle badly -- a call whose enclosing block mentions
 # one of these is considered a legitimate hand-wired use.
 DEFAULT_NON_JSON_MARKERS = (
+    "createClient",
     "FormData",
     "Blob",
     ".blob(",
@@ -73,11 +74,12 @@ DEFAULT_NON_JSON_MARKERS = (
 
 _FETCH_RE = re.compile(r"(?<![\w$.])(?:(?:window|globalThis|self)\s*\.\s*)?fetch\s*\(")
 _AXIOS_RE = re.compile(
-    r"(?<![\w$.])axios\s*(?:\.\s*(?:get|post|put|patch|delete|head|options|request|create)\s*)?(?:<[^<>()]*>\s*)?\("
+    r"(?<![\w$.])axios\s*(?:\.\s*(?:get|post|put|patch|delete|head|options|request|create)\s*)?(?:<[^\n]*?>\s*)?\("
 )
 _XHR_RE = re.compile(r"(?<![\w$.])new\s+XMLHttpRequest\b")
-_JSON_CAST_RE = re.compile(r"\.json\s*\(\s*\)\s*\)?\s*as\s+(?!unknown\b|const\b)")
-_JSON_ANNOTATED_RE = re.compile(r":\s*[\w$.<>\[\]| ]+?\s*=\s*await\s+[\w$.]+\.json\s*\(\s*\)")
+_JSON_CAST_RE = re.compile(r"(?<![\w$])([\w$]+)\s*\.json\s*\(\s*\)\s*\)?\s*as\s+(?!unknown\b|const\b)")
+_JSON_ANNOTATED_RE = re.compile(r":\s*[\w$.<>\[\]| ]+?\s*=\s*await\s+(?:[\w$]+\.)*([\w$]+)\.json\s*\(\s*\)")
+_REQUEST_RECEIVERS = frozenset({"req", "request"})  # incoming request bodies, not API responses
 _IGNORE_RE = re.compile(r"bdt-lint:\s*ignore\s+([\w-]+(?:\s*,\s*[\w-]+)*)")
 _EXTERNAL_URL_RE = re.compile(r"""^\s*[`'"](?:https?:)?//""")
 _RETURNS_TEXT_RE = re.compile(r"(?:\breturn\s+(?:await\s+)?\(?|=>\s*)[\w$.]+\.text\s*\(\)")
@@ -178,6 +180,18 @@ def _matching_paren(skeleton: str, open_idx: int) -> int:
     return len(skeleton)
 
 
+_DECL_PREFIX_RE = re.compile(r"(?:\bfunction\s*\*?|\basync|\bstatic|\bpublic|\bprivate|\bprotected)\s+$")
+
+
+def _is_declaration(skeleton: str, match: re.Match[str]) -> bool:
+    """`function fetch(...) {`, `async fetch(...) {` -- a definition named fetch, not a call."""
+    if _DECL_PREFIX_RE.search(skeleton[max(0, match.start() - 20) : match.start()]):
+        return True
+    close = _matching_paren(skeleton, match.end() - 1)
+    line_start = skeleton.rfind("\n", 0, match.start()) + 1
+    return skeleton[line_start : match.start()].strip() == "" and skeleton[close + 1 :].lstrip().startswith("{")
+
+
 def _has_marker(window: str, markers: tuple[str, ...]) -> bool:
     """Alphanumeric markers match whole words only (so `SSE` doesn't fire on `ASSET`)."""
     for marker in markers:
@@ -230,6 +244,8 @@ def _block_window(lines: list[str], call_line: int) -> tuple[int, int]:
 def _ignored(raw_lines: list[str], line: int, rule: str) -> bool:
     for candidate in (line, line - 1):
         if 1 <= candidate <= len(raw_lines):
+            if candidate != line and not raw_lines[candidate - 1].lstrip().startswith(("//", "/*", "*")):
+                continue  # a trailing pragma on a code line only covers that line
             match = _IGNORE_RE.search(raw_lines[candidate - 1])
             if match and rule in {r.strip() for r in match.group(1).split(",")}:
                 return True
@@ -240,7 +256,7 @@ def is_excluded_ts_file(path: Path, *, repo_root: Path, exclude_globs: list[str]
     """Generated code, tests, declaration files and user-configured globs are never scanned --
     this also applies to files passed explicitly (e.g. by a pre-commit hook's staged-file list)."""
     name = path.name
-    if name in _EXCLUDE_FILE_NAMES or name.endswith(_EXCLUDE_FILE_SUFFIXES):
+    if name in _EXCLUDE_FILE_NAMES or _EXCLUDE_FILE_RE.search(name):
         return True
     try:
         rel = path.resolve().relative_to(repo_root.resolve())
@@ -250,6 +266,9 @@ def is_excluded_ts_file(path: Path, *, repo_root: Path, exclude_globs: list[str]
         return True
     rel_posix = rel.as_posix()
     return any(fnmatch(rel_posix, pattern) for pattern in exclude_globs or [])
+
+
+_MARKER_ONLY = "\0marker"  # sentinel: a package.json with no deps/scripts (e.g. just {"type": "module"})
 
 
 def find_generator(path: Path, *, repo_root: Path, cache: dict[Path, str | None]) -> str | None:
@@ -265,7 +284,9 @@ def find_generator(path: Path, *, repo_root: Path, cache: dict[Path, str | None]
         if package_json.is_file():
             if package_json not in cache:
                 cache[package_json] = _read_generator(package_json)
-            return cache[package_json]
+            found = cache[package_json]
+            if found != _MARKER_ONLY:
+                return found
         if directory == root or directory.parent == directory:
             return None
         directory = directory.parent
@@ -278,6 +299,8 @@ def _read_generator(package_json: Path) -> str | None:
         return None
     if not isinstance(data, dict):
         return None
+    if not any(k in data for k in ("dependencies", "devDependencies", "scripts", "workspaces")):
+        return _MARKER_ONLY
     names = set()
     for key in ("dependencies", "devDependencies"):
         section = data.get(key)
@@ -343,6 +366,8 @@ def check_typescript_file(
         )
 
     for match in _FETCH_RE.finditer(masked.skeleton):
+        if _is_declaration(masked.skeleton, match):
+            continue
         consider("fetch()", match.start(), match.end() - 1)
     for match in _AXIOS_RE.finditer(masked.skeleton):
         consider("axios call", match.start(), match.end() - 1)
@@ -351,6 +376,8 @@ def check_typescript_file(
 
     for regex in (_JSON_CAST_RE, _JSON_ANNOTATED_RE):
         for match in regex.finditer(masked.skeleton):
+            if match.group(1) in _REQUEST_RECEIVERS:
+                continue
             line = _line_of(text, match.start())
             if any(lo <= line <= hi for lo, hi in covered) or _ignored(raw_lines, line, RULE_MODEL):
                 continue

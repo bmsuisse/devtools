@@ -521,15 +521,15 @@ package that already generates an API client from the backend's OpenAPI schema
 rule flags hand-wired `fetch(...)`, `axios`/`axios.create(...)` and
 `new XMLHttpRequest()` (`ts-handwired-http`), and a `.json()` result typed by
 casting/annotating a hand-written model (`ts-handwired-model`, only reported
-outside an already-flagged call). Packages without a generator are skipped, as
+outside the block of a `fetch`/`axios` call, which the http rule already covers). Packages without a generator are skipped, as
 are generated code (`generated/`, `*.gen.ts`, `*.generated.ts`, `api-types.ts`,
-`*.d.ts`), tests (`*.test.*`, `*.spec.*`, `__tests__/`, `e2e/`, `tests/`) and
+`*.d.ts`; also their `.mts`/`.tsx` variants), tests (`*.test.*`, `*.spec.*`, `__tests__/`, `e2e/`, `tests/`) and
 third-party URLs (`fetch("https://...")`). Hand-wired access is fine for files and
 other non-JSON traffic, since generators handle those badly, so a call is *not*
 flagged when its enclosing block mentions `FormData`, `Blob`/`.blob()`/
 `.arrayBuffer()`, `getReader()`/`response.body`/`TextDecoder`/`EventSource`/`SSE`,
 `createObjectURL`, `new File(`, an `application/octet-stream`/`multipart/`/
-`text/event-stream` content type, or returns `.text()` (a plain-text response).
+`text/event-stream` content type, or returns `.text()` (a plain-text response), or sits in a `createClient(...)` setup (a `fetch` passed to the generated client).
 It's a tokenizer-level heuristic, not a type-aware analysis; to silence a
 legitimate exception, put a comment on (or right above) the line:
 

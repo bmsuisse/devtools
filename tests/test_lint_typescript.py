@@ -243,3 +243,44 @@ def test_run_scans_explicit_ts_file(tmp_path: Path) -> None:
 def test_alphanumeric_markers_match_whole_words_only() -> None:
     src = "async function a() {\n  const ASSET = 1;\n  const res = await fetch('/api/a');\n  return res.json();\n}\n"
     assert _check(src) == [(3, RULE_HTTP)]
+
+
+def test_declarations_named_fetch_are_not_calls() -> None:
+    src = "class Repo {\n  async fetch(id: string) {\n    return id;\n  }\n}\nfunction fetch(u: string) {\n  return u;\n}\n"
+    assert _check(src) == []
+
+
+def test_trailing_pragma_only_covers_its_own_line() -> None:
+    src = "await fetch('/a'); // bdt-lint: ignore ts-handwired-http -- x\nawait fetch('/b');\n"
+    assert _check(src) == [(2, RULE_HTTP)]
+
+
+def test_nested_axios_generics_are_flagged() -> None:
+    assert _check("axios.get<Array<Foo>>('/a');\n") == [(1, RULE_HTTP)]
+
+
+def test_incoming_request_body_cast_is_not_a_model_finding() -> None:
+    assert _check("const body = (await request.json()) as CreateBody;\nconst b2 = (await req.json()) as X;\n") == []
+
+
+def test_fetch_wrapper_passed_to_generated_client_is_not_flagged() -> None:
+    src = "export const client = createClient<paths>({\n  baseUrl: '/api',\n  fetch: (req) => fetch(req, { credentials: 'include' }),\n});\n"
+    assert _check(src) == []
+
+
+def test_mts_test_and_declaration_files_are_excluded(tmp_path: Path) -> None:
+    for rel in ("a.spec.mts", "a.test.mts", "types.d.mts", "a.gen.tsx"):
+        assert is_excluded_ts_file(tmp_path / rel, repo_root=tmp_path), rel
+
+
+def test_marker_only_package_json_defers_to_parent(tmp_path: Path) -> None:
+    (tmp_path / "src/legacy").mkdir(parents=True)
+    (tmp_path / "package.json").write_text(json.dumps({"dependencies": {"openapi-fetch": "^0.15"}}))
+    (tmp_path / "src/legacy/package.json").write_text(json.dumps({"type": "module"}))
+    assert find_generator(tmp_path / "src/legacy/a.ts", repo_root=tmp_path, cache={}) == "openapi-fetch"
+
+
+def test_sse_stream_markers_are_not_flagged() -> None:
+    for marker in ("EventSource", "getReader(", "text/event-stream", "SSE"):
+        src = f"async function s() {{\n  // {marker}\n  const r = await fetch('/api/s', {{ headers: {{ a: '{marker}' }} }});\n}}\n"
+        assert _check(src) == [], marker

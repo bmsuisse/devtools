@@ -26,6 +26,7 @@ from .lint_sql import check_sql_file, require_sqlglot
 from .lint_tooling import check_tooling
 from .lint_typescript import (
     DEFAULT_NON_JSON_MARKERS,
+    DEFAULT_TS_EXCLUDE_DIR_NAMES,
     TS_SUFFIXES,
     check_typescript_file,
     find_generator,
@@ -135,7 +136,7 @@ def run(paths: list[str], *, root: Path | None = None, skip_tooling_check: bool 
     ts_markers = DEFAULT_NON_JSON_MARKERS + tuple(str(m) for m in config.get("ts_non_json_markers", []) or [])
 
     python_files, missing_paths = _iter_python_files(target_paths, exclude_dir_names)
-    ts_files, _ = _iter_files(target_paths, exclude_dir_names, TS_SUFFIXES)
+    ts_files, _ = _iter_files(target_paths, exclude_dir_names | DEFAULT_TS_EXCLUDE_DIR_NAMES, TS_SUFFIXES)
     if python_files:
         require_sqlglot()
 
