@@ -279,3 +279,22 @@ def test_min_js_is_skipped_long_lines_are_not_and_findings_deduplicated(tmp_path
     (tmp_path / "web.config").write_text("Content-Security-Policy: default-src 'self'")
     result = find_injection.run([], root=tmp_path)
     assert [(f.path.name, f.rule) for f in result.findings] == [("bundle.js", "fe-eval"), ("dup.js", "fe-inner-html")]
+
+
+def test_sqlglot_expression_sql_is_not_flagged(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text(
+        """import sqlglot
+from sqlglot import exp, select
+from typing import cast, LiteralString
+
+
+def run(conn, t):
+    expr = select("a").from_(t).where(exp.column("b").eq(1))
+    conn.execute(expr.sql())
+    conn.execute(sqlglot.parse_one("select 1").sql(dialect="postgres"))
+    sql = exp.select("*").from_(exp.to_table(t)).sql("tsql")
+    conn.execute(sql)
+    conn.execute(cast(LiteralString, select("a").from_(t).sql(pretty=True)))
+"""
+    )
+    assert find_injection.run([], root=tmp_path).findings == []
