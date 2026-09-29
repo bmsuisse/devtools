@@ -111,6 +111,58 @@ def _is_sql_composed_call(node: ast.AST) -> bool:
     return isinstance(func, ast.Attribute) and func.attr in ("SQL", "Identifier", "Composed")
 
 
+_SQLGLOT_ROOTS = frozenset({"sqlglot", "exp", "expressions", "sg"})
+_UNWRAP_METHODS = frozenset({"strip", "lstrip", "rstrip"})
+_UNWRAP_FUNCS = frozenset({"dedent", "cleandoc"})
+
+
+def _call_root_name(func: ast.expr) -> str | None:
+    while isinstance(func, (ast.Attribute, ast.Call)):
+        func = func.value if isinstance(func, ast.Attribute) else func.func
+    return func.id if isinstance(func, ast.Name) else None
+
+
+def _is_literal_string_ref(node: ast.expr) -> bool:
+    return (isinstance(node, ast.Name) and node.id == "LiteralString") or (isinstance(node, ast.Attribute) and node.attr == "LiteralString")
+
+
+def _is_trusted_sql_call(node: ast.AST, literal_funcs: frozenset[str] = frozenset()) -> bool:
+    """A call whose result is SQL that's safe by construction: a sqlglot expression rendered with
+    `.sql()` (or built from `sqlglot.*`/`exp.*`), `cast(LiteralString, ...)` (the author asserts
+    it's static), or a function defined in the same file with a `-> LiteralString` return type."""
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Attribute) and func.attr == "sql":
+        return True
+    if _call_root_name(func) in _SQLGLOT_ROOTS:
+        return True
+    if (isinstance(func, ast.Name) and func.id == "cast") or (isinstance(func, ast.Attribute) and func.attr == "cast"):
+        if node.args and _is_literal_string_ref(node.args[0]):
+            return True
+    name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
+    return name in literal_funcs
+
+
+def _unwrap_str_call(node: ast.Call) -> ast.expr | None:
+    """`textwrap.dedent(x)` / `x.strip()` -> `x`: these don't change whether the text is safe."""
+    func = node.func
+    if isinstance(func, ast.Attribute) and func.attr in _UNWRAP_METHODS and not node.args:
+        return func.value
+    name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
+    if name in _UNWRAP_FUNCS and len(node.args) == 1:
+        return node.args[0]
+    return None
+
+
+def _literal_string_functions(tree: ast.AST) -> frozenset[str]:
+    return frozenset(
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.returns is not None and _is_literal_string_ref(node.returns)
+    )
+
+
 def _resolve_single(expr: ast.expr, lookup) -> ast.expr:
     """Follow a `Name` back through `lookup` up to `_MAX_RESOLVE_HOPS` times, taking the
     *first* candidate assignment at each hop. Used only for secondary/nested resolutions (the
@@ -246,8 +298,15 @@ def _literal_findings(text: str, path: Path, lineno: int) -> list[Finding]:
     return findings
 
 
-def _check_resolved_candidate(resolved: ast.expr, lookup, path: Path, lineno: int) -> list[Finding]:
-    if _is_load_sql_call(resolved) or _is_sql_composed_call(resolved):
+def _check_resolved_candidate(
+    resolved: ast.expr,
+    lookup,
+    path: Path,
+    lineno: int,
+    literal_funcs: frozenset[str] = frozenset(),
+    review: bool = False,
+) -> list[Finding]:
+    if _is_load_sql_call(resolved) or _is_sql_composed_call(resolved) or _is_trusted_sql_call(resolved, literal_funcs):
         return []
     if isinstance(resolved, getattr(ast, "TemplateStr", ())):
         return []  # psycopg t-string: params are always bound, never interpolated
@@ -275,10 +334,36 @@ def _check_resolved_candidate(resolved: ast.expr, lookup, path: Path, lineno: in
     if isinstance(resolved, ast.Constant) and isinstance(resolved.value, str):
         return _literal_findings(resolved.value, path, lineno)
 
+    if isinstance(resolved, ast.Call):
+        inner = _unwrap_str_call(resolved)
+        if inner is not None:
+            return _check_query_arg(inner, lookup, path, lineno, literal_funcs, review)
+        if review:
+            return [_unverified_call_finding(resolved, path, lineno)]
+
     return []  # unresolved (a parameter, a helper-function result, ...) -- stay quiet
 
 
-def _check_query_arg(expr: ast.expr, lookup, path: Path, lineno: int) -> list[Finding]:
+def _unverified_call_finding(call: ast.Call, path: Path, lineno: int) -> Finding:
+    return Finding(
+        path,
+        lineno,
+        "sql-unverified-call",
+        f"SQL text comes from `{ast.unparse(call.func)}(...)`, which isn't load_sql()/sql.SQL/sqlglot/a `-> LiteralString` function. "
+        "AI reviewer: verify that no user-controlled value can reach this query (injection risk); if it is safe, "
+        "type the producer `-> LiteralString`, build it with sqlglot, or add `# bdt-lint: ignore sql-unverified-call`.",
+        severity="review",
+    )
+
+
+def _check_query_arg(
+    expr: ast.expr,
+    lookup,
+    path: Path,
+    lineno: int,
+    literal_funcs: frozenset[str] = frozenset(),
+    review: bool = False,
+) -> list[Finding]:
     """Checks every candidate `expr` could resolve to (see `_resolve_candidates`) and returns
     the union of findings, deduplicated by rule -- so a name reassigned differently per branch
     (e.g. an unsafe default that one `if` branch overwrites with a safe literal) is still
@@ -288,7 +373,7 @@ def _check_query_arg(expr: ast.expr, lookup, path: Path, lineno: int) -> list[Fi
     findings: list[Finding] = []
     seen_rules: set[str] = set()
     for candidate in _resolve_candidates(expr, lookup):
-        for finding in _check_resolved_candidate(candidate, lookup, path, lineno):
+        for finding in _check_resolved_candidate(candidate, lookup, path, lineno, literal_funcs, review):
             if finding.rule not in seen_rules:
                 seen_rules.add(finding.rule)
                 findings.append(finding)
@@ -310,8 +395,10 @@ class _ExecuteCallVisitor(ast.NodeVisitor):
     branch-shadowed unsafe assignment is still seen), then applies the SQL rules to every
     `.execute()`/`.executemany()` call found."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, literal_funcs: frozenset[str] = frozenset(), review: bool = False) -> None:
         self.path = path
+        self.literal_funcs = literal_funcs
+        self.review = review
         self.findings: list[Finding] = []
         self._scopes: list[dict[str, list[ast.expr]]] = [{}]
 
@@ -338,13 +425,14 @@ class _ExecuteCallVisitor(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         query_arg = _execute_query_arg(node)
         if query_arg is not None:
-            self.findings.extend(_check_query_arg(query_arg, self._lookup, self.path, node.lineno))
+            self.findings.extend(_check_query_arg(query_arg, self._lookup, self.path, node.lineno, self.literal_funcs, self.review))
         self.generic_visit(node)
 
 
-def check_sql_file(path: Path, source: str | None = None) -> list[Finding]:
+def check_sql_file(path: Path, source: str | None = None, *, review: bool = False) -> list[Finding]:
     """Every SQL-rule finding for one Python file. `source` lets callers pass already-read
-    content (e.g. from a staged-file snapshot); defaults to reading `path`."""
+    content (e.g. from a staged-file snapshot); defaults to reading `path`. `review=True`
+    (`bdt find-injection`) additionally reports queries produced by an unverifiable function call."""
     if sqlglot is None:
         return []
     if source is not None:
@@ -358,6 +446,6 @@ def check_sql_file(path: Path, source: str | None = None) -> list[Finding]:
         tree = ast.parse(text, filename=str(path))
     except SyntaxError:
         return []
-    visitor = _ExecuteCallVisitor(path)
+    visitor = _ExecuteCallVisitor(path, _literal_string_functions(tree), review)
     visitor.visit(tree)
     return visitor.findings

@@ -16,6 +16,7 @@ from . import ado_issue, app_service_logs, commit as commit_mod
 from . import env_config
 from . import find_repo as find_repo_mod
 from . import gh_issue, gh_pr
+from . import find_injection as find_injection_mod
 from . import lint as lint_mod
 from . import logs as logs_mod
 from . import pr_build, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
@@ -924,6 +925,22 @@ def lint(
     """
     result = lint_mod.run(paths or [], skip_tooling_check=no_tooling_check)
     raise typer.Exit(lint_mod.print_report(result))
+
+
+@app.command("find-injection")
+def find_injection_cmd(
+    paths: list[str] = typer.Argument(None, help="Files and/or directories to scan (default: current directory, recursive)."),
+    diff: bool = typer.Option(False, "--diff", help="Scan only files changed on this branch vs --base, plus uncommitted and untracked files."),
+    base: str = typer.Option(None, "--base", help="Branch/ref to diff against with --diff (default: origin's default branch)."),
+    strict: bool = typer.Option(False, "--strict", help="Also exit 1 when there are items to review (default: only definite errors fail)."),
+) -> None:
+    """Find injection risks (bmsuisse/devtools#54) in backend and frontend code: SQL built from f-strings/
+    concatenation or from an unverifiable function call, eval/exec/shell/unsafe deserialization in Python,
+    innerHTML/dangerouslySetInnerHTML/eval/new Function/un-sandboxed iframes in the frontend, and a missing
+    or weakened Content-Security-Policy. Definite problems are errors; the rest are listed for a human/AI to verify.
+    """
+    result = find_injection_mod.run(paths or [], diff=diff, base=base)
+    raise typer.Exit(find_injection_mod.print_report(result, strict=strict))
 
 
 @app.command("find-repo")

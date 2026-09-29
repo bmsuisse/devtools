@@ -19,6 +19,7 @@ class Finding:
     line: int
     rule: str
     message: str
+    severity: str = "error"  # "error" | "review" (needs a human/AI to verify; `bdt find-injection` only)
 
     def render(self) -> str:
         location = f"{self.path}:{self.line}" if self.line else str(self.path)
