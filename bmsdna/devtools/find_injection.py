@@ -161,7 +161,7 @@ def _filter_ignored(findings: list[Finding]) -> list[Finding]:
 
 
 def _scan_python(path: Path) -> list[Finding]:
-    sql = [f for f in check_sql_file(path, review=True) if f.rule in SQL_INJECTION_RULES or f.rule == "sql-unverified-call"]
+    sql = [f for f in check_sql_file(path, review=True) if f.rule in SQL_INJECTION_RULES or f.rule in ("sql-unverified-call", "sql-unverified-cast")]
     return sql + check_python_sinks(path)
 
 
