@@ -15,6 +15,7 @@ from pgdevkit.testdb import constants as pgdevkit_constants
 from . import ado_issue, app_service_logs, commit as commit_mod
 from . import env_config
 from . import find_repo as find_repo_mod
+from . import issue_do as issue_do_mod
 from . import gh_issue, gh_pr
 from . import find_injection as find_injection_mod
 from . import lint as lint_mod
@@ -692,6 +693,31 @@ def issue_search(
         ado_issue.search(
             session, remote, keywords or [], since=since, board=resolved_board, top=limit, state=state, org_wide=org_wide, tags=tags_or_labels
         )
+
+
+@issue_app.command("do", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def issue_do(
+    ctx: typer.Context,
+    number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
+    agent: str = typer.Option("claude", "--agent", help="Agent executable to start (claude runs headless: `claude -p ... --name '<number>: <title>'`)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print the agent command instead of running it"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
+) -> None:
+    """Start a coding agent on an issue / work item, with the session named '<number>: <title>'.
+    Extra args after the number are passed through to the agent."""
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        title, body = issue_do_mod.fetch_github(require_gh(), number)
+    else:
+        session = requests.Session()
+        session.headers.update(auth_header(pat))
+        title, body = issue_do_mod.fetch_ado(session, remote, number)
+    issue_do_mod.run(number, title, body, agent=agent, extra=list(ctx.args), dry_run=dry_run)
 
 
 @issue_app.command("update")
