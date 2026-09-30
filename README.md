@@ -274,6 +274,17 @@ CLI flag beats `[tool.bdt.github].board` in `pyproject.toml`:
 board = "Roadmap"
 ```
 
+## `bdt issue do`
+
+```bash
+bdt issue do 60 [--agent claude] [--dry-run] [extra agent args...]
+```
+
+Hands an issue (GitHub) or work item (Azure DevOps) to a coding agent. Fetches the title and
+description and runs `claude -p "<prompt>" --name "60: <title>"`, so the session is easy to find
+with `claude --resume`. `--agent` picks another executable (it then gets just the prompt as its
+last argument); extra args are passed through; `--dry-run` prints the command.
+
 ## `bdt worktree`
 
 ```bash
