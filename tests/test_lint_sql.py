@@ -294,3 +294,52 @@ def c(cur):
     path.write_text(source)
     assert sorted(f.rule for f in check_sql_file(path)) == ["sql-fstring-injection"]
     assert sorted(f.rule for f in check_sql_file(path, review=True)) == ["sql-fstring-injection", "sql-unverified-cast"]
+
+
+def test_long_simple_insert_update_delete_allowed_inline(tmp_path: Path) -> None:
+    source = '''
+async def f(cur):
+    await cur.execute(
+        """
+        insert into dim.customer (
+            id,
+            name,
+            email,
+            active
+        ) values (%(id)s, %(name)s, %(email)s, true)
+        on conflict (id) do update set name = excluded.name
+        """,
+        {},
+    )
+    await cur.execute(
+        """
+        update dim.customer
+        set name = %(name)s,
+            email = %(email)s,
+            active = false
+        where id = %(id)s
+        """,
+        {},
+    )
+    await cur.execute(
+        """
+        delete from dim.customer
+        where id = %(id)s
+          and active = false
+          and email is null
+        """,
+        {},
+    )
+'''
+    assert "sql-inline-too-complex" not in _rules(_findings(source, tmp_path / "a.py"))
+
+
+def test_insert_select_and_update_from_still_too_complex(tmp_path: Path) -> None:
+    source = '''
+async def f(cur):
+    await cur.execute("insert into a (id) select id from b")
+    await cur.execute("update a set x = b.x from b where a.id = b.id")
+    await cur.execute("delete from a using b where a.id = b.id")
+'''
+    findings = _findings(source, tmp_path / "a.py")
+    assert [f.rule for f in findings].count("sql-inline-too-complex") == 3

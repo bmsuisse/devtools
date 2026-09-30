@@ -287,13 +287,23 @@ def _literal_findings(text: str, path: Path, lineno: int) -> list[Finding]:
     findings: list[Finding] = []
 
     line_count = len([line for line in text.splitlines() if line.strip()])
-    is_complex = (
-        line_count > 4
-        or parsed.find(exp.Join) is not None
+    has_complex_construct = (
+        parsed.find(exp.Join) is not None
         or parsed.find(exp.With) is not None
         or parsed.find(exp.Subquery) is not None
         or parsed.find(exp.AggFunc) is not None
     )
+    if isinstance(parsed, (exp.Insert, exp.Update, exp.Delete)):
+        # A simple write may span many lines (long column lists) -- only its shape counts:
+        # INSERT ... SELECT, UPDATE ... FROM and DELETE ... USING are query logic, so they're complex.
+        is_complex = (
+            has_complex_construct
+            or parsed.find(exp.Select) is not None
+            or parsed.find(exp.From) is not None
+            or bool(parsed.args.get("using"))
+        )
+    else:
+        is_complex = line_count > 4 or has_complex_construct
     if is_complex:
         findings.append(
             Finding(

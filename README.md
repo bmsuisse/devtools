@@ -535,6 +535,8 @@ it can't see through):
 
 - **`sql-inline-too-complex`** — more than a trivial (≤4 line) query, or a
   JOIN/CTE/subquery/aggregation, inline instead of `load_sql()`/a `.sql` file.
+  Simple `INSERT`/`UPDATE`/`DELETE` are exempt from the line limit; `INSERT ... SELECT`,
+  `UPDATE ... FROM` and `DELETE ... USING` still count as complex.
 - **`sql-fstring-injection`** / **`sql-concat-injection`** /
   **`sql-percent-format-injection`** / **`sql-format-injection`** — SQL built
   with an f-string, `+` concatenation, the `%` operator, or `str.format()`
