@@ -343,3 +343,27 @@ async def f(cur):
 '''
     findings = _findings(source, tmp_path / "a.py")
     assert [f.rule for f in findings].count("sql-inline-too-complex") == 3
+
+
+_COMPLEX_SELECT = '''"""
+select a.id, p.price
+from core.dim_article a
+left join core.dim_price p on p.article_id = a.id
+where a.active
+"""'''
+
+
+def test_sql_named_variable_with_complex_literal_flagged_without_execute(tmp_path: Path) -> None:
+    source = f"ARTICLES_SQL = {_COMPLEX_SELECT}\nother_sql: str = {_COMPLEX_SELECT}\nnot_a_query = {_COMPLEX_SELECT}\n"
+    findings = _findings(source, tmp_path / "a.py")
+    assert [(f.rule, f.line) for f in findings] == [("sql-inline-too-complex", 1), ("sql-inline-too-complex", 7)]
+
+
+def test_sql_named_variable_simple_or_dml_not_flagged(tmp_path: Path) -> None:
+    source = 'GET_SQL = "select id from t where id = %(id)s"\nINSERT_SQL = """\ninsert into t (\n a,\n b,\n c,\n d\n) values (1, 2, 3, 4)\n"""\n'
+    assert _findings(source, tmp_path / "a.py") == []
+
+
+def test_sql_named_variable_used_in_execute_reported_once(tmp_path: Path) -> None:
+    source = f"ARTICLES_SQL = {_COMPLEX_SELECT}\n\ndef f(cur):\n    cur.execute(ARTICLES_SQL)\n"
+    assert len(_findings(source, tmp_path / "a.py")) == 1
