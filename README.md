@@ -284,6 +284,34 @@ Creates `.worktrees/<name>` branched from `--base`, initializes submodules
 (unless `--no-submodules`), and copies an env file into the new worktree as
 `.env` (auto-detects `.local_env` then `.env` if `--env-file` isn't given).
 
+## `bdt find-repo`
+
+```bash
+bdt find-repo my-repo [--root ~/projects] [--org MYORG] [--github-org MYORG] [--yes] [--pat PAT]
+```
+
+Finds a repo by name: first among the local clones under the work dir, then -- only if there is
+no local match -- in an Azure DevOps org and/or a GitHub org. Names match exactly
+(case-insensitive) if any repo has that name, otherwise by substring. Local matches are printed
+as paths. A single remote-only match is offered for cloning (`--yes` skips the prompt; without a
+TTY it never prompts and just tells you to pass `--yes`); several matches are listed and nothing
+is cloned.
+
+Clone destinations: `<root>/<project>/<repo>` for Azure DevOps, `<root>/github/<repo>` for GitHub.
+
+Configuration (flags override env vars):
+
+| Setting | Flag | Env vars | Default |
+| --- | --- | --- | --- |
+| Local work dir | `--root` | `AZDO_WORK_DIR`, `BMS_WORK_DIR` | `~/projects` (`C:/Projects` on Windows) |
+| Azure DevOps org | `--org` | `AZDO_ORG`, `BMS_ORG` | none (ADO not searched) |
+| GitHub org | `--github-org` | `GITHUB_ORG`, `BMS_GITHUB_ORG` | none (GitHub not searched) |
+| ADO PAT for cloning | `--pat` | `AZURE_DEVOPS_EXT_PAT`, `AZURE_DEVOPS_PAT` | falls back to `az` login |
+
+Set the org env vars in your shell profile to make `bdt find-repo <name>` work anywhere. It replaces
+the `cross-repo-discovery` skill's `ALL_REPOS.md` sync. Needs `az` (ADO) / `gh` (GitHub) only when
+those orgs are searched.
+
 ## `bdt cleanup worktrees` / `bdt cleanup orphaned-dbs` / `bdt cleanup db` / `bdt cleanup worktree`
 
 ```bash
