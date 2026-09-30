@@ -298,3 +298,97 @@ def run(conn, t):
 """
     )
     assert find_injection.run([], root=tmp_path).findings == []
+
+
+def test_subprocess_arg_list_with_shell_true_and_bare_sql(tmp_path: Path) -> None:
+    (tmp_path / "ok.py").write_text(
+        """import subprocess
+from psycopg.sql import SQL
+
+
+def run(conn, target):
+    subprocess.check_call(["bun", "run", "build"], shell=True)
+    subprocess.check_call(["bun", "run", target], cwd=target, shell=True)
+    conn.execute(SQL("UPDATE t SET a = 1 WHERE id = %s"), (1,))
+"""
+    )
+    (tmp_path / "bad.py").write_text(
+        """import subprocess
+
+
+def run(cmd, target):
+    subprocess.check_call([cmd, "x"], shell=True)
+    subprocess.check_call(f"bun run {target}", shell=True)
+"""
+    )
+    result = find_injection.run([], root=tmp_path)
+    assert [(f.path.name, f.line, f.rule) for f in result.findings] == [("bad.py", 5, "py-shell-command"), ("bad.py", 6, "py-shell-command")]
+
+
+def test_csp_weakening_in_test_files_is_ignored(tmp_path: Path) -> None:
+    (tmp_path / "app.js").write_text("run();\n")
+    (tmp_path / "web.config").write_text("Content-Security-Policy: default-src 'self'")
+    (tmp_path / "test_headers.py").write_text("H = \"Content-Security-Policy: script-src 'unsafe-eval'\"\n")
+    assert find_injection.run([], root=tmp_path).findings == []
+
+
+def _lines(tmp_path: Path, src: str) -> list[int]:
+    path = tmp_path / "m.py"
+    path.write_text(src)
+    return [f.line for f in check_python_sinks(path)]
+
+
+def test_names_assigned_only_constants_are_constant(tmp_path: Path) -> None:
+    src = """import os, subprocess
+GREETING = "echo hi"
+CMD = GREETING + " there"
+
+
+def ok(flag):
+    os.system(CMD)
+    cmd = "ls" if flag else "pwd"
+    os.system(cmd)
+    for c in ("a", "b"):
+        os.system(c)
+    os.system(f"{GREETING} now")
+    prog = "bun"
+    subprocess.check_call([prog, "x"], shell=True)
+
+
+def bad(arg, flag):
+    cmd = "ls"
+    cmd += arg
+    os.system(cmd)
+    other = "ls"
+    if flag:
+        other = arg
+    os.system(other)
+    os.system(arg)
+    for c in arg:
+        os.system(c)
+    os.system(undefined_name)
+"""
+    assert _lines(tmp_path, src) == [20, 24, 25, 27, 28]
+
+
+def test_global_rebinding_and_class_scope_defeat_constness(tmp_path: Path) -> None:
+    src = """import os
+GREETING = "echo hi"
+
+
+def rebind():
+    global GREETING
+    GREETING = input()
+
+
+def use():
+    os.system(GREETING)
+
+
+class K:
+    x = "ls"
+
+    def m(self):
+        os.system(x)
+"""
+    assert _lines(tmp_path, src) == [11, 18]

@@ -109,7 +109,8 @@ def _is_sql_composed_call(node: ast.AST) -> bool:
     if not isinstance(node, ast.Call):
         return False
     func = node.func
-    return isinstance(func, ast.Attribute) and func.attr in ("SQL", "Identifier", "Composed")
+    name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
+    return name in ("SQL", "Identifier", "Composed")
 
 
 _UNWRAP_METHODS = frozenset({"strip", "lstrip", "rstrip"})
@@ -265,18 +266,18 @@ def _concat_probe_text(node: ast.BinOp, lookup) -> str | None:
     return "".join(parts) if saw_literal else None
 
 
+_FSTRING_FIX = (
+    "Change the `f` prefix to `t` (psycopg t-string, Python 3.14+): `{value}` becomes a bound parameter and "
+    "`{name:i}` quotes a table/column identifier. Or use load_sql()/a .sql file for static SQL."
+)
+_GENERIC_FIX = "Use a psycopg t-string (Python 3.14+), psycopg.sql for dynamic SQL, or load_sql()/a .sql file for static SQL."
+
+
 def _injection_finding(text: str, path: Path, lineno: int, rule: str, how: str) -> list[Finding]:
     if parse_sql_text(text) is None:
         return []
-    return [
-        Finding(
-            path,
-            lineno,
-            rule,
-            f"SQL built with {how} -- injection risk. Use a psycopg t-string (Python 3.14+), "
-            "psycopg.sql for dynamic SQL, or load_sql()/a .sql file for static SQL.",
-        )
-    ]
+    fix = _FSTRING_FIX if rule == "sql-fstring-injection" else _GENERIC_FIX
+    return [Finding(path, lineno, rule, f"SQL built with {how} -- injection risk. {fix}")]
 
 
 def _literal_findings(text: str, path: Path, lineno: int) -> list[Finding]:

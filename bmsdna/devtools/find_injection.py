@@ -265,7 +265,8 @@ def check_csp(root: Path, scanned: list[Path], scope: _ScanFilter, only: set[Pat
             continue
         if has_csp(text):
             found = True
-            weakened.extend(find_csp_weakening(candidate, text))
+            if not _is_test_file(candidate, root):
+                weakened.extend(find_csp_weakening(candidate, text))
     if found:
         return [f for f in weakened if only is None or f.path.resolve() in only]
     return [

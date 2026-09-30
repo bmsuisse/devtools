@@ -499,7 +499,8 @@ it can't see through):
 - **`sql-fstring-injection`** / **`sql-concat-injection`** /
   **`sql-percent-format-injection`** / **`sql-format-injection`** — SQL built
   with an f-string, `+` concatenation, the `%` operator, or `str.format()`
-  instead of a psycopg t-string (3.14+), `psycopg.sql`, or bound params.
+  instead of a psycopg t-string (3.14+), `psycopg.sql`, or bound params. For an f-string the fix is
+  usually just `f"..."` -> `t"..."` (`{value}` is bound, `{name:i}` quotes an identifier).
 - **`sql-positional-param`** — positional `%s` instead of named `%(name)s`.
 - **`sql-forbidden-join`** — `RIGHT JOIN`/`LATERAL JOIN`/`CROSS APPLY` (same
   patterns the `prek` skill's `check_files.py` forbids in `.sql` files).
