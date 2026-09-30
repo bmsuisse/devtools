@@ -11,6 +11,12 @@ remote is Azure DevOps or GitHub and use `az`/`gh` accordingly.
 Consolidates near-duplicate scripts that used to be copy-pasted across
 OneSales, ccmt2, and MDMApp into one versioned package with a `bdt` CLI.
 
+Companion to [bmsuisse/skills](https://github.com/bmsuisse/skills): skills are
+a last resort, so anything that can be checked or automated deterministically
+should live here (linters, `bdt lint`, CLI helpers) rather than in a skill.
+Skills cover only the judgment and conventions that tooling cannot express —
+see that repo for the guidance agents load.
+
 Requires `git` always, plus `az` (Azure DevOps commands, and all `bdt logs`
 commands) and/or `gh` (GitHub commands) on PATH as needed — each is checked
 lazily, only when a command actually needs it, with a clear error and an
