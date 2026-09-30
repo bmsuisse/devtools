@@ -294,3 +294,76 @@ def c(cur):
     path.write_text(source)
     assert sorted(f.rule for f in check_sql_file(path)) == ["sql-fstring-injection"]
     assert sorted(f.rule for f in check_sql_file(path, review=True)) == ["sql-fstring-injection", "sql-unverified-cast"]
+
+
+def test_long_simple_insert_update_delete_allowed_inline(tmp_path: Path) -> None:
+    source = '''
+async def f(cur):
+    await cur.execute(
+        """
+        insert into dim.customer (
+            id,
+            name,
+            email,
+            active
+        ) values (%(id)s, %(name)s, %(email)s, true)
+        on conflict (id) do update set name = excluded.name
+        """,
+        {},
+    )
+    await cur.execute(
+        """
+        update dim.customer
+        set name = %(name)s,
+            email = %(email)s,
+            active = false
+        where id = %(id)s
+        """,
+        {},
+    )
+    await cur.execute(
+        """
+        delete from dim.customer
+        where id = %(id)s
+          and active = false
+          and email is null
+        """,
+        {},
+    )
+'''
+    assert "sql-inline-too-complex" not in _rules(_findings(source, tmp_path / "a.py"))
+
+
+def test_insert_select_and_update_from_still_too_complex(tmp_path: Path) -> None:
+    source = '''
+async def f(cur):
+    await cur.execute("insert into a (id) select id from b")
+    await cur.execute("update a set x = b.x from b where a.id = b.id")
+    await cur.execute("delete from a using b where a.id = b.id")
+'''
+    findings = _findings(source, tmp_path / "a.py")
+    assert [f.rule for f in findings].count("sql-inline-too-complex") == 3
+
+
+_COMPLEX_SELECT = '''"""
+select a.id, p.price
+from core.dim_article a
+left join core.dim_price p on p.article_id = a.id
+where a.active
+"""'''
+
+
+def test_sql_named_variable_with_complex_literal_flagged_without_execute(tmp_path: Path) -> None:
+    source = f"ARTICLES_SQL = {_COMPLEX_SELECT}\nother_sql: str = {_COMPLEX_SELECT}\nnot_a_query = {_COMPLEX_SELECT}\n"
+    findings = _findings(source, tmp_path / "a.py")
+    assert [(f.rule, f.line) for f in findings] == [("sql-inline-too-complex", 1), ("sql-inline-too-complex", 7)]
+
+
+def test_sql_named_variable_simple_or_dml_not_flagged(tmp_path: Path) -> None:
+    source = 'GET_SQL = "select id from t where id = %(id)s"\nINSERT_SQL = """\ninsert into t (\n a,\n b,\n c,\n d\n) values (1, 2, 3, 4)\n"""\n'
+    assert _findings(source, tmp_path / "a.py") == []
+
+
+def test_sql_named_variable_used_in_execute_reported_once(tmp_path: Path) -> None:
+    source = f"ARTICLES_SQL = {_COMPLEX_SELECT}\n\ndef f(cur):\n    cur.execute(ARTICLES_SQL)\n"
+    assert len(_findings(source, tmp_path / "a.py")) == 1
