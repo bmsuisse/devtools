@@ -4,10 +4,12 @@ description: >
   Use the `bdt` CLI (from the bmsdna-devtools package) instead of ad hoc git/az/gh
   commands or repo-local scripts for: checking PR build/check status, creating
   a PR, creating a git worktree, committing and pushing files (with pre-flight
-  checks), and querying Azure logs. `bdt pr *` works against both Azure DevOps
+  checks), querying Azure logs, and static checks (`bdt lint`: SQL/psycopg rules, unreferenced .sql
+  files; `bdt lint-api-usage`: backend routes no frontend code calls). `bdt pr *` works against both Azure DevOps
   and GitHub — it auto-detects which one from the `origin` remote. Trigger
   whenever the user asks to check a build/PR status, create a PR, make a
-  worktree, commit changes, or fetch/tail application logs in a repo that has
+  worktree, commit changes, fetch/tail application logs, lint a repo, or find dead API routes /
+  unused .sql files in a repo that has
   bmsdna-devtools installed (check for `bdt` on PATH, or `bmsdna-devtools` in
   pyproject.toml, before assuming it applies).
 ---
@@ -94,6 +96,15 @@ if a pre-commit hook reformats files. Pass `--json` when calling
 programmatically from an agent loop — the schema is documented in
 `bdt commit --help`. Pass `--subrepo database` (repeatable) for repos that
 vendor a git submodule under that path.
+
+## Static checks
+
+- `bdt lint [paths]` -- SQL/psycopg rules, pydantic-model placement, hand-wired HTTP in TypeScript, baseline tooling,
+  and (opt-in via `[tool.bdt.lint] sql_roots = [...]`) `.sql` files no Python code references.
+- `uv run bdt lint-api-usage` -- FastAPI operations that no non-generated frontend code calls. Configured via
+  `[[tool.bdt.api_usage.apps]]` in pyproject.toml (app or openapi file, frontends, excludes, optional `baseline`);
+  adopt it with `--update-baseline`. It imports the app, so run it with the repo's own interpreter (`uv run`).
+  Generated API-client code and tests never count as callers.
 
 ## Application Insights logs
 

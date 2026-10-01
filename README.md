@@ -5,7 +5,8 @@ creation, issue/work item creation and comments, git worktrees (creation and
 merged-worktree/orphaned-test-DB cleanup), a commit-and-push helper with
 pre-flight checks, Azure log queries, and static checks (`bdt lint`) for
 postgres/psycopg SQL rules, pydantic-model placement, hand-wired HTTP access in
-TypeScript, and baseline tooling.
+TypeScript, unreferenced `.sql` files and baseline tooling, plus `bdt lint-api-usage`
+for backend routes no frontend code calls.
 `bdt pr *` and `bdt issue *` auto-detect whether the current repo's `origin`
 remote is Azure DevOps or GitHub and use `az`/`gh` accordingly.
 Consolidates near-duplicate scripts that used to be copy-pasted across
@@ -516,14 +517,16 @@ bdt logs fetch --env prod --out logs/ --keep-archive
 ## `bdt lint`
 
 Static checks (implementing [bmsuisse/skills#52](https://github.com/bmsuisse/skills/issues/52))
-for the `postgres-best-practices` skill's SQL rules, pydantic-model placement, and
-that the repo has its baseline tooling actually set up:
+for the `postgres-best-practices` skill's SQL rules, pydantic-model placement, hand-wired HTTP in
+TypeScript, (opt-in) `.sql` files nothing loads, and that the repo has its baseline tooling actually
+set up. Dead backend routes are a separate command, [`bdt lint-api-usage`](#bdt-lint-api-usage):
 
 ```bash
 bdt lint                       # scan the current directory, recursively
 bdt lint backend/              # scan one directory
 bdt lint backend/db/a.py b.py  # scan only these files -- e.g. from a prek/pre-commit
                                 # hook's staged-file list, so it can run on the diff only
+                                # (except `sql-file-unreferenced`, which always looks at the whole repo)
 bdt lint --no-tooling-check    # skip the tooling-config check for this run
 ```
 
@@ -593,16 +596,18 @@ sql_loader_functions = ["load_sql"]           # default; add your own loader's n
 sql_unreferenced_ignore = ["backend/db/queries/legacy/*.sql"]   # globs for files reached some other way
 ```
 
-A file counts as referenced by a literal `load_sql("topic", "name")` call (topic = the file's
-parent directory, name = its stem); by a `load_sql("topic", some_var)` call in a Python file that
+A file counts as referenced by a literal `load_sql("topic", "name")` call (positional or `topic=`/`name=`;
+topic = the file's parent directory, name = its stem); by a `load_sql("topic", some_var)` call in a Python file that
 also contains the stem as a string literal (so `name = "a" if x else "b"` and lookup tables work);
-by a string literal that is a repo-relative path ending in the file's path
+by a string literal that is a path whose trailing segments equal the file's repo-relative path
 (`get_sql_with_prm_list("backend/api/sql/x.sql")`); or by its bare filename as a literal in a
 Python file under the SQL folder's parent (`_SQL_DIR / "x.sql"`). It never executes code, so a
 file reached through a fully computed path is a false positive -- list it in
 `sql_unreferenced_ignore`. References are searched across the whole repo even when `bdt lint`
 is given an explicit file list (e.g. by a prek hook), since the caller you just deleted is
-usually not the file you're linting.
+usually not the file you're linting. A Python file that can't be parsed (including syntax newer than
+the interpreter running `bdt`) is itself reported as `sql-check-python-unparseable`, because
+references in it are unknown.
 
 **Tooling config** — the repo must declare `ty`, `ruff` and `pytest` as
 dependencies, have `pytest` configured (`[tool.pytest.ini_options]` or a
@@ -620,7 +625,8 @@ names to skip, beyond the built-in `.venv`/`node_modules`/etc. list),
 `pydantic_field_threshold` (default 5), `pydantic_base_classes` (default
 `["BaseModel", "PostgresTableModel"]`), `pydantic_allowed_subdirs` (default
 `["models", "schemas", "dto"]`), `pydantic_api_dir_names` (default `["api"]`),
-`sql_roots`/`sql_loader_functions`/`sql_unreferenced_ignore` (above), `ts_exclude_globs` (repo-relative globs of TypeScript files to skip, e.g.
+`sql_roots`, `sql_loader_functions`, `sql_unreferenced_ignore` (see `sql-file-unreferenced`),
+`ts_exclude_globs` (repo-relative globs of TypeScript files to skip, e.g.
 `["src/legacy/*"]`), `ts_non_json_markers` (extra strings that mark a call's
 enclosing block as non-JSON traffic).
 
@@ -652,27 +658,35 @@ baseline = "api-usage-baseline.txt"               # optional ratchet, see below
 
 Pair each backend app with *its own* frontends (one `[[...apps]]` entry per backend) -- a route
 called only by another backend's frontend is still unused here. Exit code is 0 (clean), 1
-(findings) or 2 (setup problem, e.g. the app doesn't import; the error shows the import's output).
+(findings) or 2 (setup problem: invalid config or pyproject.toml, the app doesn't import within 5 minutes, the
+error shows the import's output).
 
 The backend inventory is `app.openapi()` of the app **and of every mounted sub-app** (with the
 mount prefix), so it needs no committed schema and can't go stale; routes with
 `include_in_schema=False` are not considered.
 
 **Generated code never counts as a caller.** A generated client lists *every* route, so it is
-skipped (`generated/`, `*.gen.ts`, `*.generated.*`, `api-types*.ts`, `*.d.ts`), as are tests and
-e2e specs (`*.test.*`, `*.spec.*`, `__tests__/`, `tests/`, `e2e/`). An operation is called when
-non-generated code has (strongest first):
+skipped (`generated/`, `*.gen.*`, `*.generated.*`, `api-types*`, `openapi_schema*`, `*.d.ts`), as are
+tests and e2e specs (`*.test.*`, `*.spec.*`, `__tests__/`, `tests/`, `e2e/`) -- for TypeScript,
+JavaScript and Vue files alike. Comments are blanked before scanning. An operation is called when
+non-generated code of one of the app's frontends has (strongest first):
 
-- **sdk** -- a reference to a hey-api SDK function (read from the generated `sdk.gen.ts`, matched on
-  method *and* url) or one of its react-query helpers (`fooOptions`, `fooMutation`, `fooQueryKey`, ...);
-- **fetch** -- an openapi-fetch call `.GET("/path"` naming this method and path;
+- **sdk** -- a reference to a hey-api SDK function (read from the `sdk.gen.ts` under that same frontend
+  directory, matched on method *and* url) or one of its react-query helpers (`fooOptions`, `fooMutation`,
+  `fooQueryKey`, ...). Each `frontends` directory is scoped to its own SDK, so two apps that both generate
+  `listItems` aren't confused;
+- **fetch** -- an openapi-fetch call `.GET("/path"` naming this method and path (a `DELETE` of the
+  same path with no call of its own is still reported);
 - **url** -- a string/template literal equal to the path template (any method), e.g. a hand-written
-  `fetch(`/api/x/${id}`)` or an `<a href=...>` -- nested templates like `${qs ? `?a=${b}` : ""}` are handled;
-- **url-sfx** -- a literal matching only as a suffix of the route (a client with a base URL).
+  `fetch(`/api/x/${id}`)`, `"/api/x/" + id` or an `<a href=...>` -- nested templates like
+  `${qs ? `?a=${b}` : ""}` are handled;
+- **url-sfx** -- a literal (two or more segments) that is a suffix of the route (a client with a base URL,
+  or a `${base}` prefix).
 
-It is a heuristic: no type information, a mention in a comment counts, a URL literal matches every
-method of that path, and URLs assembled from non-literal pieces or handed to the client by the server
-are invisible -- exclude those routes explicitly. Run against our repos, the usual legitimate
+It is a heuristic: no type information, a URL literal matches every method of that path (and so does an
+SPA `<Link to="/users/${id}">`), and URLs assembled from non-literal pieces or handed to the client by the
+server are invisible -- exclude those routes explicitly. An app that exposes no documented operations
+(e.g. one wrapped in middleware that hides `openapi()`) is a setup error, not a clean pass. Run against our repos, the usual legitimate
 exclusions are auth redirects (`/login`, `/callback`, `/logout`), health checks, the SPA catch-all,
 service-to-service endpoints and an external API folder.
 

@@ -7,21 +7,24 @@ needs two inventories:
   sub-apps, run in a subprocess so two backends with a same-named package can't collide) or from a
   committed `openapi.json`;
 - **the frontend's call sites** -- found in *non-generated* TypeScript/JavaScript/Vue sources only.
-  Generated code (`*.gen.ts`, `*.generated.*`, `generated/`, `*.d.ts`, ...), tests and e2e specs are
+  Generated code (`*.gen.*`, `*.generated.*`, `generated/`, `*.d.ts`, ...), tests and e2e specs are
   never counted: a generated client lists *every* route, so counting it would make everything look called.
+  Comments are blanked before scanning.
 
-An operation counts as called when, in non-generated code, there is (strongest first):
+An operation counts as called when, in non-generated code of one of its app's frontends, there is
+(strongest first):
 
-- **sdk** -- a reference to a hey-api SDK function (read from `sdk.gen.ts`) or one of its react-query
-  helpers (`fooOptions`, `fooMutation`, `fooQueryKey`, ...) whose generated method + url match;
+- **sdk** -- a reference to a hey-api SDK function (read from that frontend's own `sdk.gen.ts`, matched on
+  method *and* url) or one of its react-query helpers (`fooOptions`, `fooMutation`, `fooQueryKey`, ...);
 - **fetch** -- an openapi-fetch style `.GET("/path"` literal naming this method and path;
 - **url** -- a string/template literal equal to the path template (any method), e.g. a hand-written
-  `fetch(`/api/x/${id}`)` or an `<a href>`;
-- **url-sfx** -- a literal that only matches as a suffix (client with a base URL the scan can't see).
+  `fetch(`/api/x/${id}`)`, `"/api/x/" + id` or an `<a href>`;
+- **url-sfx** -- a literal that is a suffix of the route (client with a base URL the scan can't see).
 
-Deliberately heuristic (no type information, comments count as mentions). Routes that are legitimately
-not called by the frontend -- external APIs, auth redirects, health checks, service-to-service calls,
-LLM/MCP tools -- are excluded by prefix/tag/glob, or ratcheted through a baseline file.
+Deliberately heuristic (no type information; a URL literal matches every method of its path, and so does an SPA
+`<Link to="/users/${id}">`). Routes that are legitimately not called by the frontend -- external APIs, auth
+redirects, health checks, service-to-service calls, LLM/MCP tools -- are excluded by prefix/tag/glob, or ratcheted
+through a baseline file.
 """
 
 from __future__ import annotations
@@ -37,23 +40,30 @@ from fnmatch import fnmatch
 from pathlib import Path
 
 from . import _api_dump
+from .lint import _DEFAULT_EXCLUDE_DIR_NAMES, _iter_files
 from .lint_findings import Finding
-from .lint_typescript import is_excluded_ts_file
+from .lint_typescript import _mask, is_excluded_ts_file
 
 RULE = "api-route-uncalled"
 RULE_STALE_BASELINE = "api-route-baseline-stale"
 
 SOURCE_SUFFIXES = (".ts", ".tsx", ".mts", ".js", ".jsx", ".vue")
-_SKIP_DIR_NAMES = frozenset({"node_modules", "dist", ".output", ".nuxt", ".next", ".git", ".turbo"})
-_HTTP_METHODS = ("get", "post", "put", "patch", "delete", "options", "head")
+_EXCLUDE_DIR_NAMES = _DEFAULT_EXCLUDE_DIR_NAMES | {".output", ".nuxt", ".next", ".turbo", "storybook-static"}
+# `is_excluded_ts_file` only knows .ts/.tsx/.mts names; the same generated/test conventions apply to JS and Vue files.
+_EXCLUDE_FILE_RE = re.compile(r"\.(?:gen|generated|test|spec)\.(?:[cm]?[jt]sx?|vue)$|\.d\.[cm]?ts$")
+_EXCLUDE_FILE_PREFIXES = ("api-types", "openapi_schema")
 _REACT_QUERY_SUFFIXES = ("Options", "Mutation", "InfiniteOptions", "QueryKey", "InfiniteQueryKey", "Query")
+_APP_IMPORT_TIMEOUT_SECONDS = 300
+_MAX_TEMPLATE_CHARS = 4000  # a URL template longer than this is not a URL; also bounds the rescan of an unclosed backtick
+_MAX_TEMPLATE_DEPTH = 20
 
-_QUOTED_PATH_RE = re.compile(r"""(?P<q>['"])(?P<body>(?:\$\{[^}]*\})?/[^'"\n]*)(?P=q)""")
-_TEMPLATE_START_RE = re.compile(r"`(?=(?:\$\{[^}`]*\})?/)")
+# Bounded character classes keep these linear on garbage input (a lone `'${` must not scan to end of file).
+_QUOTED_PATH_RE = re.compile(r"""(?P<q>['"])(?P<body>(?:\$\{[^}\n'"]*\})*/[^'"\n]*)(?P=q)""")
+_TEMPLATE_START_RE = re.compile(r"`(?=(?:\$\{[^}`\n]*\})*/)")
 _FETCH_METHOD_RE = re.compile(r"\.(GET|POST|PUT|PATCH|DELETE)\s*(?:<[^()]*?>)?\(\s*$")
 _IDENT_RE = re.compile(r"[A-Za-z_$][\w$]*")
 _SDK_FN_RE = re.compile(r"export const (\w+) = ")
-_SDK_URL_RE = re.compile(r"""\.(get|post|put|patch|delete)\b[^;]*?url:\s*["']([^"']+)["']""", re.S)
+_SDK_URL_RE = re.compile(r"""\.(get|post|put|patch|delete|head|options)\b[^;]{0,4000}?url:\s*["']([^"']+)["']""", re.S)
 
 
 class ApiUsageError(Exception):
@@ -71,23 +81,12 @@ class Operation:
     def key(self) -> str:
         return f"{self.method} {self.path}"
 
+    @classmethod
+    def from_dict(cls, d: dict) -> Operation:
+        return cls(d["method"], d["path"], tuple(d["tags"]), d["mount"])
+
 
 # --------------------------------------------------------------------------- backend inventory
-
-
-def operations_from_openapi(doc: dict, *, mount: str = "") -> list[Operation]:
-    """Operations of one OpenAPI document, with `mount` prepended to every path."""
-    ops: list[Operation] = []
-    for path, item in (doc.get("paths") or {}).items():
-        for method, op in item.items():
-            if method in _HTTP_METHODS and isinstance(op, dict):
-                ops.append(Operation(method.upper(), mount + path, tuple(op.get("tags") or ()), mount))
-    return ops
-
-
-def collect_app_operations(app: object) -> list[Operation]:
-    """Documented operations of a FastAPI-like app and, recursively, of every mounted sub-app (see `_api_dump`)."""
-    return [Operation(d["method"], d["path"], tuple(d["tags"]), d["mount"]) for d in _api_dump.collect(app)]
 
 
 def load_app_operations(app_spec: str, *, cwd: Path, env: dict[str, str] | None = None) -> list[Operation]:
@@ -96,27 +95,37 @@ def load_app_operations(app_spec: str, *, cwd: Path, env: dict[str, str] | None 
     anything from this package, so a repo-local `bmsdna` package can't shadow `bmsdna.devtools`."""
     if ":" not in app_spec:
         raise ApiUsageError(f"app '{app_spec}' must look like 'module.path:attribute'")
+    if not cwd.is_dir():
+        raise ApiUsageError(f"app_dir '{cwd}' is not a directory")
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "ops.json"
-        proc = subprocess.run(
-            [sys.executable, "-c", Path(_api_dump.__file__).read_text(encoding="utf-8"), app_spec, str(out)],
-            cwd=cwd,
-            env={**os.environ, **(env or {})},
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-        )
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", Path(_api_dump.__file__).read_text(encoding="utf-8"), app_spec, str(out)],
+                cwd=cwd,
+                env={**os.environ, **(env or {})},
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=_APP_IMPORT_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ApiUsageError(f"importing '{app_spec}' took longer than {_APP_IMPORT_TIMEOUT_SECONDS}s (cwd {cwd})") from exc
         if proc.returncode != 0 or not out.is_file():
             tail = "\n".join((proc.stderr or proc.stdout).strip().splitlines()[-15:])
             raise ApiUsageError(f"could not load operations from '{app_spec}' (cwd {cwd}):\n{tail}")
-        return [Operation(d["method"], d["path"], tuple(d["tags"]), d["mount"]) for d in json.loads(out.read_text(encoding="utf-8"))]
+        return [Operation.from_dict(d) for d in json.loads(out.read_text(encoding="utf-8"))]
 
 
 def load_openapi_file(path: Path) -> list[Operation]:
     try:
-        return operations_from_openapi(json.loads(path.read_text(encoding="utf-8")))
+        doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise ApiUsageError(f"could not read OpenAPI file {path}: {exc}") from exc
+    if not isinstance(doc, dict):
+        raise ApiUsageError(f"OpenAPI file {path} is not a JSON object")
+    return [Operation.from_dict(d) for d in _api_dump.ops_from_doc(doc)]
 
 
 # --------------------------------------------------------------------------- frontend scan
@@ -133,38 +142,40 @@ def normalize_path(text: str) -> str:
     return text.rstrip("/") or "/"
 
 
-def _read_template(text: str, i: int) -> tuple[str, int]:
+def _read_template(text: str, i: int, end: int, depth: int = 0) -> tuple[str, int]:
     """`text[i]` is an opening backtick. Returns (template text with every `${expr}` replaced by `{}`,
-    index after the closing backtick), handling templates/strings/braces nested inside `${...}`."""
+    index after the closing backtick), handling templates/strings/braces nested inside `${...}`. Stops at `end`
+    (and at a nesting depth that only hostile input reaches) instead of scanning on."""
     out: list[str] = []
-    n = len(text)
     i += 1
-    while i < n:
+    while i < end:
         c = text[i]
         if c == "\\":
             i += 2
         elif c == "`":
             return "".join(out), i + 1
         elif c == "$" and text.startswith("${", i):
-            depth, i = 1, i + 2
-            while i < n and depth:
+            level, i = 1, i + 2
+            while i < end and level:
                 c = text[i]
                 if c == "`":
-                    _, i = _read_template(text, i)
+                    if depth >= _MAX_TEMPLATE_DEPTH:
+                        return "".join(out), end
+                    _, i = _read_template(text, i, end, depth + 1)
                     continue
                 if c in "'\"":
                     j = i + 1
-                    while j < n and text[j] != c and text[j] != "\n":
+                    while j < end and text[j] != c and text[j] != "\n":
                         j += 2 if text[j] == "\\" else 1
                     i = j + 1
                     continue
-                depth += (c == "{") - (c == "}")
+                level += (c == "{") - (c == "}")
                 i += 1
             out.append("{}")
         else:
             out.append(c)
             i += 1
-    return "".join(out), n
+    return "".join(out), end
 
 
 @dataclass(slots=True)
@@ -173,82 +184,111 @@ class FrontendUsage:
     identifiers: set[str] = field(default_factory=set)
     fetch_calls: set[tuple[str, str]] = field(default_factory=set)  # (METHOD, normalized path) from `.GET("/x"`
     literals: set[str] = field(default_factory=set)  # normalized path-like string/template literals
+    suffix_literals: set[str] = field(default_factory=set)  # literals usable for url-sfx matching (derived, see scan_frontend)
 
 
-def iter_frontend_files(dirs: list[Path], *, repo_root: Path, exclude_globs: list[str]) -> list[Path]:
-    files: list[Path] = []
-    for directory in dirs:
-        for dirpath, dirnames, filenames in os.walk(directory):
-            dirnames[:] = [d for d in dirnames if d not in _SKIP_DIR_NAMES]
-            for name in filenames:
-                path = Path(dirpath, name)
-                if path.suffix in SOURCE_SUFFIXES and not is_excluded_ts_file(path, repo_root=repo_root, exclude_globs=exclude_globs):
-                    files.append(path)
-    return sorted(set(files))
+@dataclass(slots=True)
+class Frontend:
+    """One frontend source directory: what its non-generated code references, and its own generated hey-api SDK
+    (function -> (METHOD, normalized url)). Kept per directory so two apps that both generate `listItems` can't be confused."""
+
+    usage: FrontendUsage
+    sdk: dict[str, tuple[str, str]] = field(default_factory=dict)
+
+
+def is_generated_or_test_file(path: Path, *, repo_root: Path, exclude_globs: list[str]) -> bool:
+    return (
+        bool(_EXCLUDE_FILE_RE.search(path.name))
+        or path.name.startswith(_EXCLUDE_FILE_PREFIXES)
+        or is_excluded_ts_file(path, repo_root=repo_root, exclude_globs=exclude_globs)
+    )
+
+
+def iter_frontend_files(directory: Path, *, repo_root: Path, exclude_globs: list[str]) -> list[Path]:
+    files, _ = _iter_files([directory], _EXCLUDE_DIR_NAMES, SOURCE_SUFFIXES)
+    return [f for f in files if not is_generated_or_test_file(f, repo_root=repo_root, exclude_globs=exclude_globs)]
 
 
 def scan_frontend(files: list[Path]) -> FrontendUsage:
     usage = FrontendUsage()
     for path in files:
-        text = path.read_text(encoding="utf-8", errors="ignore")
+        text = _mask(path.read_text(encoding="utf-8", errors="ignore")).code  # comments blanked, strings kept
         usage.files += 1
         usage.identifiers.update(_IDENT_RE.findall(text))
         found: list[tuple[int, str]] = [(m.start(), m.group("body")) for m in _QUOTED_PATH_RE.finditer(text)]
-        found.extend((m.start(), _read_template(text, m.start())[0]) for m in _TEMPLATE_START_RE.finditer(text))
+        for m in _TEMPLATE_START_RE.finditer(text):
+            found.append((m.start(), _read_template(text, m.start(), min(len(text), m.start() + _MAX_TEMPLATE_CHARS))[0]))
         for pos, body in found:
             normalized = normalize_path(body)
-            usage.literals.add(normalized)
             call = _FETCH_METHOD_RE.search(text[max(0, pos - 40) : pos])
-            if call:
+            if call:  # method-exact evidence only; it must not also count as a method-agnostic URL literal
                 usage.fetch_calls.add((call.group(1), normalized))
+                continue
+            if normalized != "/":
+                usage.literals.add(normalized)
+            if body.endswith("/") and body != "/":  # `"/api/items/" + id`
+                usage.literals.add(normalize_path(body + "{}"))
+    for literal in usage.literals:
+        bare = re.sub(r"^(\{\})+", "", literal)
+        if bare.count("/") >= 2 and "{}" not in bare.split("/")[1:2]:
+            usage.suffix_literals.add(bare)
     return usage
 
 
-def read_sdk_functions(dirs: list[Path]) -> dict[str, tuple[str, str]]:
-    """hey-api `sdk.gen.ts` under `dirs`: exported function name -> (METHOD, url as generated)."""
+def read_sdk_functions(directory: Path) -> dict[str, tuple[str, str]]:
+    """hey-api `sdk.gen.ts` files under `directory`: exported function name -> (METHOD, normalized url as generated)."""
     functions: dict[str, tuple[str, str]] = {}
-    for directory in dirs:
-        for dirpath, dirnames, filenames in os.walk(directory):
-            dirnames[:] = [d for d in dirnames if d not in _SKIP_DIR_NAMES]
-            if "sdk.gen.ts" not in filenames:
-                continue
-            text = Path(dirpath, "sdk.gen.ts").read_text(encoding="utf-8", errors="ignore")
-            for chunk in re.split(r"(?=^export const \w+ = )", text, flags=re.M):
-                name, url = _SDK_FN_RE.match(chunk), _SDK_URL_RE.search(chunk)
-                if name and url:
-                    functions[name.group(1)] = (url.group(1).upper(), url.group(2))
+    for dirpath, dirnames, filenames in os.walk(directory):
+        dirnames[:] = [d for d in dirnames if d not in _EXCLUDE_DIR_NAMES]
+        if "sdk.gen.ts" not in filenames:
+            continue
+        text = Path(dirpath, "sdk.gen.ts").read_text(encoding="utf-8", errors="ignore")
+        for chunk in re.split(r"(?=^export const \w+ = )", text, flags=re.M):
+            name, url = _SDK_FN_RE.match(chunk), _SDK_URL_RE.search(chunk)
+            if name and url:
+                functions[name.group(1)] = (url.group(1).upper(), normalize_path(url.group(2)))
     return functions
+
+
+def build_frontend(directory: Path, *, repo_root: Path, exclude_globs: list[str]) -> Frontend:
+    files = iter_frontend_files(directory, repo_root=repo_root, exclude_globs=exclude_globs)
+    return Frontend(scan_frontend(files), read_sdk_functions(directory))
 
 
 # --------------------------------------------------------------------------- matching
 
+_EVIDENCE_RANK = {"sdk": 0, "fetch": 1, "url": 2, "url-sfx": 3}
 
-def call_evidence(op: Operation, usage: FrontendUsage, sdk_functions: dict[str, tuple[str, str]]) -> str | None:
-    """The strongest kind of evidence (`sdk`/`fetch`/`url`/`url-sfx`) that `op` is called, or None."""
-    full = normalize_path(op.path)
-    relative = full[len(op.mount) :] if op.mount and full.startswith(op.mount) else full
-    candidates = {full, relative}
 
-    sdk_names = {fn for fn, (method, url) in sdk_functions.items() if method == op.method and normalize_path(url) in candidates}
-    for fn in sdk_names:
-        if fn in usage.identifiers or any(fn + suffix in usage.identifiers for suffix in _REACT_QUERY_SUFFIXES):
+def _evidence_in(op: Operation, frontend: Frontend, candidates: set[str]) -> str | None:
+    usage, sdk = frontend.usage, frontend.sdk
+    for fn, (method, url) in sdk.items():
+        if method != op.method or url not in candidates:
+            continue
+        if fn in usage.identifiers:
+            return "sdk"
+        # `fooOptions`/`fooMutation`/... -- unless that name is itself another SDK function (`getUser` vs `getUserQuery`)
+        if any(fn + s in usage.identifiers and fn + s not in sdk for s in _REACT_QUERY_SUFFIXES):
             return "sdk"
     if any((op.method, c) in usage.fetch_calls for c in candidates):
         return "fetch"
     if candidates & usage.literals:
         return "url"
-    for literal in usage.literals:
-        bare = re.sub(r"^(\{\})+", "", literal)
-        if bare.count("/") < 2 or bare == "/":
-            continue
-        if any(c == bare or c.endswith(bare) or (len(c) > 3 and bare.endswith(c)) for c in candidates) and "{}" not in bare.split("/")[1:2]:
-            return "url-sfx"
+    if any(c.endswith(bare) for bare in usage.suffix_literals for c in candidates):
+        return "url-sfx"
     return None
 
 
-def is_excluded(
-    op: Operation, *, prefixes: tuple[str, ...] | list[str], tags: tuple[str, ...] | list[str], path_globs: tuple[str, ...] | list[str]
-) -> bool:
+def call_evidence(op: Operation, frontends: list[Frontend]) -> str | None:
+    """The strongest kind of evidence (`sdk`/`fetch`/`url`/`url-sfx`) that `op` is called from any of `frontends`, or None."""
+    full = normalize_path(op.path)
+    relative = (full[len(op.mount) :] if op.mount and full.startswith(op.mount) else full) or "/"
+    candidates = {full, relative}
+    found = [e for fe in frontends if (e := _evidence_in(op, fe, candidates))]
+    return min(found, key=_EVIDENCE_RANK.__getitem__) if found else None
+
+
+def is_excluded(op: Operation, *, prefixes: list[str], tags: list[str], path_globs: list[str]) -> bool:
     return (
         any(op.path.startswith(p) for p in prefixes)
         or any(t in tags for t in op.tags)
@@ -256,24 +296,7 @@ def is_excluded(
     )
 
 
-def find_uncalled(
-    operations: list[Operation],
-    usage: FrontendUsage,
-    sdk_functions: dict[str, tuple[str, str]],
-    *,
-    exclude_prefixes: tuple[str, ...] | list[str] = (),
-    exclude_tags: tuple[str, ...] | list[str] = (),
-    exclude_paths: tuple[str, ...] | list[str] = (),
-) -> list[Operation]:
-    return [
-        op
-        for op in operations
-        if not is_excluded(op, prefixes=exclude_prefixes, tags=exclude_tags, path_globs=exclude_paths)
-        and call_evidence(op, usage, sdk_functions) is None
-    ]
-
-
-# --------------------------------------------------------------------------- orchestration
+# --------------------------------------------------------------------------- configuration
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,6 +314,13 @@ class AppConfig:
     baseline: str | None = None
 
 
+def _str_list(raw: dict, key: str, app: str) -> list[str]:
+    value = raw.get(key, [])
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise ApiUsageError(f"api_usage app '{app}': `{key}` must be a list of strings, got {value!r}")
+    return value
+
+
 def parse_config(table: dict) -> list[AppConfig]:
     apps = table.get("apps") or []
     if not apps:
@@ -300,20 +330,24 @@ def parse_config(table: dict) -> list[AppConfig]:
         name = str(raw.get("name") or raw.get("app") or raw.get("openapi") or f"app{i}")
         if bool(raw.get("app")) == bool(raw.get("openapi")):
             raise ApiUsageError(f"api_usage app '{name}': set exactly one of `app` (module:attr) and `openapi` (path to openapi.json)")
-        if not raw.get("frontends"):
+        frontends = _str_list(raw, "frontends", name)
+        if not frontends:
             raise ApiUsageError(f"api_usage app '{name}': `frontends` (list of frontend source dirs/globs) is required")
+        env = raw.get("env") or {}
+        if not isinstance(env, dict):
+            raise ApiUsageError(f"api_usage app '{name}': `env` must be a table")
         configs.append(
             AppConfig(
                 name=name,
-                frontends=[str(f) for f in raw["frontends"]],
+                frontends=frontends,
                 app=raw.get("app"),
                 openapi=raw.get("openapi"),
                 app_dir=str(raw.get("app_dir", ".")),
-                env={str(k): str(v) for k, v in (raw.get("env") or {}).items()},
-                exclude_prefixes=[str(p) for p in raw.get("exclude_prefixes", [])],
-                exclude_tags=[str(t) for t in raw.get("exclude_tags", [])],
-                exclude_paths=[str(p) for p in raw.get("exclude_paths", [])],
-                exclude_frontend_globs=[str(g) for g in raw.get("exclude_frontend_globs", [])],
+                env={str(k): str(v) for k, v in env.items()},
+                exclude_prefixes=_str_list(raw, "exclude_prefixes", name),
+                exclude_tags=_str_list(raw, "exclude_tags", name),
+                exclude_paths=_str_list(raw, "exclude_paths", name),
+                exclude_frontend_globs=_str_list(raw, "exclude_frontend_globs", name),
                 baseline=raw.get("baseline"),
             )
         )
@@ -323,11 +357,16 @@ def parse_config(table: dict) -> list[AppConfig]:
 def _resolve_frontend_dirs(repo_root: Path, patterns: list[str]) -> list[Path]:
     dirs: list[Path] = []
     for pattern in patterns:
+        if not pattern or Path(pattern).is_absolute():
+            raise ApiUsageError(f"frontends entry '{pattern}' must be a non-empty repo-relative path or glob")
         matches = sorted(p for p in repo_root.glob(pattern) if p.is_dir())
         if not matches:
             raise ApiUsageError(f"frontends entry '{pattern}' matches no directory under {repo_root}")
         dirs.extend(matches)
     return dirs
+
+
+# --------------------------------------------------------------------------- baseline
 
 
 def read_baseline(path: Path) -> set[str]:
@@ -338,7 +377,11 @@ def read_baseline(path: Path) -> set[str]:
 
 def write_baseline(path: Path, keys: list[str]) -> None:
     header = "# Backend operations known not to be called from the frontend (bdt lint-api-usage). Remove a line once the route is deleted or called.\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(header + "".join(f"{k}\n" for k in sorted(keys)), encoding="utf-8")
+
+
+# --------------------------------------------------------------------------- orchestration
 
 
 def check_app(config: AppConfig, *, repo_root: Path, update_baseline: bool = False) -> list[Finding]:
@@ -347,44 +390,45 @@ def check_app(config: AppConfig, *, repo_root: Path, update_baseline: bool = Fal
     else:
         assert config.app is not None
         operations = load_app_operations(config.app, cwd=repo_root / config.app_dir, env=config.env)
+    if not operations:
+        raise ApiUsageError(
+            f"api_usage app '{config.name}': no operations found in {config.openapi or config.app} "
+            "(is it a FastAPI app with documented routes, not a wrapped/middleware ASGI app?)"
+        )
 
-    frontend_dirs = _resolve_frontend_dirs(repo_root, config.frontends)
-    usage = scan_frontend(iter_frontend_files(frontend_dirs, repo_root=repo_root, exclude_globs=config.exclude_frontend_globs))
-    uncalled = find_uncalled(
-        operations,
-        usage,
-        read_sdk_functions(frontend_dirs),
-        exclude_prefixes=config.exclude_prefixes,
-        exclude_tags=config.exclude_tags,
-        exclude_paths=config.exclude_paths,
-    )
+    frontends = [
+        build_frontend(d, repo_root=repo_root, exclude_globs=config.exclude_frontend_globs)
+        for d in _resolve_frontend_dirs(repo_root, config.frontends)
+    ]
 
-    keys = [op.key for op in uncalled]
+    def excluded(op: Operation) -> bool:
+        return is_excluded(op, prefixes=config.exclude_prefixes, tags=config.exclude_tags, path_globs=config.exclude_paths)
+
+    by_key = {op.key: op for op in operations}
+    uncalled = [op for op in operations if not excluded(op) and call_evidence(op, frontends) is None]
     where = Path(config.name)
-    if config.baseline:
-        baseline_path = repo_root / config.baseline
-        if update_baseline:
-            write_baseline(baseline_path, keys)
-            return []
-        baseline = read_baseline(baseline_path)
-        by_key = {op.key: op for op in uncalled}
-        findings = [_finding(where, op) for key, op in by_key.items() if key not in baseline]
-        known = {op.key for op in operations}
-        findings.extend(
+
+    if not config.baseline:
+        return [_finding(where, op) for op in uncalled]
+    baseline_path = repo_root / config.baseline
+    if update_baseline:
+        write_baseline(baseline_path, [op.key for op in uncalled])
+        return []
+    baseline = read_baseline(baseline_path)
+    uncalled_keys = {op.key for op in uncalled}
+    findings = [_finding(where, op) for op in uncalled if op.key not in baseline]
+    for key in sorted(baseline - uncalled_keys):
+        op = by_key.get(key)
+        reason = "no longer a backend route" if op is None else "now excluded" if excluded(op) else "now called from the frontend"
+        findings.append(
             Finding(
                 where,
                 0,
                 RULE_STALE_BASELINE,
-                f"'{key}' is listed in {config.baseline} but is "
-                + ("now called from the frontend" if key in known else "no longer a backend route")
-                + " -- remove it (or run `bdt lint-api-usage --update-baseline`).",
+                f"'{key}' is listed in {config.baseline} but is {reason} -- remove it (or run `bdt lint-api-usage --update-baseline`).",
             )
-            for key in sorted(baseline - set(by_key))
         )
-        return findings
-    if update_baseline:
-        raise ApiUsageError(f"api_usage app '{config.name}' has no `baseline` configured, nothing to update")
-    return [_finding(where, op) for op in uncalled]
+    return findings
 
 
 def _finding(where: Path, op: Operation) -> Finding:
@@ -399,7 +443,15 @@ def _finding(where: Path, op: Operation) -> Finding:
 
 
 def run(table: dict, *, repo_root: Path, update_baseline: bool = False) -> list[Finding]:
+    configs = parse_config(table)
+    if update_baseline:  # validate everything first so a late failure can't leave some baselines rewritten and others not
+        paths = [c.baseline for c in configs]
+        if not all(paths):
+            missing = ", ".join(c.name for c in configs if not c.baseline)
+            raise ApiUsageError(f"--update-baseline needs a `baseline` for every app; missing for: {missing}")
+        if len(set(paths)) != len(paths):
+            raise ApiUsageError("--update-baseline: two apps share the same `baseline` file, each would overwrite the other")
     findings: list[Finding] = []
-    for config in parse_config(table):
+    for config in configs:
         findings.extend(check_app(config, repo_root=repo_root, update_baseline=update_baseline))
     return findings

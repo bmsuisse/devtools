@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tomllib
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from importlib.metadata import version as _pkg_version
@@ -25,6 +26,7 @@ from .ado_auth import auth_header
 from .bdt_config import find_pyproject, load_bdt_table
 from .cli_tools import detect_agent_session, require_az, require_gh
 from .gitrepo import AdoRemote, GitHubRemote, UnknownRemoteError, current_branch, current_remote, head_commit_subject
+from .lint_findings import render_findings
 
 # Non-ASCII output (checkmarks, en-dashes in ADO project names, etc.) needs a
 # UTF-8 stream — the default Windows console codepage isn't UTF-8, and would
@@ -936,7 +938,8 @@ def lint(
     paths: list[str] = typer.Argument(
         None,
         help="Files and/or directories to scan (default: current directory, recursive). Pass an explicit "
-        "list of files -- e.g. from a prek/pre-commit hook's staged-file list -- to lint only those.",
+        "list of files -- e.g. from a prek/pre-commit hook's staged-file list -- to lint only those "
+        "(except `sql-file-unreferenced`, which always looks at the whole repo).",
     ),
     no_tooling_check: bool = typer.Option(
         False,
@@ -948,7 +951,8 @@ def lint(
     """Static checks (bmsuisse/skills#52): postgres/psycopg SQL rules on every `.execute()` call
     (must use load_sql()/a .sql file, a t-string, or psycopg.sql for anything beyond a trivial
     query; never an f-string/concatenation/`%`-formatting), pydantic-model placement under api/
-    directories, and that the repo declares/configures ty, ruff, pytest and prek.
+    directories, hand-wired HTTP in TypeScript, (opt-in via `sql_roots`) .sql files no Python code loads, and
+    that the repo declares/configures ty, ruff, pytest and prek. For dead backend routes see `lint-api-usage`.
     """
     result = lint_mod.run(paths or [], skip_tooling_check=no_tooling_check)
     raise typer.Exit(lint_mod.print_report(result))
@@ -972,13 +976,18 @@ def lint_api_usage(
     repo_root = pyproject.parent if pyproject else root
     try:
         findings = api_usage_mod.run(load_bdt_table("api_usage", root), repo_root=repo_root, update_baseline=update_baseline)
-    except api_usage_mod.ApiUsageError as exc:
+    except (api_usage_mod.ApiUsageError, tomllib.TOMLDecodeError) as exc:
         typer.echo(f"bdt lint-api-usage: {exc}", err=True)
         raise typer.Exit(2) from exc
     if update_baseline:
         typer.echo("bdt lint-api-usage: baseline(s) updated")
         raise typer.Exit(0)
-    raise typer.Exit(lint_mod.print_report(lint_mod.LintResult(findings=findings, tooling_skipped=True)))
+    if not findings:
+        typer.echo("bdt lint-api-usage: no uncalled routes")
+        raise typer.Exit(0)
+    typer.echo(render_findings(findings))
+    typer.echo(f"\n{len(findings)} issue(s) found.")
+    raise typer.Exit(1)
 
 
 @app.command("find-injection")

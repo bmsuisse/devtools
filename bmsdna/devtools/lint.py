@@ -109,10 +109,38 @@ def _iter_files(paths: list[Path], exclude_dir_names: frozenset[str], suffixes: 
     return files, missing
 
 
+def _as_list(value: str | list[str] | None) -> list[str]:
+    """A TOML list of strings; a bare string is accepted as a one-item list rather than iterated character by character."""
+    return [value] if isinstance(value, str) else [str(v) for v in value or []]
+
+
+def _check_sql_roots(config: dict, *, repo_root: Path, exclude_dir_names: frozenset[str], python_files: list[Path]) -> list[Finding]:
+    findings: list[Finding] = []
+    roots: list[Path] = []
+    for root in _as_list(config.get("sql_roots")):
+        candidate = repo_root / root
+        if candidate.is_dir() and candidate.resolve().is_relative_to(repo_root.resolve()):
+            roots.append(candidate)
+        else:
+            findings.append(Finding(candidate, 0, "lint-path-not-found", f"sql_roots entry '{root}' is not a directory inside {repo_root}."))
+    sql_files, _ = _iter_files(roots, exclude_dir_names, (".sql",))
+    findings.extend(
+        check_unreferenced_sql_files(
+            repo_root=repo_root,
+            sql_files=sql_files,
+            python_files=python_files,
+            loader_functions=_as_list(config.get("sql_loader_functions", list(DEFAULT_LOADER_FUNCTIONS))),
+            ignore_globs=_as_list(config.get("sql_unreferenced_ignore")),
+        )
+    )
+    return findings
+
+
 def run(paths: list[str], *, root: Path | None = None, skip_tooling_check: bool = False) -> LintResult:
     """Runs every `bdt lint` check.
 
-    `paths` -- files and/or directories to scan; empty means "scan `root`, recursively".
+    `paths` -- files and/or directories to scan; empty means "scan `root`, recursively" (the opt-in
+    `sql-file-unreferenced` rule always looks at the whole repo, whatever `paths` says).
     `root` -- where to look for pyproject.toml / prek.toml (defaults to cwd) and, with no
     `paths`, what to scan; also the base a relative `paths` entry and the pydantic-model
     check's api/-tree detection are resolved against.
@@ -167,18 +195,15 @@ def run(paths: list[str], *, root: Path | None = None, skip_tooling_check: bool 
             continue  # no generated API client in this package -- nothing to use instead of hand-wiring
         findings.extend(check_typescript_file(ts_path, generator=generator, non_json_markers=ts_markers))
 
-    sql_roots = [str(r) for r in config.get("sql_roots", []) or []]
-    if sql_roots:
-        # References can live anywhere in the repo, so this ignores `paths` (a prek hook's staged-file list).
-        all_python_files, _ = _iter_python_files([repo_root], exclude_dir_names)
+    if config.get("sql_roots"):
+        # References can live anywhere in the repo, so this looks past `paths` (a prek hook's staged-file list).
+        whole_repo = len(target_paths) == 1 and target_paths[0].resolve() == repo_root.resolve()
         findings.extend(
-            check_unreferenced_sql_files(
+            _check_sql_roots(
+                config,
                 repo_root=repo_root,
-                sql_roots=sql_roots,
-                python_files=all_python_files,
                 exclude_dir_names=exclude_dir_names,
-                loader_functions=[str(f) for f in config.get("sql_loader_functions", list(DEFAULT_LOADER_FUNCTIONS)) or []],
-                ignore_globs=[str(g) for g in config.get("sql_unreferenced_ignore", []) or []],
+                python_files=python_files if whole_repo else _iter_python_files([repo_root], exclude_dir_names)[0],
             )
         )
 
