@@ -4,7 +4,8 @@ so this also works as a prek/pre-commit hook scanning only the staged diff), run
 the SQL rule engine (lint_sql) and the pydantic-model-placement check (lint_models)
 over each, the TypeScript hand-wired-HTTP check (lint_typescript, bmsuisse/devtools#52)
 over each TypeScript file, and -- unless bypassed -- the tooling-config check
-(lint_tooling) once for the whole run.
+(lint_tooling) once for the whole run. The opt-in unreferenced-`.sql`-file check (lint_sql_files,
+`[tool.bdt.lint] sql_roots`) also runs once per run, over the whole repo regardless of `paths`.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from .lint_models import (
     check_models_file,
 )
 from .lint_sql import check_sql_file, require_sqlglot
+from .lint_sql_files import DEFAULT_LOADER_FUNCTIONS, check_unreferenced_sql_files
 from .lint_tooling import check_tooling
 from .lint_typescript import (
     DEFAULT_NON_JSON_MARKERS,
@@ -164,6 +166,21 @@ def run(paths: list[str], *, root: Path | None = None, skip_tooling_check: bool 
         if generator is None:
             continue  # no generated API client in this package -- nothing to use instead of hand-wiring
         findings.extend(check_typescript_file(ts_path, generator=generator, non_json_markers=ts_markers))
+
+    sql_roots = [str(r) for r in config.get("sql_roots", []) or []]
+    if sql_roots:
+        # References can live anywhere in the repo, so this ignores `paths` (a prek hook's staged-file list).
+        all_python_files, _ = _iter_python_files([repo_root], exclude_dir_names)
+        findings.extend(
+            check_unreferenced_sql_files(
+                repo_root=repo_root,
+                sql_roots=sql_roots,
+                python_files=all_python_files,
+                exclude_dir_names=exclude_dir_names,
+                loader_functions=[str(f) for f in config.get("sql_loader_functions", list(DEFAULT_LOADER_FUNCTIONS)) or []],
+                ignore_globs=[str(g) for g in config.get("sql_unreferenced_ignore", []) or []],
+            )
+        )
 
     tooling_skipped = skip_tooling_check or bool(config.get("skip_tooling_check", False))
     if not tooling_skipped:

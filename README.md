@@ -581,6 +581,29 @@ legitimate exception, put a comment on (or right above) the line:
 // bdt-lint: ignore ts-handwired-http -- websocket handshake, not in the schema
 ```
 
+**`sql-file-unreferenced`** (opt-in) — a `.sql` file that no Python code loads is a query
+left behind after its caller was deleted or renamed. Name the folders that hold *loadable*
+SQL (not schema/migration scripts, which are applied rather than loaded) and `bdt lint` reports
+every file under them that nothing references:
+
+```toml
+[tool.bdt.lint]
+sql_roots = ["backend/db/queries"]            # repo-relative; a typo'd root is itself reported
+sql_loader_functions = ["load_sql"]           # default; add your own loader's name if it differs
+sql_unreferenced_ignore = ["backend/db/queries/legacy/*.sql"]   # globs for files reached some other way
+```
+
+A file counts as referenced by a literal `load_sql("topic", "name")` call (topic = the file's
+parent directory, name = its stem); by a `load_sql("topic", some_var)` call in a Python file that
+also contains the stem as a string literal (so `name = "a" if x else "b"` and lookup tables work);
+by a string literal that is a repo-relative path ending in the file's path
+(`get_sql_with_prm_list("backend/api/sql/x.sql")`); or by its bare filename as a literal in a
+Python file under the SQL folder's parent (`_SQL_DIR / "x.sql"`). It never executes code, so a
+file reached through a fully computed path is a false positive -- list it in
+`sql_unreferenced_ignore`. References are searched across the whole repo even when `bdt lint`
+is given an explicit file list (e.g. by a prek hook), since the caller you just deleted is
+usually not the file you're linting.
+
 **Tooling config** — the repo must declare `ty`, `ruff` and `pytest` as
 dependencies, have `pytest` configured (`[tool.pytest.ini_options]` or a
 `pytest.ini`/`setup.cfg`), and have a `prek.toml` (see the `prek` skill).
@@ -597,7 +620,7 @@ names to skip, beyond the built-in `.venv`/`node_modules`/etc. list),
 `pydantic_field_threshold` (default 5), `pydantic_base_classes` (default
 `["BaseModel", "PostgresTableModel"]`), `pydantic_allowed_subdirs` (default
 `["models", "schemas", "dto"]`), `pydantic_api_dir_names` (default `["api"]`),
-`ts_exclude_globs` (repo-relative globs of TypeScript files to skip, e.g.
+`sql_roots`/`sql_loader_functions`/`sql_unreferenced_ignore` (above), `ts_exclude_globs` (repo-relative globs of TypeScript files to skip, e.g.
 `["src/legacy/*"]`), `ts_non_json_markers` (extra strings that mark a call's
 enclosing block as non-JSON traffic).
 
