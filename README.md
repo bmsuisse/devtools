@@ -629,6 +629,58 @@ already pulled in transitively via `pgdevkit[db]`, but declared explicitly as
 the `bmsdna-devtools[lint]` extra; a clear install hint is printed (not a raw
 `ImportError`) if it's ever missing.
 
+## `bdt lint-api-usage`
+
+Backend (FastAPI) operations that **no non-generated frontend code calls** -- dead routes that
+still have to be maintained, secured and tested. Separate from `bdt lint` because it imports the
+app, so run it with the repo's own interpreter (`uv run bdt lint-api-usage`).
+
+```toml
+[[tool.bdt.api_usage.apps]]
+name = "akeneo"                                   # label used in the report
+app = "main_app:app"                              # module:attribute, imported in a subprocess ...
+app_dir = "akeneo_editor/backend"                 # ... with this directory (repo-relative) as cwd/import root
+# openapi = "frontend/openapi.json"               # alternative to `app`: a committed OpenAPI document
+frontends = ["akeneo_editor/frontend/src"]        # repo-relative dirs or globs, e.g. "mdmapp/app/react_apps/*/src"
+exclude_prefixes = ["/external_api"]              # routes meant for other callers (external API, webhooks)
+exclude_tags = ["agent"]                          # e.g. LLM/MCP tools
+exclude_paths = ["/auth/*", "GET /health"]        # fnmatch globs on "/path" or "METHOD /path"
+baseline = "api-usage-baseline.txt"               # optional ratchet, see below
+# env = { SOME_REQUIRED_SETTING = "x" }           # extra environment for importing the app
+# exclude_frontend_globs = ["src/legacy/*"]       # repo-relative frontend files to ignore as callers
+```
+
+Pair each backend app with *its own* frontends (one `[[...apps]]` entry per backend) -- a route
+called only by another backend's frontend is still unused here. Exit code is 0 (clean), 1
+(findings) or 2 (setup problem, e.g. the app doesn't import; the error shows the import's output).
+
+The backend inventory is `app.openapi()` of the app **and of every mounted sub-app** (with the
+mount prefix), so it needs no committed schema and can't go stale; routes with
+`include_in_schema=False` are not considered.
+
+**Generated code never counts as a caller.** A generated client lists *every* route, so it is
+skipped (`generated/`, `*.gen.ts`, `*.generated.*`, `api-types*.ts`, `*.d.ts`), as are tests and
+e2e specs (`*.test.*`, `*.spec.*`, `__tests__/`, `tests/`, `e2e/`). An operation is called when
+non-generated code has (strongest first):
+
+- **sdk** -- a reference to a hey-api SDK function (read from the generated `sdk.gen.ts`, matched on
+  method *and* url) or one of its react-query helpers (`fooOptions`, `fooMutation`, `fooQueryKey`, ...);
+- **fetch** -- an openapi-fetch call `.GET("/path"` naming this method and path;
+- **url** -- a string/template literal equal to the path template (any method), e.g. a hand-written
+  `fetch(`/api/x/${id}`)` or an `<a href=...>` -- nested templates like `${qs ? `?a=${b}` : ""}` are handled;
+- **url-sfx** -- a literal matching only as a suffix of the route (a client with a base URL).
+
+It is a heuristic: no type information, a mention in a comment counts, a URL literal matches every
+method of that path, and URLs assembled from non-literal pieces or handed to the client by the server
+are invisible -- exclude those routes explicitly. Run against our repos, the usual legitimate
+exclusions are auth redirects (`/login`, `/callback`, `/logout`), health checks, the SPA catch-all,
+service-to-service endpoints and an external API folder.
+
+**Adopting it without fixing everything first:** set `baseline`, run
+`uv run bdt lint-api-usage --update-baseline` once, and commit the file. From then on only *new*
+uncalled routes fail -- and a baseline line whose route has since been deleted or is now called is
+reported as `api-route-baseline-stale`, so the list can only shrink.
+
 ## `bdt find-injection`
 
 Scans backend and frontend code for injection risks, and warns when a web project has no

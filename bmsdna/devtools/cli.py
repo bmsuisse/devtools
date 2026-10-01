@@ -12,7 +12,7 @@ import requests
 import typer
 from pgdevkit.testdb import constants as pgdevkit_constants
 
-from . import ado_issue, app_service_logs, commit as commit_mod
+from . import ado_issue, api_usage as api_usage_mod, app_service_logs, commit as commit_mod
 from . import env_config
 from . import find_repo as find_repo_mod
 from . import issue_do as issue_do_mod
@@ -22,6 +22,7 @@ from . import lint as lint_mod
 from . import logs as logs_mod
 from . import pr_build, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
+from .bdt_config import find_pyproject, load_bdt_table
 from .cli_tools import detect_agent_session, require_az, require_gh
 from .gitrepo import AdoRemote, GitHubRemote, UnknownRemoteError, current_branch, current_remote, head_commit_subject
 
@@ -951,6 +952,33 @@ def lint(
     """
     result = lint_mod.run(paths or [], skip_tooling_check=no_tooling_check)
     raise typer.Exit(lint_mod.print_report(result))
+
+
+@app.command("lint-api-usage")
+def lint_api_usage(
+    update_baseline: bool = typer.Option(
+        False,
+        "--update-baseline",
+        help="Rewrite each app's `baseline` file with the operations currently uncalled (and report nothing). "
+        "Use once to adopt the check, then only to remove lines.",
+    ),
+) -> None:
+    """Backend (FastAPI) operations that no non-generated frontend code calls -- dead routes. Configured via
+    the `apps` array of tables under tool.bdt.api_usage in pyproject.toml (app or openapi file + frontends + excludes + baseline);
+    generated API-client code and tests are never counted as callers. Exit 0 clean, 1 findings, 2 setup error.
+    """
+    root = Path.cwd()
+    pyproject = find_pyproject(root)
+    repo_root = pyproject.parent if pyproject else root
+    try:
+        findings = api_usage_mod.run(load_bdt_table("api_usage", root), repo_root=repo_root, update_baseline=update_baseline)
+    except api_usage_mod.ApiUsageError as exc:
+        typer.echo(f"bdt lint-api-usage: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    if update_baseline:
+        typer.echo("bdt lint-api-usage: baseline(s) updated")
+        raise typer.Exit(0)
+    raise typer.Exit(lint_mod.print_report(lint_mod.LintResult(findings=findings, tooling_skipped=True)))
 
 
 @app.command("find-injection")
