@@ -82,8 +82,10 @@ bdt pr info [--json] [--pr-id N] [--target-branch main]
 One-shot summary of the current branch's PR: link, state (open/merged/closed, draft), aggregate
 build state (`passing`, `failing`, `pending`, `waiting` for a manual approval, `none`) and the
 issue(s)/work item(s) it closes, with links. Exits 1 when the branch has no PR. `--json` is what
-the Claude Code mod below reads. Build state is only evaluated on GitHub; on Azure DevOps it is
-`unknown` (use `bdt pr status`).
+the Claude Code mod below reads. Build state is judged the way `bdt pr status` does: on GitHub from
+the check rollup (only a failed check fails it; skipped/cancelled ones don't count), on Azure DevOps
+from the latest build of each pipeline (any failed result fails it; unfinished builds are pending, or
+`waiting` when a stage needs approval). `unknown` if Azure DevOps can't be asked.
 
 Azure DevOps limits: the PR is found by the current branch into `--target-branch` (default `main`),
 a PR with merge conflicts is reported as an error (exit 1) like `pr status` does, and the closed

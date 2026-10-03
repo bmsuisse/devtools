@@ -3,6 +3,7 @@
 import json
 
 import pytest
+import requests
 from typer.testing import CliRunner
 
 from bmsdna.devtools import pr_info
@@ -79,22 +80,69 @@ def test_github_info_strips_terminal_escapes_from_title() -> None:
     assert info.title == "evil]8;;http://x title"
 
 
-def test_ado_info_reports_unknown_build_and_linked_work_item() -> None:
-    pr = {
-        "pullRequestId": 42,
-        "title": "feat: widgets",
-        "status": "active",
-        "isDraft": False,
-        "description": "see https://dev.azure.com/myorg/MyProj/_workitems/edit/7",
-    }
+ADO_PR = {
+    "pullRequestId": 42,
+    "title": "feat: widgets",
+    "status": "active",
+    "isDraft": False,
+    "sourceRefName": "refs/heads/feat/widgets",
+    "description": "see https://dev.azure.com/myorg/MyProj/_workitems/edit/7",
+}
 
-    info = pr_info.ado_info(pr, ADO_REMOTE)
 
-    assert info.build == pr_info.BUILD_UNKNOWN
+def _build(status: str, result: str | None = None, pipeline: int = 1) -> dict:
+    return {"id": 100 + pipeline, "definition": {"id": pipeline, "name": f"p{pipeline}"}, "status": status, "result": result}
+
+
+@pytest.mark.parametrize(
+    "builds,approval,expected",
+    [
+        ([], False, pr_info.BUILD_NONE),
+        ([_build("completed", "succeeded"), _build("completed", "canceled", 2)], False, pr_info.BUILD_PASSING),
+        ([_build("completed", "succeeded"), _build("inProgress", None, 2)], False, pr_info.BUILD_PENDING),
+        ([_build("notStarted")], False, pr_info.BUILD_PENDING),
+        ([_build("inProgress")], True, pr_info.BUILD_WAITING),
+        ([_build("completed", "failed"), _build("inProgress", None, 2)], True, pr_info.BUILD_FAILING),
+    ],
+)
+def test_ado_build_state_matches_pr_status(builds, approval, expected) -> None:
+    assert pr_info.ado_build_state(builds, approval) == expected
+
+
+def _ado_builds(monkeypatch, builds: list[dict], approvals: list | None = None) -> list[str]:
+    """Stub the ADO build lookups; returns the source branches asked about."""
+    asked: list[str] = []
+    monkeypatch.setattr("bmsdna.devtools.pr_info.pr_build.get_builds_for_pr", lambda s, r, branch, pr_id: asked.append(branch) or builds)
+    monkeypatch.setattr("bmsdna.devtools.pr_info.pr_build.find_pending_approvals", lambda s, r, b: approvals or [])
+    return asked
+
+
+def test_ado_info_links_pr_and_work_item_and_judges_builds(monkeypatch) -> None:
+    asked = _ado_builds(monkeypatch, [_build("completed", "succeeded"), _build("completed", "failed", 2)])
+
+    info = pr_info.ado_info(None, ADO_PR, ADO_REMOTE)  # ty: ignore[invalid-argument-type]
+
+    assert asked == ["feat/widgets"]
+    assert info.build == pr_info.BUILD_FAILING
     assert info.state == "open"
     assert info.url == "https://dev.azure.com/myorg/MyProj/_git/myrepo/pullrequest/42"
     assert [i.number for i in info.issues] == [7]
     assert info.issues[0].url == "https://dev.azure.com/myorg/MyProj/_workitems/edit/7"
+
+
+def test_ado_info_running_build_blocked_on_approval_is_waiting(monkeypatch) -> None:
+    _ado_builds(monkeypatch, [_build("inProgress")], approvals=[("build", [], [])])
+
+    assert pr_info.ado_info(None, ADO_PR, ADO_REMOTE).build == pr_info.BUILD_WAITING  # ty: ignore[invalid-argument-type]
+
+
+def test_ado_info_unknown_build_when_ado_cannot_be_asked(monkeypatch) -> None:
+    def boom(*a):
+        raise requests.ConnectionError("down")
+
+    monkeypatch.setattr("bmsdna.devtools.pr_info.pr_build.get_builds_for_pr", boom)
+
+    assert pr_info.ado_info(None, ADO_PR, ADO_REMOTE).build == pr_info.BUILD_UNKNOWN  # ty: ignore[invalid-argument-type]
 
 
 def _github_cli(monkeypatch) -> None:
@@ -197,3 +245,15 @@ def test_issue_take_note_includes_session_link_under_claude(monkeypatch) -> None
 
     assert result.exit_code == 0, result.output
     assert bodies == ["Taken by octocat\n\nClaude Session: https://claude.ai/code/session_abc"]
+
+
+def test_pr_info_on_azure_devops_passes_the_session_through(monkeypatch) -> None:
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
+    monkeypatch.setattr("bmsdna.devtools.cli._resolve_ado_pr", lambda pat, remote, target, pr_id=None: ("session", ADO_PR))
+    seen = {}
+    monkeypatch.setattr("bmsdna.devtools.pr_info.pr_build.get_builds_for_pr", lambda s, r, branch, pr_id: seen.update(session=s) or [_build("completed", "succeeded")])
+
+    result = runner.invoke(app, ["pr", "info", "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["build"] == "passing" and seen == {"session": "session"}

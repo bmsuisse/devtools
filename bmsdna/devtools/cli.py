@@ -120,8 +120,8 @@ def _current_pr_info(pr_id: int | None, target_branch: str, pat: str | None) -> 
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
         return pr_info_mod.github_info(gh_pr.get_pr(require_gh(), pr_id, fields=gh_pr.PR_INFO_FIELDS), remote)
-    _, pr = _resolve_ado_pr(pat, remote, target_branch, pr_id=pr_id)
-    return pr_info_mod.ado_info(pr, remote)
+    session, pr = _resolve_ado_pr(pat, remote, target_branch, pr_id=pr_id)
+    return pr_info_mod.ado_info(session, pr, remote)
 
 
 def _gh_branch_for(gh: str, pr_id: int | None, *, needed: bool) -> str:
@@ -426,7 +426,7 @@ def pr_info(
 ) -> None:
     """One-shot summary of the PR opened from the current branch, or --pr-id directly: link, state,
     aggregate build state, and the issue(s)/work item(s) it closes. Exits 1 if there is no such PR.
-    Build state is only evaluated on GitHub; on Azure DevOps it's reported as "unknown" (use `pr status`).
+    Build state is judged the way `pr status` does (latest build per pipeline on Azure DevOps).
     """
     info = _current_pr_info(pr_id, target_branch, pat)
     if as_json:

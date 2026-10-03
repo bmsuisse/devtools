@@ -10,11 +10,13 @@ from __future__ import annotations
 import unicodedata
 from dataclasses import asdict, dataclass, field
 
+import requests
+
 from . import ado_issue, gh_pr, pr_build, pr_issue_link
 from .gitrepo import AdoRemote, GitHubRemote
 
-# `build` values: aggregate of every check on the PR. "unknown" is for trackers where bdt
-# doesn't (yet) evaluate checks -- Azure DevOps -- as opposed to "none", a PR with no checks at all.
+# `build` values: aggregate of every check/pipeline on the PR. "unknown" means the state couldn't
+# be determined (Azure DevOps request failed), as opposed to "none": nothing ran at all.
 BUILD_PASSING = "passing"
 BUILD_FAILING = "failing"
 BUILD_PENDING = "pending"
@@ -91,7 +93,34 @@ def github_info(pr: dict, remote: GitHubRemote) -> PrInfo:
 _ADO_STATE = {"active": "open", "completed": "merged", "abandoned": "closed"}
 
 
-def ado_info(pr: dict, remote: AdoRemote) -> PrInfo:
+def ado_build_state(builds: list[dict], has_pending_approval: bool) -> str:
+    """Aggregate the latest build of each pipeline (`pr_build.latest_per_pipeline`) into one `BUILD_*`
+    value, the way `pr_build.run` (`bdt pr status`) judges them: any failed result is failing, else any
+    unfinished build is pending -- or waiting, if a stage is blocked on a manual approval.
+    """
+    if not builds:
+        return BUILD_NONE
+    if any(b.get("result") == "failed" for b in builds):
+        return BUILD_FAILING
+    if any(b.get("status") != "completed" for b in builds):
+        return BUILD_WAITING if has_pending_approval else BUILD_PENDING
+    return BUILD_PASSING
+
+
+def _ado_build(session: requests.Session, remote: AdoRemote, pr: dict) -> str:
+    pr_id = pr["pullRequestId"]
+    source_branch = pr["sourceRefName"].removeprefix("refs/heads/")
+    try:
+        builds = pr_build.latest_per_pipeline(pr_build.get_builds_for_pr(session, remote, source_branch, pr_id))
+        # a timeline lookup per running build -- only worth it when nothing has failed yet
+        failed = any(b.get("result") == "failed" for b in builds)
+        approval = not failed and any(b.get("status") != "completed" for b in builds) and bool(pr_build.find_pending_approvals(session, remote, builds))
+    except requests.RequestException:
+        return BUILD_UNKNOWN
+    return ado_build_state(builds, approval)
+
+
+def ado_info(session: requests.Session, pr: dict, remote: AdoRemote) -> PrInfo:
     """`pr` is an Azure DevOps pull request REST object (see `pr_build.get_pr`)."""
     issues = [
         IssueRef(n, ado_issue.edit_url(remote, n))
@@ -104,6 +133,6 @@ def ado_info(pr: dict, remote: AdoRemote) -> PrInfo:
         url=pr_build.pr_web_url(remote, pr_id),
         state=_ADO_STATE.get(str(pr.get("status", "active")).lower(), "open"),
         draft=bool(pr.get("isDraft")),
-        build=BUILD_UNKNOWN,
+        build=_ado_build(session, remote, pr),
         issues=issues,
     )
