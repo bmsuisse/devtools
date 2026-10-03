@@ -366,17 +366,37 @@ def comment(
     message: str | None,
     screenshot_paths: list[str],
     file_paths: list[str] | None = None,
+    agent_note: bool = True,
 ) -> None:
-    """Post a comment, with a message and/or screenshots/files, on a GitHub issue."""
+    """Post a comment, with a message and/or screenshots/files, on a GitHub issue.
+
+    `agent_note=False` leaves out the detected agent-session note, for a caller (`bdt issue do`) that
+    is not itself the agent and writes the right session into `message` instead.
+    """
     file_paths = file_paths or []
     images = _screenshot_images(owner, repo, f"issue-{number}", screenshot_paths) if screenshot_paths else []
     files = _file_links(owner, repo, f"issue-{number}", file_paths) if file_paths else []
-    content = ensure_agent_session_note(build_comment_content(message, images, files)) or ""
+    content = build_comment_content(message, images, files) or ""
+    if agent_note:
+        content = ensure_agent_session_note(content) or ""
     url = _run_gh(gh, ["issue", "comment", str(number), "--body", content])
     comment_id = parse_comment_id(url)
     suffix = f" (comment #{comment_id})" if comment_id else ""
     print(f"Added comment ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) to issue #{number}{suffix}")
     print(url)
+
+
+_LAST_COMMENT_QUERY = (
+    "query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) "
+    "{ issue(number: $number) { comments(last: 1) { nodes { body } } } } }"
+)
+
+
+def last_comment(gh: str, owner: str, repo: str, number: int) -> str | None:
+    """Text of the issue's newest comment, or None if it has none."""
+    out = _run_gh(gh, ["api", "graphql", "-f", f"query={_LAST_COMMENT_QUERY}", "-f", f"owner={owner}", "-f", f"repo={repo}", "-F", f"number={number}"])
+    nodes = json.loads(out)["data"]["repository"]["issue"]["comments"]["nodes"]
+    return nodes[-1]["body"] if nodes else None
 
 
 def update_comment(gh: str, owner: str, repo: str, comment_id: str, text: str) -> None:

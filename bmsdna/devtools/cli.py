@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
+import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from importlib.metadata import version as _pkg_version
@@ -20,9 +22,9 @@ from . import gh_issue, gh_pr
 from . import find_injection as find_injection_mod
 from . import lint as lint_mod
 from . import logs as logs_mod
-from . import pr_build, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
+from . import pr_build, pr_info as pr_info_mod, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
-from .cli_tools import detect_agent_session, require_az, require_gh
+from .cli_tools import CLI_TIMEOUT_SECS, detect_agent_session, require_az, require_gh
 from .gitrepo import AdoRemote, GitHubRemote, UnknownRemoteError, current_branch, current_remote, head_commit_subject
 
 # Non-ASCII output (checkmarks, en-dashes in ADO project names, etc.) needs a
@@ -33,6 +35,9 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
 
 __version__ = _pkg_version("bmsdna-devtools")
+
+# What `--target` / `--target-branch` mean when not given: the branch PRs normally go into.
+DEFAULT_TARGET_BRANCH = "dev"
 
 app = typer.Typer(
     name="bdt",
@@ -113,6 +118,14 @@ def _resolve_ado_pr(pat: str | None, remote: AdoRemote, target: str, pr_id: int 
     else:
         pr = pr_build.get_pr(session, remote, current_branch(), target)
     return session, pr
+
+
+def _current_pr_info(pr_id: int | None, target_branch: str, pat: str | None) -> pr_info_mod.PrInfo:
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        return pr_info_mod.github_info(gh_pr.get_pr(require_gh(), pr_id, fields=gh_pr.PR_INFO_FIELDS), remote)
+    session, pr = _resolve_ado_pr(pat, remote, target_branch, pr_id=pr_id)
+    return pr_info_mod.ado_info(session, pr, remote)
 
 
 def _gh_branch_for(gh: str, pr_id: int | None, *, needed: bool) -> str:
@@ -219,7 +232,7 @@ def _link_and_label_ado(session: requests.Session, remote: AdoRemote, pr_id: int
 
 @pr_app.command("create")
 def pr_create(
-    target: str = typer.Option("main", "--target", help="Target branch (e.g. main, test)"),
+    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch (e.g. dev, main, test)"),
     draft: bool = typer.Option(
         True,
         "--draft/--no-draft",
@@ -371,7 +384,7 @@ def pr_create(
 
 @pr_app.command("publish")
 def pr_publish(
-    target: str = typer.Option("main", "--target", help="Target branch of the PR (Azure DevOps only)"),
+    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch of the PR (Azure DevOps only)"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -393,7 +406,7 @@ def pr_publish(
 
 @pr_app.command("status")
 def pr_status(
-    target_branch: str = typer.Option("main", "--target-branch", help="Target branch of the PR (Azure DevOps only — gh has no equivalent filter, it always resolves the PR for the current branch)"),
+    target_branch: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target-branch", help="Target branch of the PR (Azure DevOps only — gh has no equivalent filter, it always resolves the PR for the current branch)"),
     wait: bool = typer.Option(False, "--wait", help="Poll until all pipelines/checks are completed; stops early and reports status if one needs manual approval"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
@@ -408,9 +421,30 @@ def pr_status(
     pr_build.run(remote, pat, target_branch, wait, pr_id=pr_id)
 
 
+@pr_app.command("info")
+def pr_info(
+    as_json: bool = typer.Option(False, "--json", help="Print machine-readable JSON (for status integrations that poll it)"),
+    target_branch: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target-branch", help="Target branch of the PR (Azure DevOps only)"),
+    pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
+    pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
+) -> None:
+    """One-shot summary of the PR opened from the current branch, or --pr-id directly: link, state,
+    aggregate build state, and the issue(s)/work item(s) it closes. Exits 1 if there is no such PR.
+    Build state is judged the way `pr status` does (latest build per pipeline on Azure DevOps).
+    """
+    info = _current_pr_info(pr_id, target_branch, pat)
+    if as_json:
+        typer.echo(json.dumps(info.to_json_dict()))
+        return
+    flags = ", ".join([info.state, *(["draft"] if info.draft else []), f"build: {info.build}"])
+    typer.echo(f"PR #{info.number}: {info.title} ({flags})\n{info.url}")
+    for issue in info.issues:
+        typer.echo(f"Issue #{issue.number}: {issue.url}")
+
+
 @pr_app.command("retry")
 def pr_retry(
-    target_branch: str = typer.Option("main", "--target-branch", help="Target branch of the PR (Azure DevOps only)"),
+    target_branch: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target-branch", help="Target branch of the PR (Azure DevOps only)"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -432,7 +466,7 @@ def pr_retry(
 
 @pr_app.command("watch-deploy")
 def pr_watch_deploy(
-    target_branch: str = typer.Option("main", "--target-branch", help="Branch to watch for a directly-triggered build/workflow run (e.g. a post-merge deployment pipeline)"),
+    target_branch: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target-branch", help="Branch to watch for a directly-triggered build/workflow run (e.g. a post-merge deployment pipeline)"),
     wait: bool = typer.Option(False, "--wait", help="Poll until the build/workflow run(s) are completed; stops early and reports status if one needs manual approval"),
     pat: str | None = typer.Option(
         None,
@@ -467,7 +501,7 @@ def pr_update(
     file: list[str] = typer.Option(
         [], "--file", help="Path to an arbitrary file to append to the PR description as a linked attachment (repeatable)"
     ),
-    target: str = typer.Option("main", "--target", help="Target branch of the PR (Azure DevOps only)"),
+    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch of the PR (Azure DevOps only)"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -510,7 +544,7 @@ def pr_comment(
     file: list[str] = typer.Option(
         [], "--file", help="Path to an arbitrary file to link in the comment as an attachment (repeatable)"
     ),
-    target: str = typer.Option("main", "--target", help="Target branch of the PR (Azure DevOps only)"),
+    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch of the PR (Azure DevOps only)"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -717,7 +751,86 @@ def issue_do(
         session = requests.Session()
         session.headers.update(auth_header(pat))
         title, body = issue_do_mod.fetch_ado(session, remote, number)
-    issue_do_mod.run(number, title, body, agent=agent, extra=list(ctx.args), dry_run=dry_run)
+    extra = list(ctx.args)
+    # claude can be given the session id up front, so the "Taken by" comment can link the session that will exist
+    session_id = str(uuid.uuid4()) if agent == "claude" and "--session-id" not in extra else None
+    if dry_run:
+        typer.echo(f"(dry run: would comment 'Taken by ...' on #{number} first)", err=True)
+    else:
+        _take(remote, number, issue_do_mod.take_message(_current_user(remote), agent, session_id), pat, agent_note=False)
+    issue_do_mod.run(number, title, body, agent=agent, extra=extra, dry_run=dry_run, session_id=session_id)
+
+
+@issue_app.command("take")
+def issue_take(
+    number: int | None = typer.Argument(None, help="Issue number (GitHub) or work item ID (Azure DevOps). Default: the issue the current branch's PR closes"),
+    target_branch: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target-branch", help="Target branch of the PR (Azure DevOps only; only used to find the issue when no number is given)"),
+    pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
+) -> None:
+    """Claim an issue / work item: comment "Taken by <you>" on it, with this coding agent's
+    session link (detected automatically) so others can see who is working on it and find the session.
+    """
+    remote = current_remote()
+    if number is None:
+        issues = _current_pr_info(None, target_branch, pat).issues
+        if len(issues) != 1:
+            raise typer.BadParameter(
+                f"The current branch's PR closes {len(issues)} issues, so can't tell which to take -- pass the number"
+                if issues
+                else "No issue number given, and the current branch's PR doesn't reference one (e.g. 'Fixes #N')"
+            )
+        number = issues[0].number
+    _take(remote, number, f"{issue_do_mod.TAKEN_PREFIX} {_current_user(remote)}", pat)
+
+
+def _take(remote: AdoRemote | GitHubRemote, number: int, message: str, pat: str | None, *, agent_note: bool = True) -> None:
+    """Comment `message` ("Taken by ...") on the issue -- unless its newest comment already is such a
+    claim, so running this twice (or `issue do` after `issue take`) doesn't post it again."""
+    kind = "issue" if isinstance(remote, GitHubRemote) else "work item"
+    if issue_do_mod.is_take_comment(_last_comment(remote, number, pat)):
+        typer.echo(f"{kind.capitalize()} #{number} is already taken (its last comment says so) -- not commenting again")
+        return
+    typer.echo(f"Taking {kind} #{number}")
+    _comment_on_issue(remote, number, message, pat, agent_note=agent_note)
+
+
+def _last_comment(remote: AdoRemote | GitHubRemote, number: int, pat: str | None) -> str | None:
+    if isinstance(remote, GitHubRemote):
+        return gh_issue.last_comment(require_gh(), remote.owner, remote.repo, number)
+    session = requests.Session()
+    session.headers.update(auth_header(pat))
+    return ado_issue.last_comment(session, remote, number)
+
+
+def _comment_on_issue(remote: AdoRemote | GitHubRemote, number: int, message: str, pat: str | None, *, agent_note: bool = True) -> None:
+    if isinstance(remote, GitHubRemote):
+        gh_issue.comment(require_gh(), remote.owner, remote.repo, number, message, [], agent_note=agent_note)
+    else:
+        session = requests.Session()
+        session.headers.update(auth_header(pat))
+        ado_issue.comment_with_screenshots(session, remote, number, message, [], [], agent_note=agent_note)
+
+
+def _current_user(remote: AdoRemote | GitHubRemote) -> str:
+    """Who to say took an issue: the GitHub login `gh` is authenticated as, else the git `user.name`."""
+    if isinstance(remote, GitHubRemote):
+        r = _capture([require_gh(), "api", "user", "--jq", ".login"])
+        if r and r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    r = _capture(["git", "config", "user.name"])
+    # `git config user.name` comes from the (possibly cloned-from-elsewhere) repo's own config and ends up in a
+    # markdown/HTML comment, so keep it to plain name characters: no links, tags or @mentions
+    name = re.sub(r"[^\w .'-]", "", r.stdout if r else "").strip()[:64]
+    return name or "unknown"
+
+
+def _capture(cmd: list[str]) -> subprocess.CompletedProcess | None:
+    """Run `cmd` for its UTF-8 output, bounded so a stalled `gh` (expired login prompting) can't hang the
+    caller; None on timeout."""
+    try:
+        return subprocess.run(cmd, capture_output=True, encoding="utf-8", timeout=CLI_TIMEOUT_SECS, check=False)
+    except subprocess.TimeoutExpired:
+        return None
 
 
 @issue_app.command("update")
@@ -1116,7 +1229,7 @@ def commit(
     subrepo: list[str] = typer.Option([], "--subrepo", help="Submodule directory name to split matching files into (repeatable)"),
     skip_message_check: bool = typer.Option(False, "--skip-message-check", help="Don't require a conventional-commit-style message"),
     allow_main: bool = typer.Option(False, "--allow-main", help="Allow committing directly on main/master"),
-    target: str = typer.Option("main", "--target", help="Target branch of the PR to draft on a 'feat' commit (Azure DevOps only)"),
+    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch of the PR to draft on a 'feat' commit (Azure DevOps only)"),
     pat: str | None = typer.Option(
         None,
         "--pat",
