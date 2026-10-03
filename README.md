@@ -1,7 +1,8 @@
 # bmsdna-devtools
 
-Shared developer tooling for BMS projects: PR build/check status, PR
-creation, issue/work item creation and comments, git worktrees (creation and
+Shared developer tooling for BMS projects: PR build/check status and a
+one-shot PR summary (`bdt pr info`, also shown in Claude Code by the bundled
+`bdt-status` mod), PR creation, claiming an issue (`bdt issue take`), issue/work item creation and comments, git worktrees (creation and
 merged-worktree/orphaned-test-DB cleanup), a commit-and-push helper with
 pre-flight checks, Azure log queries, and static checks (`bdt lint`) for
 postgres/psycopg SQL rules, pydantic-model placement, hand-wired HTTP access in
@@ -71,6 +72,23 @@ it from the current branch — useful when that PR's branch isn't checked out
 locally at all. `bdt pr retry`, `pr publish`, `pr update`, and `pr comment`
 all accept the same option, for the same reason. (`pr watch-deploy` doesn't:
 it watches a branch-triggered build/workflow run, not any particular PR.)
+
+## `bdt pr info`
+
+```bash
+bdt pr info [--json] [--pr-id N] [--target-branch main]
+```
+
+One-shot summary of the current branch's PR: link, state (open/merged/closed, draft), aggregate
+build state (`passing`, `failing`, `pending`, `waiting` for a manual approval, `none`) and the
+issue(s)/work item(s) it closes, with links. Exits 1 when the branch has no PR. `--json` is what
+the Claude Code mod below reads. Build state is only evaluated on GitHub; on Azure DevOps it is
+`unknown` (use `bdt pr status`).
+
+Azure DevOps limits: the PR is found by the current branch into `--target-branch` (default `main`),
+a PR with merge conflicts is reported as an error (exit 1) like `pr status` does, and the closed
+work items are only those whose URL is in the PR description -- not ones linked via
+`bdt pr create --issue`.
 
 ## `bdt pr retry`
 
@@ -292,24 +310,13 @@ bdt issue take [NUMBER] [--target-branch main]
 ```
 
 Claims an issue (GitHub) or work item (Azure DevOps): comments `Taken by <you>` on it, followed by the
-running coding agent's session link (the same `<Agent> Session: <url>` note every bdt comment gets
-under Claude Code), so others can see who is on it and open the session. `<you>` is the GitHub login
+running coding agent's session (the same `<Agent> Session: <id>` note every bdt comment gets: a
+claude.ai link under a bridged Claude session, otherwise the bare session id; nothing outside an
+agent), so others can see who is on it. `<you>` is the GitHub login
 `gh` is authenticated as, else the git `user.name`. Without `NUMBER` it takes the issue the current
 branch's PR closes (`Fixes #N`, or an issue/work-item URL in the PR body); it refuses to guess if
 that is none or several. Run it once, right after you start on the issue -- it doesn't check for an
 earlier "Taken by" comment.
-
-## `bdt pr info`
-
-```bash
-bdt pr info [--json] [--pr-id N] [--target-branch main]
-```
-
-One-shot summary of the current branch's PR: link, state (open/merged/closed, draft), aggregate
-build state (`passing`, `failing`, `pending`, `waiting` for a manual approval, `none`) and the
-issue(s)/work item(s) it closes, with links. Exits 1 when the branch has no PR. `--json` is what
-the Claude Code mod below reads. Build state is only evaluated on GitHub; on Azure DevOps it is
-`unknown` (use `bdt pr status`).
 
 ## Claude Code mod: `bdt-status`
 

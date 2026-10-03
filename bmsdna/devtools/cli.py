@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from collections.abc import Callable
@@ -22,7 +23,7 @@ from . import lint as lint_mod
 from . import logs as logs_mod
 from . import pr_build, pr_info as pr_info_mod, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
-from .cli_tools import detect_agent_session, require_az, require_gh
+from .cli_tools import CLI_TIMEOUT_SECS, detect_agent_session, require_az, require_gh
 from .gitrepo import AdoRemote, GitHubRemote, UnknownRemoteError, current_branch, current_remote, head_commit_subject
 
 # Non-ASCII output (checkmarks, en-dashes in ADO project names, etc.) needs a
@@ -118,7 +119,7 @@ def _resolve_ado_pr(pat: str | None, remote: AdoRemote, target: str, pr_id: int 
 def _current_pr_info(pr_id: int | None, target_branch: str, pat: str | None) -> pr_info_mod.PrInfo:
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        return pr_info_mod.github_info(gh_pr.get_pr_info(require_gh(), pr_id), remote)
+        return pr_info_mod.github_info(gh_pr.get_pr(require_gh(), pr_id, fields=gh_pr.PR_INFO_FIELDS), remote)
     _, pr = _resolve_ado_pr(pat, remote, target_branch, pr_id=pr_id)
     return pr_info_mod.ado_info(pr, remote)
 
@@ -769,6 +770,7 @@ def issue_take(
             )
         number = issues[0].number
     message = f"Taken by {_current_user(remote)}"
+    typer.echo(f"Taking {'issue' if isinstance(remote, GitHubRemote) else 'work item'} #{number}")
     if isinstance(remote, GitHubRemote):
         gh_issue.comment(require_gh(), remote.owner, remote.repo, number, message, [])
     else:
@@ -780,11 +782,23 @@ def issue_take(
 def _current_user(remote: AdoRemote | GitHubRemote) -> str:
     """Who to say took an issue: the GitHub login `gh` is authenticated as, else the git `user.name`."""
     if isinstance(remote, GitHubRemote):
-        r = subprocess.run([require_gh(), "api", "user", "--jq", ".login"], capture_output=True, text=True, check=False)
-        if r.returncode == 0 and r.stdout.strip():
+        r = _capture([require_gh(), "api", "user", "--jq", ".login"])
+        if r and r.returncode == 0 and r.stdout.strip():
             return r.stdout.strip()
-    r = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True, check=False)
-    return r.stdout.strip() or "unknown"
+    r = _capture(["git", "config", "user.name"])
+    # `git config user.name` comes from the (possibly cloned-from-elsewhere) repo's own config and ends up in a
+    # markdown/HTML comment, so keep it to plain name characters: no links, tags or @mentions
+    name = re.sub(r"[^\w .'-]", "", r.stdout if r else "").strip()[:64]
+    return name or "unknown"
+
+
+def _capture(cmd: list[str]) -> subprocess.CompletedProcess | None:
+    """Run `cmd` for its UTF-8 output, bounded so a stalled `gh` (expired login prompting) can't hang the
+    caller; None on timeout."""
+    try:
+        return subprocess.run(cmd, capture_output=True, encoding="utf-8", timeout=CLI_TIMEOUT_SECS, check=False)
+    except subprocess.TimeoutExpired:
+        return None
 
 
 @issue_app.command("update")

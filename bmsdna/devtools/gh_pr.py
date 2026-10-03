@@ -23,8 +23,8 @@ from .cli_tools import CLI_TIMEOUT_SECS, EXIT_NEEDS_APPROVAL, PollHeartbeat, det
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 PR_VIEW_FIELDS = "number,title,baseRefName,headRefName,mergeable,statusCheckRollup,isDraft"
-# What `bdt pr info` needs on top of the check rollup: where to link to, and the body to scan for closed issues.
-PR_INFO_FIELDS = "number,title,url,state,isDraft,body,statusCheckRollup"
+# What `bdt pr info` needs on top of the check rollup: where to link to, and the issues GitHub says it closes.
+PR_INFO_FIELDS = "number,title,url,state,isDraft,closingIssuesReferences,statusCheckRollup"
 
 # GitHub has no API for uploading images to a PR description (only the web
 # UI's drag-and-drop, which needs a browser session). The standard
@@ -101,20 +101,17 @@ def _pr_id_args(pr_id: int | None) -> list[str]:
     return [str(pr_id)] if pr_id is not None else []
 
 
-def get_pr(gh: str, pr_id: int | None = None) -> dict:
+def get_pr(gh: str, pr_id: int | None = None, fields: str = PR_VIEW_FIELDS) -> dict:
     """The PR for the current branch, however `gh` resolves it — there's no
     target-branch filter on `gh pr view` the way ADO's search API has one.
 
     If `pr_id` is given, resolves that PR directly instead -- lets a caller act on a
     specific PR without needing its branch checked out locally at all.
+
+    `fields` is the `--json` field list; defaults to what `bdt pr status` needs.
     """
-    args = ["pr", "view", *_pr_id_args(pr_id), "--json", PR_VIEW_FIELDS]
+    args = ["pr", "view", *_pr_id_args(pr_id), "--json", fields]
     return _run_gh_json(gh, args)
-
-
-def get_pr_info(gh: str, pr_id: int | None = None) -> dict:
-    """Like `get_pr`, but with `PR_INFO_FIELDS` (url, state, body) instead of the merge-status ones."""
-    return _run_gh_json(gh, ["pr", "view", *_pr_id_args(pr_id), "--json", PR_INFO_FIELDS])
 
 
 def check_bucket(check: dict) -> str:

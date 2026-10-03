@@ -4,10 +4,12 @@ description: >
   Use the `bdt` CLI (from the bmsdna-devtools package) instead of ad hoc git/az/gh
   commands or repo-local scripts for: checking PR build/check status, creating
   a PR, creating a git worktree, committing and pushing files (with pre-flight
-  checks), and querying Azure logs. `bdt pr *` works against both Azure DevOps
+  checks), claiming an issue / work item (`bdt issue take`), a one-shot PR summary
+  (`bdt pr info`: link, build state, closed issues), and querying Azure logs. `bdt pr *` works against both Azure DevOps
   and GitHub — it auto-detects which one from the `origin` remote. Trigger
   whenever the user asks to check a build/PR status, create a PR, make a
-  worktree, commit changes, or fetch/tail application logs in a repo that has
+  worktree, commit changes, fetch/tail application logs, or start working on /
+  take an issue ("work on issue #N"), in a repo that has
   bmsdna-devtools installed (check for `bdt` on PATH, or `bmsdna-devtools` in
   pyproject.toml, before assuming it applies).
 ---
@@ -76,7 +78,8 @@ bdt issue take [NUMBER]
 ```
 
 When you start working on an issue / work item, run this first: it comments `Taken by <user>` plus
-your session link so others can see it's being worked on and open the session. No parameters needed
+your session (the claude.ai link under a bridged Claude session, otherwise the bare session id; nothing
+when no agent is detected) so others can see it's being worked on. No parameters needed
 -- the session is detected, and without `NUMBER` the issue is the one the current branch's PR closes
 (so open the PR with `Fixes #N` first, or pass the number). Run it once. Don't hand-write a
 session-link comment instead.

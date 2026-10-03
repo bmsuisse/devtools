@@ -66,3 +66,24 @@ test('picks up a PR that appears later, on the next refresh', async ($, on) => {
   const ui = await $.ui.mount(BAND)
   expect((await ui.find({ type: 'Link', text: 'PR #69' }))?.props.href).toBe(INFO.url)
 })
+
+test('keeps showing the last PR when a refresh fails, and drops it when bdt says there is none', async ($, on) => {
+  const clock = mock.clock(on)
+  let answer: 'pr' | 'broken' | 'no-pr' = 'pr'
+  on('session.start', () => ({ cwd: '/work' }))
+  on('process.run', () => {
+    if (answer === 'broken') return { deny: 'bdt not found' }
+    return { value: { exitCode: answer === 'pr' ? 0 : 1, stdout: answer === 'pr' ? JSON.stringify(INFO) : '', stderr: '' } }
+  })
+  on('ui.render', () => ({ type: 'Text', props: {}, children: ['drawn by Claude Code'] }))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.settle()
+
+  answer = 'broken'
+  await clock.advance(30_000)
+  expect(await (await $.ui.mount(BAND)).find({ type: 'Link', text: 'PR #69' })).toBeDefined()
+
+  answer = 'no-pr'
+  await clock.advance(30_000)
+  expect(await (await $.ui.mount(BAND)).find({ type: 'Link' })).toBeUndefined()
+})

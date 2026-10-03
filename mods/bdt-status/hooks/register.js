@@ -14,14 +14,25 @@ const BUILD = {
 // The last `bdt pr info --json` result, or null when the branch has no PR
 let info = null
 let isRefreshing = false
+let timer = null
 
+const LINK = /^https:\/\/(github\.com|dev\.azure\.com)\/[^\s\x00-\x1f]*$/
+
+// `bdt` output only if it has the shape `bdt pr info --json` produces, so a shadowing or outdated `bdt` on PATH
+// can't make the band render an arbitrary link
+function validated(i) {
+  const isLink = (x) => typeof x.number === 'number' && typeof x.url === 'string' && LINK.test(x.url)
+  return isLink(i) && Array.isArray(i.issues) && i.issues.every(isLink) ? i : undefined
+}
+
+// `undefined`: couldn't ask (bdt missing or timed out, unusable output) -- keep showing the last answer.
+// `null`: bdt answered that there is no PR for this branch.
 async function readInfo($) {
   try {
     const r = await $.process.run(['bdt', 'pr', 'info', '--json'])
-    return r.exitCode === 0 ? JSON.parse(r.stdout) : null
+    return r.exitCode === 0 ? validated(JSON.parse(r.stdout)) : null
   } catch {
-    // bdt isn't installed, timed out, or printed something that isn't JSON
-    return null
+    return undefined
   }
 }
 
@@ -31,10 +42,12 @@ async function refresh($) {
   isRefreshing = true
   try {
     const next = await readInfo($)
-    if (JSON.stringify(next) !== JSON.stringify(info)) {
+    if (next !== undefined && JSON.stringify(next) !== JSON.stringify(info)) {
       info = next
       $.ui.invalidate('ui.render')
     }
+  } catch {
+    // a failed redraw must not become an unhandled rejection in a timer callback
   } finally {
     isRefreshing = false
   }
@@ -42,7 +55,8 @@ async function refresh($) {
 
 export function register(on) {
   on('session.start', async ($, e, next) => {
-    $.clock.every(REFRESH_MS, () => refresh($))
+    // once per module load, not per session.start
+    timer ??= $.clock.every(REFRESH_MS, () => refresh($))
     // Not awaited: the session starts right away, and the band fills in when bdt answers
     refresh($)
     return next(e)

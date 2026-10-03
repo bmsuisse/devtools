@@ -7,6 +7,7 @@ human-oriented formatting) so any other tool -- a shell prompt, a dashboard -- c
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import asdict, dataclass, field
 
 from . import ado_issue, gh_pr, pr_build, pr_issue_link
@@ -42,14 +43,23 @@ class PrInfo:
         return asdict(self)
 
 
+def clean_text(text: str) -> str:
+    """`text` without control and format characters (terminal escapes, bidi overrides): a PR title is
+    attacker-controlled when the checked-out branch is someone else's PR, and is printed to a terminal."""
+    return "".join(c for c in text if unicodedata.category(c)[0] != "C")
+
+
 def build_state(checks: list[dict]) -> str:
     """Aggregate a GitHub `statusCheckRollup` into one `BUILD_*` value; worst state wins
-    (failing > waiting > pending > passing). Skipped checks don't count against a PR.
+    (failing > waiting > pending > passing; none if nothing ran). Mirrors `gh_pr.run` (`bdt pr status`): only a "fail"
+    bucket is failing, so skipped and cancelled checks (e.g. a run superseded by a newer push)
+    don't count against the PR -- the two commands must never disagree about the same PR.
     """
     buckets = {gh_pr.check_bucket(c) for c in checks}
-    if not buckets:
+    if buckets <= {"skipping"}:
+        # nothing ran (no checks, or every workflow was path-filtered out): not a green build
         return BUILD_NONE
-    if buckets & {"fail", "cancel"}:
+    if "fail" in buckets:
         return BUILD_FAILING
     if "waiting_approval" in buckets:
         return BUILD_WAITING
@@ -59,14 +69,17 @@ def build_state(checks: list[dict]) -> str:
 
 
 def github_info(pr: dict, remote: GitHubRemote) -> PrInfo:
-    """`pr` is `gh pr view --json` output with `gh_pr.PR_INFO_FIELDS`."""
+    """`pr` is `gh pr view --json` output with `gh_pr.PR_INFO_FIELDS`. Only issues of this repo are listed."""
+    # GitHub's own answer to "which issues does merging this close" (closing keywords in the body,
+    # or linked in the Development sidebar) -- a mere "related: <issue url>" mention isn't one
     issues = [
-        IssueRef(n, f"https://github.com/{remote.owner}/{remote.repo}/issues/{n}")
-        for n in pr_issue_link.find_issue_refs_in_body(pr.get("body"), remote)
+        IssueRef(i["number"], i["url"])
+        for i in pr.get("closingIssuesReferences") or []
+        if i.get("repository", {}).get("name", remote.repo).casefold() == remote.repo.casefold()
     ]
     return PrInfo(
         number=pr["number"],
-        title=pr.get("title", ""),
+        title=clean_text(pr.get("title", "")),
         url=pr["url"],
         state=str(pr.get("state", "OPEN")).lower(),
         draft=bool(pr.get("isDraft")),
@@ -87,7 +100,7 @@ def ado_info(pr: dict, remote: AdoRemote) -> PrInfo:
     pr_id = pr["pullRequestId"]
     return PrInfo(
         number=pr_id,
-        title=pr.get("title", ""),
+        title=clean_text(pr.get("title", "")),
         url=pr_build.pr_web_url(remote, pr_id),
         state=_ADO_STATE.get(str(pr.get("status", "active")).lower(), "open"),
         draft=bool(pr.get("isDraft")),
