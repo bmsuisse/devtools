@@ -311,7 +311,7 @@ last argument); extra args are passed through; `--dry-run` prints the command.
 It takes the issue first (like `bdt issue take`): before the agent starts it comments `Taken by <you>`
 on the issue, naming the session it is about to start -- for `claude` a `--session-id` is generated and
 passed, so the comment says `claude --resume <id>`; the prompt tells the agent not to take it again. For
-another `--agent` the comment just says `(via <agent>)`. `--dry-run` posts nothing.
+another `--agent` the comment just says `(via <agent>)`. `--dry-run` posts nothing. Like `issue take`, it doesn't comment again when the newest comment already is a claim.
 
 ## `bdt issue take`
 
@@ -325,8 +325,8 @@ claude.ai link under a bridged Claude session, otherwise the bare session id; no
 agent), so others can see who is on it. `<you>` is the GitHub login
 `gh` is authenticated as, else the git `user.name`. Without `NUMBER` it takes the issue the current
 branch's PR closes (`Fixes #N`, or an issue/work-item URL in the PR body); it refuses to guess if
-that is none or several. Run it once, right after you start on the issue -- it doesn't check for an
-earlier "Taken by" comment.
+that is none or several. If the issue's newest comment already is a "Taken by ..." claim (by anyone) it
+says so and posts nothing, so it's safe to run repeatedly -- including before `bdt issue do`.
 
 ## Claude Code mod: `bdt-status`
 

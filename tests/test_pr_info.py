@@ -190,6 +190,7 @@ def _take_cli(monkeypatch, *, user: str = "octocat") -> list[tuple]:
     monkeypatch.setattr("bmsdna.devtools.cli._current_user", lambda remote: user)
     calls: list[tuple] = []
     monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.comment", lambda *args, **kw: calls.append(args))
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: None)
     return calls
 
 
@@ -238,6 +239,7 @@ def test_issue_take_note_includes_session_link_under_claude(monkeypatch) -> None
     monkeypatch.setenv("CLAUDE_CODE_BRIDGE_SESSION_ID", "session_abc")
     _github_cli(monkeypatch)
     monkeypatch.setattr("bmsdna.devtools.cli._current_user", lambda remote: "octocat")
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: None)
     bodies: list[str] = []
     monkeypatch.setattr("bmsdna.devtools.gh_issue._run_gh", lambda gh, args: bodies.append(args[args.index("--body") + 1]) or "https://x/issues/12#issuecomment-1")
 
@@ -288,6 +290,7 @@ def _do_cli(monkeypatch, *, agent_env: bool = False) -> dict:
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     monkeypatch.setattr("bmsdna.devtools.cli._current_user", lambda remote: "octocat")
     monkeypatch.setattr("bmsdna.devtools.cli.issue_do_mod.fetch_github", lambda gh, n: ("add thing", "details"))
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: None)
     seen: dict = {"events": [], "bodies": []}
 
     def run_gh(gh, args):
@@ -344,3 +347,76 @@ def test_issue_do_other_agent_is_taken_without_a_session(monkeypatch) -> None:
     runner.invoke(app, ["issue", "do", "12", "--agent", "codex"])
 
     assert seen["bodies"] == ["Taken by octocat (via codex)"] and "--session-id" not in seen["cmd"]
+
+
+# -- never take twice ---------------------------------------------------------
+
+
+@pytest.mark.parametrize("last", ["Taken by octocat", "Taken by someone-else\n\nClaude Session: https://claude.ai/code/session_x", "  Taken by x"])
+def test_issue_take_skips_when_the_last_comment_is_already_a_take(monkeypatch, last) -> None:
+    calls = _take_cli(monkeypatch)
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: last)
+
+    result = runner.invoke(app, ["issue", "take", "12"])
+
+    assert result.exit_code == 0 and calls == []
+    assert "already taken" in result.output
+
+
+def test_issue_take_comments_when_the_last_comment_is_something_else(monkeypatch) -> None:
+    calls = _take_cli(monkeypatch)
+    # an older take followed by a later discussion comment: the claim is no longer the latest word
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: "Looks good, who is on this?")
+
+    assert runner.invoke(app, ["issue", "take", "12"]).exit_code == 0
+    assert len(calls) == 1
+
+
+def test_issue_take_on_azure_devops_reads_the_html_comment(monkeypatch) -> None:
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
+    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.cli._current_user", lambda remote: "me")
+    monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.last_comment", lambda session, remote, n: "<div>Taken by <b>someone</b></div>")
+    posted = []
+    monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.comment_with_screenshots", lambda *a, **k: posted.append(a))
+
+    result = runner.invoke(app, ["issue", "take", "7"])
+
+    assert result.exit_code == 0 and posted == [] and "already taken" in result.output
+
+
+def test_issue_do_still_starts_the_agent_when_already_taken(monkeypatch) -> None:
+    seen = _do_cli(monkeypatch)
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: "Taken by octocat")
+
+    runner.invoke(app, ["issue", "do", "12"])
+
+    assert seen["events"] == ["agent"]
+
+
+def test_gh_last_comment_reads_graphql(monkeypatch) -> None:
+    from bmsdna.devtools import gh_issue
+
+    out = json.dumps({"data": {"repository": {"issue": {"comments": {"nodes": [{"body": "Taken by x"}]}}}}})
+    seen = {}
+    monkeypatch.setattr(gh_issue, "_run_gh", lambda gh, args: seen.update(args=args) or out)
+
+    assert gh_issue.last_comment("gh", "o", "r", 5) == "Taken by x"
+    assert "number=5" in seen["args"] and "owner=o" in seen["args"]
+
+    empty = json.dumps({"data": {"repository": {"issue": {"comments": {"nodes": []}}}}})
+    monkeypatch.setattr(gh_issue, "_run_gh", lambda gh, args: empty)
+    assert gh_issue.last_comment("gh", "o", "r", 5) is None
+
+
+def test_ado_last_comment_asks_for_newest_first() -> None:
+    from unittest.mock import MagicMock
+
+    from bmsdna.devtools import ado_issue
+
+    session = MagicMock()
+    session.get.return_value.json.return_value = {"comments": [{"text": "<p>Taken by x</p>"}]}
+
+    assert ado_issue.last_comment(session, ADO_REMOTE, 7) == "<p>Taken by x</p>"
+    params = session.get.call_args.kwargs["params"]
+    assert params["order"] == "desc" and params["$top"] == 1

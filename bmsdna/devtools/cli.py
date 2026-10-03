@@ -757,9 +757,7 @@ def issue_do(
     if dry_run:
         typer.echo(f"(dry run: would comment 'Taken by ...' on #{number} first)", err=True)
     else:
-        message = issue_do_mod.take_message(_current_user(remote), agent, session_id)
-        typer.echo(f"Taking {'issue' if isinstance(remote, GitHubRemote) else 'work item'} #{number}")
-        _comment_on_issue(remote, number, message, pat, agent_note=False)
+        _take(remote, number, issue_do_mod.take_message(_current_user(remote), agent, session_id), pat, agent_note=False)
     issue_do_mod.run(number, title, body, agent=agent, extra=extra, dry_run=dry_run, session_id=session_id)
 
 
@@ -782,9 +780,26 @@ def issue_take(
                 else "No issue number given, and the current branch's PR doesn't reference one (e.g. 'Fixes #N')"
             )
         number = issues[0].number
-    message = f"Taken by {_current_user(remote)}"
-    typer.echo(f"Taking {'issue' if isinstance(remote, GitHubRemote) else 'work item'} #{number}")
-    _comment_on_issue(remote, number, message, pat)
+    _take(remote, number, f"{issue_do_mod.TAKEN_PREFIX} {_current_user(remote)}", pat)
+
+
+def _take(remote: AdoRemote | GitHubRemote, number: int, message: str, pat: str | None, *, agent_note: bool = True) -> None:
+    """Comment `message` ("Taken by ...") on the issue -- unless its newest comment already is such a
+    claim, so running this twice (or `issue do` after `issue take`) doesn't post it again."""
+    kind = "issue" if isinstance(remote, GitHubRemote) else "work item"
+    if issue_do_mod.is_take_comment(_last_comment(remote, number, pat)):
+        typer.echo(f"{kind.capitalize()} #{number} is already taken (its last comment says so) -- not commenting again")
+        return
+    typer.echo(f"Taking {kind} #{number}")
+    _comment_on_issue(remote, number, message, pat, agent_note=agent_note)
+
+
+def _last_comment(remote: AdoRemote | GitHubRemote, number: int, pat: str | None) -> str | None:
+    if isinstance(remote, GitHubRemote):
+        return gh_issue.last_comment(require_gh(), remote.owner, remote.repo, number)
+    session = requests.Session()
+    session.headers.update(auth_header(pat))
+    return ado_issue.last_comment(session, remote, number)
 
 
 def _comment_on_issue(remote: AdoRemote | GitHubRemote, number: int, message: str, pat: str | None, *, agent_note: bool = True) -> None:

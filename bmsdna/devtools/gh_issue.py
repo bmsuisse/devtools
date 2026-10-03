@@ -386,6 +386,19 @@ def comment(
     print(url)
 
 
+_LAST_COMMENT_QUERY = (
+    "query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) "
+    "{ issue(number: $number) { comments(last: 1) { nodes { body } } } } }"
+)
+
+
+def last_comment(gh: str, owner: str, repo: str, number: int) -> str | None:
+    """Text of the issue's newest comment, or None if it has none."""
+    out = _run_gh(gh, ["api", "graphql", "-f", f"query={_LAST_COMMENT_QUERY}", "-f", f"owner={owner}", "-f", f"repo={repo}", "-F", f"number={number}"])
+    nodes = json.loads(out)["data"]["repository"]["issue"]["comments"]["nodes"]
+    return nodes[-1]["body"] if nodes else None
+
+
 def update_comment(gh: str, owner: str, repo: str, comment_id: str, text: str) -> None:
     _run_gh(gh, ["api", "--method", "PATCH", f"repos/{owner}/{repo}/issues/comments/{comment_id}", "-f", f"body={text}"])
     print(f"Updated comment #{comment_id}")

@@ -314,6 +314,17 @@ def add_comment(session: requests.Session, remote: AdoRemote, work_item_id: int,
     return r.json()
 
 
+def last_comment(session: requests.Session, remote: AdoRemote, work_item_id: int) -> str | None:
+    """Text (HTML, as stored) of the work item's newest comment, or None if it has none."""
+    r = session.get(
+        f"{_base_url(remote)}/_apis/wit/workItems/{work_item_id}/comments",
+        params={"api-version": COMMENTS_API_VERSION, "$top": 1, "order": "desc"},
+    )
+    r.raise_for_status()
+    comments = r.json().get("comments") or []
+    return comments[0].get("text") if comments else None
+
+
 def update_comment(session: requests.Session, remote: AdoRemote, work_item_id: int, comment_id: int, text: str) -> dict:
     r = session.patch(
         f"{_base_url(remote)}/_apis/wit/workItems/{work_item_id}/comments/{comment_id}",

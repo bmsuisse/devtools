@@ -81,7 +81,7 @@ When you start working on an issue / work item, run this first: it comments `Tak
 your session (the claude.ai link under a bridged Claude session, otherwise the bare session id; nothing
 when no agent is detected) so others can see it's being worked on. No parameters needed
 -- the session is detected, and without `NUMBER` the issue is the one the current branch's PR closes
-(so open the PR with `Fixes #N` first, or pass the number). Run it once. (`bdt issue do N` already does this for you before it starts the agent -- don't repeat it there.) Don't hand-write a
+(so open the PR with `Fixes #N` first, or pass the number). It does nothing if the issue's newest comment already is a "Taken by" claim, so repeating it is harmless. (`bdt issue do N` already does this for you before it starts the agent -- don't repeat it there.) Don't hand-write a
 session-link comment instead.
 
 ## PR summary

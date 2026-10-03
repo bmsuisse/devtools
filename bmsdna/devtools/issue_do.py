@@ -19,6 +19,7 @@ from .ado_issue import _base_url
 from .gitrepo import AdoRemote
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+TAKEN_PREFIX = "Taken by"
 
 
 def fetch_github(gh: str, number: int) -> tuple[str, str]:
@@ -54,13 +55,19 @@ def build_prompt(number: int, title: str, body: str) -> str:
     )
 
 
+def is_take_comment(text: str | None) -> bool:
+    """Is `text` (a comment, markdown or ADO HTML) a "Taken by ..." claim -- what `take_message` and
+    `bdt issue take` post?"""
+    return _HTML_TAG_RE.sub("", text or "").strip().startswith(TAKEN_PREFIX)
+
+
 def take_message(user: str, agent: str, session_id: str | None) -> str:
     """The "Taken by" comment `bdt issue do` posts before the agent starts. It names the session itself,
     because the agent's own session doesn't exist yet and `bdt`'s auto-detected one (if `bdt issue do` is
     run from inside an agent) would be the wrong one."""
     if session_id is None:
-        return f"Taken by {user} (via {agent})"
-    return f"Taken by {user}\n\nClaude Session: {session_id} (resume with `claude --resume {session_id}`)"
+        return f"{TAKEN_PREFIX} {user} (via {agent})"
+    return f"{TAKEN_PREFIX} {user}\n\nClaude Session: {session_id} (resume with `claude --resume {session_id}`)"
 
 
 def build_command(agent: str, number: int, title: str, body: str, extra: list[str], session_id: str | None = None) -> list[str]:
