@@ -1,6 +1,10 @@
 from pathlib import Path
 
-from bmsdna.devtools import lint as lint_mod
+import pytest
+
+from bmsdna.devtools import dead_code
+from bmsdna.devtools.bdt_config import load_bdt_table
+from bmsdna.devtools.api_usage import ApiUsageError
 from bmsdna.devtools.lint_sql_files import check_unreferenced_sql_files
 
 
@@ -151,43 +155,61 @@ def test_unparseable_python_file_is_reported_not_silently_skipped(tmp_path: Path
     assert sorted(f.rule for f in findings) == ["sql-check-python-unparseable", "sql-file-unreferenced"]
 
 
-def _lint_project(root: Path, config: str) -> None:
+def _project(root: Path, config: str) -> None:
     _write(root, "backend/q/t/a.sql")
     _write(root, "backend/q/t/dead.sql")
     _write(root, "backend/repo.py", 'load_sql("t", "a")\n')
     _write(root, "backend/other.py", "x = 1\n")
-    _write(root, "pyproject.toml", f"[project]\nname='x'\n[tool.bdt.lint]\n{config}\n")
+    _write(root, "pyproject.toml", f"[project]\nname='x'\n[tool.bdt.dead_code]\n{config}\n")
 
 
-def test_lint_run_is_opt_in(tmp_path: Path) -> None:
-    _lint_project(tmp_path, "")
-    assert lint_mod.run([], root=tmp_path, skip_tooling_check=True).ok
+def _run(root: Path, **kwargs) -> list:
+    return dead_code.run(load_bdt_table("dead_code", root), repo_root=root, **kwargs)
 
 
-def test_lint_run_scans_whole_repo_for_references_even_with_explicit_paths(tmp_path: Path) -> None:
-    _lint_project(tmp_path, "sql_roots=['backend/q']")
-    # the explicit file contains no reference; the reference to a.sql lives in repo.py and must still be found
-    result = lint_mod.run([str(tmp_path / "backend/other.py")], root=tmp_path, skip_tooling_check=True)
-    assert [f.path.name for f in result.findings] == ["dead.sql"]
-    assert result.findings[0].rule == "sql-file-unreferenced"
+def test_sql_check_is_opt_in(tmp_path: Path) -> None:
+    _project(tmp_path, "")
+    with pytest.raises(ApiUsageError, match="nothing to check"):
+        _run(tmp_path)
 
 
-def test_lint_run_reads_loader_and_ignore_config_from_pyproject(tmp_path: Path) -> None:
-    _lint_project(tmp_path, "sql_roots=['backend/q']\nsql_loader_functions=['get_query']\nsql_unreferenced_ignore=['backend/q/t/*.sql']")
-    assert lint_mod.run([], root=tmp_path, skip_tooling_check=True).ok  # everything ignored
-    _write(
-        tmp_path, "pyproject.toml", "[project]\nname='x'\n[tool.bdt.lint]\nsql_roots=['backend/q']\nsql_loader_functions=['get_query']\n"
-    )
+def test_sql_check_scans_whole_repo_for_references(tmp_path: Path) -> None:
+    _project(tmp_path, "sql_roots=['backend/q']")
+    # the reference to a.sql lives in repo.py, not in the file that happens to be changed
+    findings = _run(tmp_path)
+    assert [f.path.name for f in findings] == ["dead.sql"]
+    assert findings[0].rule == "sql-file-unreferenced"
+
+
+def test_sql_check_reads_loader_and_ignore_config_from_pyproject(tmp_path: Path) -> None:
+    _project(tmp_path, "sql_roots=['backend/q']\nsql_loader_functions=['get_query']\nsql_unreferenced_ignore=['backend/q/t/*.sql']")
+    assert _run(tmp_path) == []  # everything ignored
+    _project(tmp_path, "sql_roots=['backend/q']\nsql_loader_functions=['get_query']")
     # load_sql is no longer the loader name, so both files are unreferenced
-    assert sorted(f.path.name for f in lint_mod.run([], root=tmp_path, skip_tooling_check=True).findings) == ["a.sql", "dead.sql"]
+    assert sorted(f.path.name for f in _run(tmp_path)) == ["a.sql", "dead.sql"]
 
 
-def test_lint_run_accepts_bare_string_for_list_settings(tmp_path: Path) -> None:
-    _lint_project(tmp_path, "sql_roots='backend/q'")
-    assert [f.path.name for f in lint_mod.run([], root=tmp_path, skip_tooling_check=True).findings] == ["dead.sql"]
+def test_sql_check_accepts_bare_string_for_list_settings(tmp_path: Path) -> None:
+    _project(tmp_path, "sql_roots='backend/q'")
+    assert [f.path.name for f in _run(tmp_path)] == ["dead.sql"]
 
 
-def test_lint_run_reports_missing_or_escaping_sql_root(tmp_path: Path) -> None:
-    _lint_project(tmp_path, "sql_roots=['nope', '../outside']")
-    rules = [f.rule for f in lint_mod.run([], root=tmp_path, skip_tooling_check=True).findings]
-    assert rules == ["lint-path-not-found", "lint-path-not-found"]
+def test_sql_check_reports_missing_or_escaping_sql_root(tmp_path: Path) -> None:
+    _project(tmp_path, "sql_roots=['nope', '../outside']")
+    assert [f.rule for f in _run(tmp_path)] == ["lint-path-not-found", "lint-path-not-found"]
+
+
+def test_sql_check_honours_exclude_dirs(tmp_path: Path) -> None:
+    _project(tmp_path, "sql_roots=['backend/q']\nexclude_dirs=['t']")
+    assert _run(tmp_path) == []  # the only SQL files sit in an excluded subdirectory
+
+
+def test_only_narrows_the_run_and_rejects_unknown_checks(tmp_path: Path) -> None:
+    _project(tmp_path, "sql_roots=['backend/q']")
+    assert len(_run(tmp_path, only=["sql"])) == 1
+    with pytest.raises(ApiUsageError, match=r"apps"):
+        _run(tmp_path, only=["routes"])
+    with pytest.raises(ApiUsageError, match="unknown check"):
+        _run(tmp_path, only=["nope"])
+    with pytest.raises(ApiUsageError, match="only applies to"):
+        _run(tmp_path, only=["sql"], update_baseline=True)

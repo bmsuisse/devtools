@@ -1,4 +1,5 @@
-"""`bdt lint-api-usage`: backend (FastAPI) operations that no non-generated frontend code calls.
+"""The `routes` check of `bdt dead-code`: backend (FastAPI) operations that no non-generated frontend code calls
+and no backend code references by name (`url_for`).
 
 A route nobody calls is dead code that still has to be maintained, secured and tested. The check
 needs two inventories:
@@ -20,6 +21,10 @@ An operation counts as called when, in non-generated code of one of its app's fr
 - **url** -- a string/template literal equal to the path template (any method), e.g. a hand-written
   `fetch(`/api/x/${id}`)`, `"/api/x/" + id` or an `<a href>`;
 - **url-sfx** -- a literal that is a suffix of the route (client with a base URL the scan can't see).
+
+An operation also counts as used when backend code (Python or Jinja-style templates under the app's `app_dir`, tests
+excluded) names its route -- `request.url_for("auth_callback")`, `app.url_path_for("login")`, `{{ url_for('login') }}`.
+That is how auth redirects and OAuth callbacks are wired, and they have no frontend caller by nature.
 
 Deliberately heuristic (no type information; a URL literal matches every method of its path, and so does an SPA
 `<Link to="/users/${id}">`). Routes that are legitimately not called by the frontend -- external APIs, auth
@@ -53,6 +58,10 @@ _EXCLUDE_DIR_NAMES = _DEFAULT_EXCLUDE_DIR_NAMES | {".output", ".nuxt", ".next", 
 _EXCLUDE_FILE_RE = re.compile(r"\.(?:gen|generated|test|spec)\.(?:[cm]?[jt]sx?|vue)$|\.d\.[cm]?ts$")
 _EXCLUDE_FILE_PREFIXES = ("api-types", "openapi_schema")
 _REACT_QUERY_SUFFIXES = ("Options", "Mutation", "InfiniteOptions", "QueryKey", "InfiniteQueryKey", "Query")
+_NAME_SOURCE_SUFFIXES = (".py", ".html", ".htm", ".jinja", ".jinja2", ".j2")
+_TEST_DIR_NAMES = frozenset({"tests", "test", "__tests__"})
+_TEST_FILE_RE = re.compile(r"^(?:test_.*|.*_test|conftest)\.py$")
+DEFAULT_URL_FOR_FUNCTIONS = ("url_for", "url_path_for")
 _APP_IMPORT_TIMEOUT_SECONDS = 300
 _MAX_TEMPLATE_CHARS = 4000  # a URL template longer than this is not a URL; also bounds the rescan of an unclosed backtick
 _MAX_TEMPLATE_DEPTH = 20
@@ -76,6 +85,7 @@ class Operation:
     path: str  # full path including any mount prefix, FastAPI `{param}` style
     tags: tuple[str, ...] = ()
     mount: str = ""  # the sub-app mount prefix part of `path` ("" for the root app)
+    operation_id: str = ""  # OpenAPI operationId; carries the route name FastAPI derives it from (see `is_named_by`)
 
     @property
     def key(self) -> str:
@@ -83,7 +93,7 @@ class Operation:
 
     @classmethod
     def from_dict(cls, d: dict) -> Operation:
-        return cls(d["method"], d["path"], tuple(d["tags"]), d["mount"])
+        return cls(d["method"], d["path"], tuple(d["tags"]), d["mount"], d.get("operation_id", ""))
 
 
 # --------------------------------------------------------------------------- backend inventory
@@ -255,6 +265,37 @@ def build_frontend(directory: Path, *, repo_root: Path, exclude_globs: list[str]
     return Frontend(scan_frontend(files), read_sdk_functions(directory))
 
 
+# --------------------------------------------------------------------------- backend references by route name
+
+
+def read_referenced_route_names(directory: Path, functions: tuple[str, ...] = DEFAULT_URL_FOR_FUNCTIONS) -> set[str]:
+    """Route names passed as a string literal to one of `functions` (`request.url_for("x")`, `app.url_path_for(name="x")`,
+    `{{ url_for('x', id=1) }}`) in the non-test Python files and templates under `directory`. A mounted sub-app's
+    `"mount:x"` yields `x`. Regex based, so a call in a comment counts too (that only ever hides a dead route, never invents one)."""
+    pattern = re.compile(r"\b(?:" + "|".join(map(re.escape, functions)) + r")\(\s*(?:\w+\s*=\s*)?(['\"])(?P<name>[^'\"\n]+)\1")
+    files, _ = _iter_files([directory], _EXCLUDE_DIR_NAMES | _TEST_DIR_NAMES, _NAME_SOURCE_SUFFIXES)
+    names: set[str] = set()
+    for path in files:
+        if _TEST_FILE_RE.match(path.name):
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        names.update(m.group("name").rsplit(":", 1)[-1] for m in pattern.finditer(text))
+    return names
+
+
+def is_named_by(op: Operation, names: set[str]) -> bool:
+    """Whether `op`'s route is one of `names`. The OpenAPI document has no route name, but the operationId is derived
+    from it: `{name}{path}_{method}` with non-word characters as `_` by default (rebuilt here from the mount-relative
+    path), the bare name or `<prefix>-<name>` with a custom `generate_unique_id`."""
+    if not op.operation_id:
+        return False
+    path = op.path[len(op.mount) :] if op.mount and op.path.startswith(op.mount) else op.path
+    return any(
+        op.operation_id in (n, re.sub(r"\W", "_", n + path) + "_" + op.method.lower()) or op.operation_id.endswith("-" + n)
+        for n in names
+    )
+
+
 # --------------------------------------------------------------------------- matching
 
 _EVIDENCE_RANK = {"sdk": 0, "fetch": 1, "url": 2, "url-sfx": 3}
@@ -311,31 +352,32 @@ class AppConfig:
     exclude_tags: list[str] = field(default_factory=list)
     exclude_paths: list[str] = field(default_factory=list)
     exclude_frontend_globs: list[str] = field(default_factory=list)
+    url_for_functions: list[str] = field(default_factory=lambda: list(DEFAULT_URL_FOR_FUNCTIONS))
     baseline: str | None = None
 
 
 def _str_list(raw: dict, key: str, app: str) -> list[str]:
     value = raw.get(key, [])
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
-        raise ApiUsageError(f"api_usage app '{app}': `{key}` must be a list of strings, got {value!r}")
+        raise ApiUsageError(f"dead_code app '{app}': `{key}` must be a list of strings, got {value!r}")
     return value
 
 
 def parse_config(table: dict) -> list[AppConfig]:
     apps = table.get("apps") or []
     if not apps:
-        raise ApiUsageError("no [[tool.bdt.api_usage.apps]] configured in pyproject.toml")
+        raise ApiUsageError("no [[tool.bdt.dead_code.apps]] configured in pyproject.toml")
     configs: list[AppConfig] = []
     for i, raw in enumerate(apps):
         name = str(raw.get("name") or raw.get("app") or raw.get("openapi") or f"app{i}")
         if bool(raw.get("app")) == bool(raw.get("openapi")):
-            raise ApiUsageError(f"api_usage app '{name}': set exactly one of `app` (module:attr) and `openapi` (path to openapi.json)")
+            raise ApiUsageError(f"dead_code app '{name}': set exactly one of `app` (module:attr) and `openapi` (path to openapi.json)")
         frontends = _str_list(raw, "frontends", name)
         if not frontends:
-            raise ApiUsageError(f"api_usage app '{name}': `frontends` (list of frontend source dirs/globs) is required")
+            raise ApiUsageError(f"dead_code app '{name}': `frontends` (list of frontend source dirs/globs) is required")
         env = raw.get("env") or {}
         if not isinstance(env, dict):
-            raise ApiUsageError(f"api_usage app '{name}': `env` must be a table")
+            raise ApiUsageError(f"dead_code app '{name}': `env` must be a table")
         configs.append(
             AppConfig(
                 name=name,
@@ -348,6 +390,7 @@ def parse_config(table: dict) -> list[AppConfig]:
                 exclude_tags=_str_list(raw, "exclude_tags", name),
                 exclude_paths=_str_list(raw, "exclude_paths", name),
                 exclude_frontend_globs=_str_list(raw, "exclude_frontend_globs", name),
+                url_for_functions=_str_list(raw, "url_for_functions", name) or list(DEFAULT_URL_FOR_FUNCTIONS),
                 baseline=raw.get("baseline"),
             )
         )
@@ -376,7 +419,7 @@ def read_baseline(path: Path) -> set[str]:
 
 
 def write_baseline(path: Path, keys: list[str]) -> None:
-    header = "# Backend operations known not to be called from the frontend (bdt lint-api-usage). Remove a line once the route is deleted or called.\n"
+    header = "# Backend operations known to be unused (bdt dead-code). Remove a line once the route is deleted or called.\n"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(header + "".join(f"{k}\n" for k in sorted(keys)), encoding="utf-8")
 
@@ -392,7 +435,7 @@ def check_app(config: AppConfig, *, repo_root: Path, update_baseline: bool = Fal
         operations = load_app_operations(config.app, cwd=repo_root / config.app_dir, env=config.env)
     if not operations:
         raise ApiUsageError(
-            f"api_usage app '{config.name}': no operations found in {config.openapi or config.app} "
+            f"dead_code app '{config.name}': no operations found in {config.openapi or config.app} "
             "(is it a FastAPI app with documented routes, not a wrapped/middleware ASGI app?)"
         )
 
@@ -404,8 +447,9 @@ def check_app(config: AppConfig, *, repo_root: Path, update_baseline: bool = Fal
     def excluded(op: Operation) -> bool:
         return is_excluded(op, prefixes=config.exclude_prefixes, tags=config.exclude_tags, path_globs=config.exclude_paths)
 
+    names = read_referenced_route_names(repo_root / config.app_dir, tuple(config.url_for_functions))
     by_key = {op.key: op for op in operations}
-    uncalled = [op for op in operations if not excluded(op) and call_evidence(op, frontends) is None]
+    uncalled = [op for op in operations if not excluded(op) and call_evidence(op, frontends) is None and not is_named_by(op, names)]
     where = Path(config.name)
 
     if not config.baseline:
@@ -419,13 +463,13 @@ def check_app(config: AppConfig, *, repo_root: Path, update_baseline: bool = Fal
     findings = [_finding(where, op) for op in uncalled if op.key not in baseline]
     for key in sorted(baseline - uncalled_keys):
         op = by_key.get(key)
-        reason = "no longer a backend route" if op is None else "now excluded" if excluded(op) else "now called from the frontend"
+        reason = "no longer a backend route" if op is None else "now excluded" if excluded(op) else "now used"
         findings.append(
             Finding(
                 where,
                 0,
                 RULE_STALE_BASELINE,
-                f"'{key}' is listed in {config.baseline} but is {reason} -- remove it (or run `bdt lint-api-usage --update-baseline`).",
+                f"'{key}' is listed in {config.baseline} but is {reason} -- remove it (or run `bdt dead-code --update-baseline`).",
             )
         )
     return findings
@@ -437,8 +481,8 @@ def _finding(where: Path, op: Operation) -> Finding:
         where,
         0,
         RULE,
-        f"{op.key}{tags} is never called from non-generated frontend code -- delete it, or exclude it "
-        "(exclude_prefixes/exclude_tags/exclude_paths) if something other than the frontend calls it.",
+        f"{op.key}{tags} is never called from non-generated frontend code nor referenced by url_for -- delete it, or "
+        "exclude it (exclude_prefixes/exclude_tags/exclude_paths) if something other than the frontend calls it.",
     )
 
 

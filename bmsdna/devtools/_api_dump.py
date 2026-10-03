@@ -1,4 +1,4 @@
-"""Standalone (stdlib-only) helper of `bdt lint-api-usage`: list the documented HTTP operations of a
+"""Standalone (stdlib-only) helper of the `routes` check of `bdt dead-code`: list the documented HTTP operations of a
 FastAPI-like app, recursing into mounted sub-apps.
 
 It is executed in the *target repo's* interpreter via `python -c <this file's source> module:attr out.json`
@@ -20,7 +20,15 @@ def ops_from_doc(doc, mount=""):
     for path, item in (doc.get("paths") or {}).items():
         for method, op in item.items():
             if method in HTTP_METHODS and isinstance(op, dict):
-                ops.append({"method": method.upper(), "path": mount + path, "tags": list(op.get("tags") or []), "mount": mount})
+                ops.append(
+                    {
+                        "method": method.upper(),
+                        "path": mount + path,
+                        "tags": list(op.get("tags") or []),
+                        "mount": mount,
+                        "operation_id": str(op.get("operationId") or ""),
+                    }
+                )
     return ops
 
 

@@ -1,4 +1,4 @@
-"""Shared `Finding` type + rendering for every `bdt lint`/`bdt lint-api-usage` rule module (lint_sql,
+"""Shared `Finding` type + rendering for every `bdt lint`/`bdt dead-code` rule module (lint_sql,
 lint_models, lint_typescript, lint_sql_files, lint_tooling, api_usage) -- kept separate from lint.py so each rule module
 only depends on this, not on the orchestrator (which depends on all of them).
 """
