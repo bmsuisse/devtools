@@ -366,12 +366,19 @@ def comment(
     message: str | None,
     screenshot_paths: list[str],
     file_paths: list[str] | None = None,
+    agent_note: bool = True,
 ) -> None:
-    """Post a comment, with a message and/or screenshots/files, on a GitHub issue."""
+    """Post a comment, with a message and/or screenshots/files, on a GitHub issue.
+
+    `agent_note=False` leaves out the detected agent-session note, for a caller (`bdt issue do`) that
+    is not itself the agent and writes the right session into `message` instead.
+    """
     file_paths = file_paths or []
     images = _screenshot_images(owner, repo, f"issue-{number}", screenshot_paths) if screenshot_paths else []
     files = _file_links(owner, repo, f"issue-{number}", file_paths) if file_paths else []
-    content = ensure_agent_session_note(build_comment_content(message, images, files)) or ""
+    content = build_comment_content(message, images, files) or ""
+    if agent_note:
+        content = ensure_agent_session_note(content) or ""
     url = _run_gh(gh, ["issue", "comment", str(number), "--body", content])
     comment_id = parse_comment_id(url)
     suffix = f" (comment #{comment_id})" if comment_id else ""

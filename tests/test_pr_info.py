@@ -189,7 +189,7 @@ def _take_cli(monkeypatch, *, user: str = "octocat") -> list[tuple]:
     _github_cli(monkeypatch)
     monkeypatch.setattr("bmsdna.devtools.cli._current_user", lambda remote: user)
     calls: list[tuple] = []
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.comment", lambda *args: calls.append(args))
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.comment", lambda *args, **kw: calls.append(args))
     return calls
 
 
@@ -277,3 +277,70 @@ def test_every_target_option_defaults_to_dev() -> None:
 
     assert {"pr create", "pr status", "pr info", "pr retry", "pr publish", "pr update", "pr comment", "pr watch-deploy", "issue take"} <= set(found)
     assert {k: v for k, v in found.items() if v != "dev"} == {}
+
+
+# -- bdt issue do takes the issue first ---------------------------------------
+
+
+def _do_cli(monkeypatch, *, agent_env: bool = False) -> dict:
+    """GitHub issue 12 with `gh` stubbed; records the posted comments and the started agent command."""
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    monkeypatch.setattr("bmsdna.devtools.cli._current_user", lambda remote: "octocat")
+    monkeypatch.setattr("bmsdna.devtools.cli.issue_do_mod.fetch_github", lambda gh, n: ("add thing", "details"))
+    seen: dict = {"events": [], "bodies": []}
+
+    def run_gh(gh, args):
+        seen["events"].append("comment")
+        seen["bodies"].append(args[args.index("--body") + 1])
+        return "https://x/issues/12#issuecomment-1"
+
+    def start(cmd, check=False):
+        seen["events"].append("agent")
+        seen["cmd"] = cmd
+        return type("R", (), {"returncode": 0})()
+
+    monkeypatch.setattr("bmsdna.devtools.gh_issue._run_gh", run_gh)
+    monkeypatch.setattr("bmsdna.devtools.issue_do.shutil.which", lambda a: "/bin/" + a)
+    monkeypatch.setattr("bmsdna.devtools.issue_do.subprocess.run", start)
+    if agent_env:
+        monkeypatch.setenv("CLAUDECODE", "1")
+        monkeypatch.setenv("CLAUDE_CODE_BRIDGE_SESSION_ID", "session_OUTER")
+    return seen
+
+
+def test_issue_do_takes_the_issue_with_the_new_session_before_starting_the_agent(monkeypatch) -> None:
+    seen = _do_cli(monkeypatch)
+
+    result = runner.invoke(app, ["issue", "do", "12"])
+
+    assert seen["events"] == ["comment", "agent"], result.output
+    session_id = seen["cmd"][seen["cmd"].index("--session-id") + 1]
+    assert seen["bodies"] == [f"Taken by octocat\n\nClaude Session: {session_id} (resume with `claude --resume {session_id}`)"]
+    assert "bdt issue take" in seen["cmd"][2]  # the prompt says not to run it again
+
+
+def test_issue_do_does_not_credit_the_outer_agent_session(monkeypatch) -> None:
+    """`bdt issue do` can itself run inside an agent; that session must not end up on the comment."""
+    seen = _do_cli(monkeypatch, agent_env=True)
+
+    runner.invoke(app, ["issue", "do", "12"])
+
+    assert "session_OUTER" not in seen["bodies"][0]
+
+
+def test_issue_do_dry_run_posts_nothing(monkeypatch) -> None:
+    seen = _do_cli(monkeypatch)
+
+    result = runner.invoke(app, ["issue", "do", "12", "--dry-run"])
+
+    assert result.exit_code == 0 and seen["events"] == []
+    assert "--session-id" in result.output
+
+
+def test_issue_do_other_agent_is_taken_without_a_session(monkeypatch) -> None:
+    seen = _do_cli(monkeypatch)
+
+    runner.invoke(app, ["issue", "do", "12", "--agent", "codex"])
+
+    assert seen["bodies"] == ["Taken by octocat (via codex)"] and "--session-id" not in seen["cmd"]

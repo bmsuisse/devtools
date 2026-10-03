@@ -308,6 +308,11 @@ description and runs `claude -p "<prompt>" --name "60: <title>"`, so the session
 with `claude --resume`. `--agent` picks another executable (it then gets just the prompt as its
 last argument); extra args are passed through; `--dry-run` prints the command.
 
+It takes the issue first (like `bdt issue take`): before the agent starts it comments `Taken by <you>`
+on the issue, naming the session it is about to start -- for `claude` a `--session-id` is generated and
+passed, so the comment says `claude --resume <id>`; the prompt tells the agent not to take it again. For
+another `--agent` the comment just says `(via <agent>)`. `--dry-run` posts nothing.
+
 ## `bdt issue take`
 
 ```bash

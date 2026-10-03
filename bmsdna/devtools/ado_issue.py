@@ -379,14 +379,20 @@ def comment_with_screenshots(
     message: str | None,
     screenshot_paths: list[str],
     file_paths: list[str] | None = None,
+    agent_note: bool = True,
 ) -> dict:
-    """Post a comment, with a message and/or screenshots/files, on the work item."""
+    """Post a comment, with a message and/or screenshots/files, on the work item.
+
+    `agent_note=False` leaves out the detected agent-session note (see `gh_issue.comment`).
+    """
     file_paths = file_paths or []
     images = _upload_attachments(session, remote, screenshot_paths) if screenshot_paths else []
     files = _upload_attachments(session, remote, file_paths) if file_paths else []
     if images or files:
         link_attachments(session, remote, work_item_id, images + files)
-    content = ensure_agent_session_note(build_comment_content_html(message, images, files)) or ""
+    content = build_comment_content_html(message, images, files) or ""
+    if agent_note:
+        content = ensure_agent_session_note(content) or ""
     comment = add_comment(session, remote, work_item_id, content)
     print(
         f"Added comment #{comment['id']} ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) "

@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import sys
+import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from importlib.metadata import version as _pkg_version
@@ -750,7 +751,16 @@ def issue_do(
         session = requests.Session()
         session.headers.update(auth_header(pat))
         title, body = issue_do_mod.fetch_ado(session, remote, number)
-    issue_do_mod.run(number, title, body, agent=agent, extra=list(ctx.args), dry_run=dry_run)
+    extra = list(ctx.args)
+    # claude can be given the session id up front, so the "Taken by" comment can link the session that will exist
+    session_id = str(uuid.uuid4()) if agent == "claude" and "--session-id" not in extra else None
+    if dry_run:
+        typer.echo(f"(dry run: would comment 'Taken by ...' on #{number} first)", err=True)
+    else:
+        message = issue_do_mod.take_message(_current_user(remote), agent, session_id)
+        typer.echo(f"Taking {'issue' if isinstance(remote, GitHubRemote) else 'work item'} #{number}")
+        _comment_on_issue(remote, number, message, pat, agent_note=False)
+    issue_do_mod.run(number, title, body, agent=agent, extra=extra, dry_run=dry_run, session_id=session_id)
 
 
 @issue_app.command("take")
@@ -774,12 +784,16 @@ def issue_take(
         number = issues[0].number
     message = f"Taken by {_current_user(remote)}"
     typer.echo(f"Taking {'issue' if isinstance(remote, GitHubRemote) else 'work item'} #{number}")
+    _comment_on_issue(remote, number, message, pat)
+
+
+def _comment_on_issue(remote: AdoRemote | GitHubRemote, number: int, message: str, pat: str | None, *, agent_note: bool = True) -> None:
     if isinstance(remote, GitHubRemote):
-        gh_issue.comment(require_gh(), remote.owner, remote.repo, number, message, [])
+        gh_issue.comment(require_gh(), remote.owner, remote.repo, number, message, [], agent_note=agent_note)
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
-        ado_issue.comment_with_screenshots(session, remote, number, message, [], [])
+        ado_issue.comment_with_screenshots(session, remote, number, message, [], [], agent_note=agent_note)
 
 
 def _current_user(remote: AdoRemote | GitHubRemote) -> str:
