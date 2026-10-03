@@ -69,6 +69,28 @@ straight through either way, e.g.
 After creating a PR, use `bdt pr status` (see above) to check whether the
 CI build passes.
 
+## Taking an issue
+
+```bash
+bdt issue take [NUMBER]
+```
+
+When you start working on an issue / work item, run this first: it comments `Taken by <user>` plus
+your session link so others can see it's being worked on and open the session. No parameters needed
+-- the session is detected, and without `NUMBER` the issue is the one the current branch's PR closes
+(so open the PR with `Fixes #N` first, or pass the number). Run it once. Don't hand-write a
+session-link comment instead.
+
+## PR summary
+
+```bash
+bdt pr info [--json]
+```
+
+PR link, state, aggregate build state and the issue(s) it closes, in one call -- cheaper than
+`bdt pr status` when you only need to know where things stand. Exits 1 if the branch has no PR.
+(`bdt pr status --wait` is still what to use to wait for CI.)
+
 ## Creating a worktree
 
 ```bash

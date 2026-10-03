@@ -20,7 +20,7 @@ from . import gh_issue, gh_pr
 from . import find_injection as find_injection_mod
 from . import lint as lint_mod
 from . import logs as logs_mod
-from . import pr_build, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
+from . import pr_build, pr_info as pr_info_mod, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
 from .cli_tools import detect_agent_session, require_az, require_gh
 from .gitrepo import AdoRemote, GitHubRemote, UnknownRemoteError, current_branch, current_remote, head_commit_subject
@@ -113,6 +113,14 @@ def _resolve_ado_pr(pat: str | None, remote: AdoRemote, target: str, pr_id: int 
     else:
         pr = pr_build.get_pr(session, remote, current_branch(), target)
     return session, pr
+
+
+def _current_pr_info(pr_id: int | None, target_branch: str, pat: str | None) -> pr_info_mod.PrInfo:
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        return pr_info_mod.github_info(gh_pr.get_pr_info(require_gh(), pr_id), remote)
+    _, pr = _resolve_ado_pr(pat, remote, target_branch, pr_id=pr_id)
+    return pr_info_mod.ado_info(pr, remote)
 
 
 def _gh_branch_for(gh: str, pr_id: int | None, *, needed: bool) -> str:
@@ -406,6 +414,27 @@ def pr_status(
         gh_pr.run(require_gh(), wait, pr_id=pr_id)
         return
     pr_build.run(remote, pat, target_branch, wait, pr_id=pr_id)
+
+
+@pr_app.command("info")
+def pr_info(
+    as_json: bool = typer.Option(False, "--json", help="Print machine-readable JSON (what the bdt Claude Code mod reads)"),
+    target_branch: str = typer.Option("main", "--target-branch", help="Target branch of the PR (Azure DevOps only)"),
+    pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
+    pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
+) -> None:
+    """One-shot summary of the PR opened from the current branch, or --pr-id directly: link, state,
+    aggregate build state, and the issue(s)/work item(s) it closes. Exits 1 if there is no such PR.
+    Build state is only evaluated on GitHub; on Azure DevOps it's reported as "unknown" (use `pr status`).
+    """
+    info = _current_pr_info(pr_id, target_branch, pat)
+    if as_json:
+        typer.echo(json.dumps(info.to_json_dict()))
+        return
+    flags = ", ".join([info.state, *(["draft"] if info.draft else []), f"build: {info.build}"])
+    typer.echo(f"PR #{info.number}: {info.title} ({flags})\n{info.url}")
+    for issue in info.issues:
+        typer.echo(f"Issue #{issue.number}: {issue.url}")
 
 
 @pr_app.command("retry")
@@ -718,6 +747,44 @@ def issue_do(
         session.headers.update(auth_header(pat))
         title, body = issue_do_mod.fetch_ado(session, remote, number)
     issue_do_mod.run(number, title, body, agent=agent, extra=list(ctx.args), dry_run=dry_run)
+
+
+@issue_app.command("take")
+def issue_take(
+    number: int | None = typer.Argument(None, help="Issue number (GitHub) or work item ID (Azure DevOps). Default: the issue the current branch's PR closes"),
+    target_branch: str = typer.Option("main", "--target-branch", help="Target branch of the PR (Azure DevOps only; only used to find the issue when no number is given)"),
+    pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
+) -> None:
+    """Claim an issue / work item: comment "Taken by <you>" on it, with this coding agent's
+    session link (detected automatically) so others can see who is working on it and find the session.
+    """
+    remote = current_remote()
+    if number is None:
+        issues = _current_pr_info(None, target_branch, pat).issues
+        if len(issues) != 1:
+            raise typer.BadParameter(
+                f"The current branch's PR closes {len(issues)} issues, so can't tell which to take -- pass the number"
+                if issues
+                else "No issue number given, and the current branch's PR doesn't reference one (e.g. 'Fixes #N')"
+            )
+        number = issues[0].number
+    message = f"Taken by {_current_user(remote)}"
+    if isinstance(remote, GitHubRemote):
+        gh_issue.comment(require_gh(), remote.owner, remote.repo, number, message, [])
+    else:
+        session = requests.Session()
+        session.headers.update(auth_header(pat))
+        ado_issue.comment_with_screenshots(session, remote, number, message, [], [])
+
+
+def _current_user(remote: AdoRemote | GitHubRemote) -> str:
+    """Who to say took an issue: the GitHub login `gh` is authenticated as, else the git `user.name`."""
+    if isinstance(remote, GitHubRemote):
+        r = subprocess.run([require_gh(), "api", "user", "--jq", ".login"], capture_output=True, text=True, check=False)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    r = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True, check=False)
+    return r.stdout.strip() or "unknown"
 
 
 @issue_app.command("update")

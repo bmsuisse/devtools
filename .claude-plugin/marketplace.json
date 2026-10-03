@@ -1,0 +1,12 @@
+{
+  "name": "bmsuisse-devtools",
+  "owner": { "name": "BMS" },
+  "metadata": { "description": "Claude Code mods that ship with bmsdna-devtools" },
+  "plugins": [
+    {
+      "name": "bdt-status",
+      "source": "./mods/bdt-status",
+      "description": "Shows the current branch's PR and the issue it closes above the prompt, with the build state"
+    }
+  ]
+}

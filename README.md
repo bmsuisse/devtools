@@ -285,6 +285,50 @@ description and runs `claude -p "<prompt>" --name "60: <title>"`, so the session
 with `claude --resume`. `--agent` picks another executable (it then gets just the prompt as its
 last argument); extra args are passed through; `--dry-run` prints the command.
 
+## `bdt issue take`
+
+```bash
+bdt issue take [NUMBER] [--target-branch main]
+```
+
+Claims an issue (GitHub) or work item (Azure DevOps): comments `Taken by <you>` on it, followed by the
+running coding agent's session link (the same `<Agent> Session: <url>` note every bdt comment gets
+under Claude Code), so others can see who is on it and open the session. `<you>` is the GitHub login
+`gh` is authenticated as, else the git `user.name`. Without `NUMBER` it takes the issue the current
+branch's PR closes (`Fixes #N`, or an issue/work-item URL in the PR body); it refuses to guess if
+that is none or several. Run it once, right after you start on the issue -- it doesn't check for an
+earlier "Taken by" comment.
+
+## `bdt pr info`
+
+```bash
+bdt pr info [--json] [--pr-id N] [--target-branch main]
+```
+
+One-shot summary of the current branch's PR: link, state (open/merged/closed, draft), aggregate
+build state (`passing`, `failing`, `pending`, `waiting` for a manual approval, `none`) and the
+issue(s)/work item(s) it closes, with links. Exits 1 when the branch has no PR. `--json` is what
+the Claude Code mod below reads. Build state is only evaluated on GitHub; on Azure DevOps it is
+`unknown` (use `bdt pr status`).
+
+## Claude Code mod: `bdt-status`
+
+[Mods](https://code.claude.com/docs/en/plugins/mods/overview) are plugins that change how Claude
+Code looks and behaves (Claude Code v2.1.287+). `mods/bdt-status` draws one line above the prompt
+-- `PR #69 ✗ failing · closes #68`, both numbers clickable -- refreshed every 30 seconds and after
+each turn, from `bdt pr info --json`. Nothing is drawn when the branch has no PR or `bdt` isn't on
+PATH. It shows in the terminal and the Desktop app (not `claude -p`, the VS Code panel or cloud
+sessions, where mods can't draw).
+
+```bash
+claude plugin marketplace add bmsuisse/devtools
+claude plugin install bdt-status@bmsuisse-devtools
+```
+
+Mods run with your permissions, unsandboxed; this one only runs `bdt pr info --json`
+(`claude plugin validate mods/bdt-status` lists its calls). Test it with
+`claude plugin test mods/bdt-status`.
+
 ## `bdt worktree`
 
 ```bash
