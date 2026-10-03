@@ -1,4 +1,4 @@
-"""`bdt pr info` (what the Claude Code mod polls) and `bdt issue take` (GitHub issue #68)."""
+"""`bdt pr info` (polled by status integrations) and `bdt issue take` (GitHub issue #68)."""
 
 import json
 

@@ -423,7 +423,7 @@ def pr_status(
 
 @pr_app.command("info")
 def pr_info(
-    as_json: bool = typer.Option(False, "--json", help="Print machine-readable JSON (what the bdt Claude Code mod reads)"),
+    as_json: bool = typer.Option(False, "--json", help="Print machine-readable JSON (for status integrations that poll it)"),
     target_branch: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target-branch", help="Target branch of the PR (Azure DevOps only)"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),

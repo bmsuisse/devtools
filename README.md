@@ -1,8 +1,7 @@
 # bmsdna-devtools
 
 Shared developer tooling for BMS projects: PR build/check status and a
-one-shot PR summary (`bdt pr info`, also shown in Claude Code by the bundled
-`bdt-status` mod), PR creation, claiming an issue (`bdt issue take`), issue/work item creation and comments, git worktrees (creation and
+one-shot PR summary (`bdt pr info`), PR creation, claiming an issue (`bdt issue take`), issue/work item creation and comments, git worktrees (creation and
 merged-worktree/orphaned-test-DB cleanup), a commit-and-push helper with
 pre-flight checks, Azure log queries, and static checks (`bdt lint`) for
 postgres/psycopg SQL rules, pydantic-model placement, hand-wired HTTP access in
@@ -85,7 +84,7 @@ bdt pr info [--json] [--pr-id N] [--target-branch dev]
 One-shot summary of the current branch's PR: link, state (open/merged/closed, draft), aggregate
 build state (`passing`, `failing`, `pending`, `waiting` for a manual approval, `none`) and the
 issue(s)/work item(s) it closes, with links. Exits 1 when the branch has no PR. `--json` is what
-the Claude Code mod below reads. Build state is judged the way `bdt pr status` does: on GitHub from
+a status integration reads (e.g. the Claude Code mod planned in bmsuisse/skills#61). Build state is judged the way `bdt pr status` does: on GitHub from
 the check rollup (only a failed check fails it; skipped/cancelled ones don't count), on Azure DevOps
 from the latest build of each pipeline (any failed result fails it; unfinished builds are pending, or
 `waiting` when a stage needs approval). `unknown` if Azure DevOps can't be asked.
@@ -327,24 +326,6 @@ agent), so others can see who is on it. `<you>` is the GitHub login
 branch's PR closes (`Fixes #N`, or an issue/work-item URL in the PR body); it refuses to guess if
 that is none or several. If the issue's newest comment already is a "Taken by ..." claim (by anyone) it
 says so and posts nothing, so it's safe to run repeatedly -- including before `bdt issue do`.
-
-## Claude Code mod: `bdt-status`
-
-[Mods](https://code.claude.com/docs/en/plugins/mods/overview) are plugins that change how Claude
-Code looks and behaves (Claude Code v2.1.287+). `mods/bdt-status` draws one line above the prompt
--- `PR #69 ✗ failing · closes #68`, both numbers clickable -- refreshed every 30 seconds and after
-each turn, from `bdt pr info --json`. Nothing is drawn when the branch has no PR or `bdt` isn't on
-PATH. It shows in the terminal and the Desktop app (not `claude -p`, the VS Code panel or cloud
-sessions, where mods can't draw).
-
-```bash
-claude plugin marketplace add bmsuisse/devtools
-claude plugin install bdt-status@bmsuisse-devtools
-```
-
-Mods run with your permissions, unsandboxed; this one only runs `bdt pr info --json`
-(`claude plugin validate mods/bdt-status` lists its calls). Test it with
-`claude plugin test mods/bdt-status`.
 
 ## `bdt worktree`
 

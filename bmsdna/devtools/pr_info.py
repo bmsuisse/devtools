@@ -1,7 +1,7 @@
 """`bdt pr info`: a one-shot, machine-readable summary of the current branch's PR.
 
-The bdt Claude Code mod (`mods/bdt-status`) polls this to show a link to the PR and the
-issue/work item it closes, plus the build state, above the prompt. Kept as plain data (no
+A status integration (e.g. the Claude Code mod planned in bmsuisse/skills#61) polls this to show a
+link to the PR and the issue/work item it closes, plus the build state, above the prompt. Kept as plain data (no
 human-oriented formatting) so any other tool -- a shell prompt, a dashboard -- can consume it too.
 """
 
