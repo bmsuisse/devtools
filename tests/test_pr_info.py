@@ -257,3 +257,23 @@ def test_pr_info_on_azure_devops_passes_the_session_through(monkeypatch) -> None
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["build"] == "passing" and seen == {"session": "session"}
+
+
+def _target_options(command, path=()):
+    # duck-typed: typer vendors its own click, so there's no `click` to isinstance against
+    if hasattr(command, "commands"):
+        for name, sub in command.commands.items():
+            yield from _target_options(sub, (*path, name))
+        return
+    for param in command.params:
+        if param.name in ("target", "target_branch"):
+            yield " ".join(path), param.default
+
+
+def test_every_target_option_defaults_to_dev() -> None:
+    import typer.main
+
+    found = dict(_target_options(typer.main.get_command(app)))
+
+    assert {"pr create", "pr status", "pr info", "pr retry", "pr publish", "pr update", "pr comment", "pr watch-deploy", "issue take"} <= set(found)
+    assert {k: v for k, v in found.items() if v != "dev"} == {}

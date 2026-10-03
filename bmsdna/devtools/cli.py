@@ -35,6 +35,9 @@ if sys.platform == "win32":
 
 __version__ = _pkg_version("bmsdna-devtools")
 
+# What `--target` / `--target-branch` mean when not given: the branch PRs normally go into.
+DEFAULT_TARGET_BRANCH = "dev"
+
 app = typer.Typer(
     name="bdt",
     help=f"Shared BMS developer tooling: PRs/builds (Azure DevOps or GitHub), worktrees, commits, logs (v{__version__})",
@@ -228,7 +231,7 @@ def _link_and_label_ado(session: requests.Session, remote: AdoRemote, pr_id: int
 
 @pr_app.command("create")
 def pr_create(
-    target: str = typer.Option("main", "--target", help="Target branch (e.g. main, test)"),
+    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch (e.g. dev, main, test)"),
     draft: bool = typer.Option(
         True,
         "--draft/--no-draft",
@@ -380,7 +383,7 @@ def pr_create(
 
 @pr_app.command("publish")
 def pr_publish(
-    target: str = typer.Option("main", "--target", help="Target branch of the PR (Azure DevOps only)"),
+    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch of the PR (Azure DevOps only)"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -402,7 +405,7 @@ def pr_publish(
 
 @pr_app.command("status")
 def pr_status(
-    target_branch: str = typer.Option("main", "--target-branch", help="Target branch of the PR (Azure DevOps only — gh has no equivalent filter, it always resolves the PR for the current branch)"),
+    target_branch: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target-branch", help="Target branch of the PR (Azure DevOps only — gh has no equivalent filter, it always resolves the PR for the current branch)"),
     wait: bool = typer.Option(False, "--wait", help="Poll until all pipelines/checks are completed; stops early and reports status if one needs manual approval"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
@@ -420,7 +423,7 @@ def pr_status(
 @pr_app.command("info")
 def pr_info(
     as_json: bool = typer.Option(False, "--json", help="Print machine-readable JSON (what the bdt Claude Code mod reads)"),
-    target_branch: str = typer.Option("main", "--target-branch", help="Target branch of the PR (Azure DevOps only)"),
+    target_branch: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target-branch", help="Target branch of the PR (Azure DevOps only)"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
 ) -> None:
@@ -440,7 +443,7 @@ def pr_info(
 
 @pr_app.command("retry")
 def pr_retry(
-    target_branch: str = typer.Option("main", "--target-branch", help="Target branch of the PR (Azure DevOps only)"),
+    target_branch: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target-branch", help="Target branch of the PR (Azure DevOps only)"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -462,7 +465,7 @@ def pr_retry(
 
 @pr_app.command("watch-deploy")
 def pr_watch_deploy(
-    target_branch: str = typer.Option("main", "--target-branch", help="Branch to watch for a directly-triggered build/workflow run (e.g. a post-merge deployment pipeline)"),
+    target_branch: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target-branch", help="Branch to watch for a directly-triggered build/workflow run (e.g. a post-merge deployment pipeline)"),
     wait: bool = typer.Option(False, "--wait", help="Poll until the build/workflow run(s) are completed; stops early and reports status if one needs manual approval"),
     pat: str | None = typer.Option(
         None,
@@ -497,7 +500,7 @@ def pr_update(
     file: list[str] = typer.Option(
         [], "--file", help="Path to an arbitrary file to append to the PR description as a linked attachment (repeatable)"
     ),
-    target: str = typer.Option("main", "--target", help="Target branch of the PR (Azure DevOps only)"),
+    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch of the PR (Azure DevOps only)"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -540,7 +543,7 @@ def pr_comment(
     file: list[str] = typer.Option(
         [], "--file", help="Path to an arbitrary file to link in the comment as an attachment (repeatable)"
     ),
-    target: str = typer.Option("main", "--target", help="Target branch of the PR (Azure DevOps only)"),
+    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch of the PR (Azure DevOps only)"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -753,7 +756,7 @@ def issue_do(
 @issue_app.command("take")
 def issue_take(
     number: int | None = typer.Argument(None, help="Issue number (GitHub) or work item ID (Azure DevOps). Default: the issue the current branch's PR closes"),
-    target_branch: str = typer.Option("main", "--target-branch", help="Target branch of the PR (Azure DevOps only; only used to find the issue when no number is given)"),
+    target_branch: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target-branch", help="Target branch of the PR (Azure DevOps only; only used to find the issue when no number is given)"),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
 ) -> None:
     """Claim an issue / work item: comment "Taken by <you>" on it, with this coding agent's
@@ -1197,7 +1200,7 @@ def commit(
     subrepo: list[str] = typer.Option([], "--subrepo", help="Submodule directory name to split matching files into (repeatable)"),
     skip_message_check: bool = typer.Option(False, "--skip-message-check", help="Don't require a conventional-commit-style message"),
     allow_main: bool = typer.Option(False, "--allow-main", help="Allow committing directly on main/master"),
-    target: str = typer.Option("main", "--target", help="Target branch of the PR to draft on a 'feat' commit (Azure DevOps only)"),
+    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch of the PR to draft on a 'feat' commit (Azure DevOps only)"),
     pat: str | None = typer.Option(
         None,
         "--pat",

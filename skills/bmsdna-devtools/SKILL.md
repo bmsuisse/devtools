@@ -34,7 +34,7 @@ CLI to install rather than trying to work around it.
 ## Checking PR build/check status
 
 ```bash
-bdt pr status [--target-branch main] [--wait]
+bdt pr status [--target-branch dev] [--wait]
 ```
 
 Finds the PR opened from the current branch and prints build/check status,
@@ -59,14 +59,14 @@ available); GitHub uses whatever `gh auth login` session is active.
 ## Creating a PR
 
 ```bash
-bdt pr create --target main    # or --target test
+bdt pr create --target dev    # or --target main / test
 ```
 
 Uses the current branch as source. On Azure DevOps this wraps `az repos pr
 create`; on GitHub, `gh pr create --fill` (autofills title/body from commit
 info, so it never blocks waiting on an interactive prompt). Extra args pass
 straight through either way, e.g.
-`bdt pr create --target main -- --title "..." --description "..."`.
+`bdt pr create --target dev -- --title "..." --description "..."`.
 
 After creating a PR, use `bdt pr status` (see above) to check whether the
 CI build passes.

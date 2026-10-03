@@ -36,8 +36,11 @@ Find the PR opened from the current branch and report build/check status
 GitHub — whichever `origin` points at.
 
 ```bash
-bdt pr status [--target-branch main] [--wait]
+bdt pr status [--target-branch dev] [--wait]
 ```
+
+Every `--target` / `--target-branch` option in bdt (`pr create/status/info/retry/publish/update/comment/watch-deploy`,
+`issue take`, `commit`) defaults to `dev`; pass `--target main` (or whatever your PRs go into) to override.
 
 If the PR can't be merged, that's reported immediately instead of polling
 for builds/checks that will never run — e.g. on Azure DevOps:
@@ -76,7 +79,7 @@ it watches a branch-triggered build/workflow run, not any particular PR.)
 ## `bdt pr info`
 
 ```bash
-bdt pr info [--json] [--pr-id N] [--target-branch main]
+bdt pr info [--json] [--pr-id N] [--target-branch dev]
 ```
 
 One-shot summary of the current branch's PR: link, state (open/merged/closed, draft), aggregate
@@ -87,7 +90,7 @@ the check rollup (only a failed check fails it; skipped/cancelled ones don't cou
 from the latest build of each pipeline (any failed result fails it; unfinished builds are pending, or
 `waiting` when a stage needs approval). `unknown` if Azure DevOps can't be asked.
 
-Azure DevOps limits: the PR is found by the current branch into `--target-branch` (default `main`),
+Azure DevOps limits: the PR is found by the current branch into `--target-branch` (default `dev`),
 a PR with merge conflicts is reported as an error (exit 1) like `pr status` does, and the closed
 work items are only those whose URL is in the PR description -- not ones linked via
 `bdt pr create --issue`.
@@ -99,7 +102,7 @@ PR opened from the current branch — not a whole new build/run. Whenever `bdt
 pr status` reports a failure, it prints a hint to run this.
 
 ```bash
-bdt pr retry [--target-branch main]
+bdt pr retry [--target-branch dev]
 ```
 
 No build/run ID needed — like `bdt pr status`, it resolves the PR (and its
@@ -132,7 +135,7 @@ workflow run triggered *directly* on `--target-branch` and reports its
 status the same way `pr status` does (failed steps print their logs inline).
 
 ```bash
-bdt pr watch-deploy [--target-branch main] [--wait]
+bdt pr watch-deploy [--target-branch dev] [--wait]
 ```
 
 After `bdt pr status` reports the PR's build/checks succeeded, if a build/
@@ -153,7 +156,7 @@ branch. Failed steps are printed via `gh run view <id> --log-failed`.
 ## `bdt pr create`
 
 ```bash
-bdt pr create --target main   # or --target test
+bdt pr create --target dev   # or --target main / test
 ```
 
 Creates a PR from the current branch into `--target`. On Azure DevOps,
@@ -161,7 +164,7 @@ a thin wrapper around `az repos pr create` (org/project/repo inferred by
 `az` itself from the git remote). On GitHub, `gh pr create --fill` (autofills
 title/body from commit info so it never blocks on an interactive prompt).
 Extra arguments pass through either way, e.g.
-`bdt pr create --target main -- --title "..."`.
+`bdt pr create --target dev -- --title "..."`.
 
 PRs are created as **drafts by default**; a successful create always prints
 the PR's link plus `bdt pr publish` (which abstracts over the host) to mark
@@ -308,7 +311,7 @@ last argument); extra args are passed through; `--dry-run` prints the command.
 ## `bdt issue take`
 
 ```bash
-bdt issue take [NUMBER] [--target-branch main]
+bdt issue take [NUMBER] [--target-branch dev]
 ```
 
 Claims an issue (GitHub) or work item (Azure DevOps): comments `Taken by <you>` on it, followed by the
