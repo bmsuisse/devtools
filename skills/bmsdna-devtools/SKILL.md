@@ -4,10 +4,12 @@ description: >
   Use the `bdt` CLI (from the bmsdna-devtools package) instead of ad hoc git/az/gh
   commands or repo-local scripts for: checking PR build/check status, creating
   a PR, creating a git worktree, committing and pushing files (with pre-flight
-  checks), and querying Azure logs. `bdt pr *` works against both Azure DevOps
+  checks), querying Azure logs, and static checks (`bdt lint`: SQL/psycopg rules, pydantic placement, tooling; `bdt dead-code`:
+  unreferenced .sql files and backend routes nothing calls). `bdt pr *` works against both Azure DevOps
   and GitHub — it auto-detects which one from the `origin` remote. Trigger
   whenever the user asks to check a build/PR status, create a PR, make a
-  worktree, commit changes, or fetch/tail application logs in a repo that has
+  worktree, commit changes, fetch/tail application logs, lint a repo, or find dead API routes /
+  unused .sql files in a repo that has
   bmsdna-devtools installed (check for `bdt` on PATH, or `bmsdna-devtools` in
   pyproject.toml, before assuming it applies).
 ---
@@ -94,6 +96,15 @@ if a pre-commit hook reformats files. Pass `--json` when calling
 programmatically from an agent loop — the schema is documented in
 `bdt commit --help`. Pass `--subrepo database` (repeatable) for repos that
 vendor a git submodule under that path.
+
+## Static checks
+
+- `bdt lint [paths]` -- SQL/psycopg rules, pydantic-model placement, hand-wired HTTP in TypeScript, baseline tooling.
+- `uv run bdt dead-code` -- dead code a linter can't see, configured under `[tool.bdt.dead_code]` in pyproject.toml:
+  `.sql` files no Python code loads (`sql_roots`) and FastAPI routes that neither non-generated frontend code nor a
+  `url_for(...)` call uses (`[[tool.bdt.dead_code.apps]]`: app or openapi file, frontends, excludes, optional `baseline`;
+  adopt with `--update-baseline`). `--only sql|routes` runs one check. The routes check imports the app, so run it with
+  the repo's own interpreter (`uv run`). Generated API-client code and tests never count as callers.
 
 ## Application Insights logs
 
