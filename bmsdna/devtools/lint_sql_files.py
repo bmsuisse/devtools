@@ -1,7 +1,7 @@
-"""`bdt lint`'s `sql-file-unreferenced` rule: a `.sql` file under a configured root that no Python
+"""The `sql` check of `bdt dead-code` (rule `sql-file-unreferenced`): a `.sql` file under a configured root that no Python
 code references is dead weight (a query left behind after its caller was deleted or renamed).
 
-Opt-in: only runs when `[tool.bdt.lint] sql_roots = ["backend/db/queries", ...]` is set, since which
+Part of `bdt dead-code`; opt-in: only runs when `[tool.bdt.dead_code] sql_roots = ["backend/db/queries", ...]` is set, since which
 folders hold *loadable* SQL (as opposed to schema/migration scripts that are applied, never loaded)
 is a per-repo fact. A file counts as referenced when any of these holds (strongest first):
 
@@ -143,7 +143,7 @@ def check_unreferenced_sql_files(
                 0,
                 RULE,
                 "no Python code references this SQL file (load_sql topic/name or path) -- delete it, or list it in "
-                "[tool.bdt.lint] sql_unreferenced_ignore if it is reached some other way.",
+                "[tool.bdt.dead_code] sql_unreferenced_ignore if it is reached some other way.",
             )
         )
     return findings

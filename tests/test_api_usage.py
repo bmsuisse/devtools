@@ -409,7 +409,7 @@ def _project(root: Path, *, baseline: bool = False, extra: str = "") -> None:
         [project]
         name = "x"
 
-        [[tool.bdt.api_usage.apps]]
+        [[tool.bdt.dead_code.apps]]
         name = "main"
         openapi = "openapi.json"
         frontends = ["fe/src"]
@@ -420,7 +420,7 @@ def _project(root: Path, *, baseline: bool = False, extra: str = "") -> None:
 
 
 def _config(root: Path) -> au.AppConfig:
-    return au.parse_config(load_bdt_table("api_usage", root))[0]
+    return au.parse_config(load_bdt_table("dead_code", root))[0]
 
 
 def test_check_app_reports_uncalled_routes(tmp_path: Path) -> None:
@@ -474,7 +474,7 @@ def test_baseline_ratchet(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     ("change", "reason"),
-    [("called", "now called"), ("excluded", "now excluded")],
+    [("called", "now used"), ("excluded", "now excluded")],
 )
 def test_baseline_stale_reason(tmp_path: Path, change: str, reason: str) -> None:
     _project(tmp_path, baseline=True)
@@ -491,7 +491,7 @@ def test_baseline_stale_reason(tmp_path: Path, change: str, reason: str) -> None
 
 def test_update_baseline_validates_all_apps_before_writing(tmp_path: Path) -> None:
     _project(tmp_path, baseline=True)
-    table = load_bdt_table("api_usage", tmp_path)
+    table = load_bdt_table("dead_code", tmp_path)
     second = {"name": "second", "openapi": "openapi.json", "frontends": ["fe/src"]}  # no baseline
     with pytest.raises(au.ApiUsageError, match="missing for: second"):
         au.run({"apps": [*table["apps"], second]}, repo_root=tmp_path, update_baseline=True)
@@ -510,6 +510,95 @@ def test_update_baseline_creates_parent_directories(tmp_path: Path) -> None:
     assert (tmp_path / "deep/dir/bl.txt").is_file()
 
 
+# ------------------------------------------------------------------ routes referenced by name (url_for)
+
+
+def _op_id(method: str, path: str, operation_id: str, *, mount: str = "") -> au.Operation:
+    return au.Operation(method, path, (), mount, operation_id)
+
+
+def test_read_referenced_route_names(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "backend/auth.py",
+        """
+        url = request.url_for("auth_callback")
+        other = app.url_path_for(name='login')
+        mounted = request.url_for("sub:inner")
+        dynamic = request.url_for(provider)
+        also = request.url_for(
+            "multi_line",
+        )
+        nope = my_url_for("not_a_call")
+        """,
+    )
+    _write(tmp_path, "backend/templates/page.html", "<a href=\"{{ url_for('from_template', id=1) }}\">x</a>")
+    _write(tmp_path, "backend/tests/test_auth.py", 'url_for("only_in_tests")\n')
+    _write(tmp_path, "backend/test_x.py", 'url_for("only_in_test_file")\n')
+    _write(tmp_path, "backend/node_modules/x.py", 'url_for("vendored")\n')
+    assert au.read_referenced_route_names(tmp_path / "backend") == {"auth_callback", "login", "inner", "multi_line", "from_template"}
+    assert au.read_referenced_route_names(tmp_path / "backend", ("my_url_for",)) == {"not_a_call"}
+
+
+@pytest.mark.parametrize(
+    ("op", "names", "expected"),
+    [
+        # FastAPI's default operationId: route name + path with non-word characters as `_`, + method
+        (_op_id("GET", "/auth/login", "login_auth_login_get"), {"login"}, True),
+        (_op_id("GET", "/auth/cb/{x}", "auth_cb_auth_cb__x__get"), {"auth_cb"}, True),
+        (_op_id("GET", "/api/sub/items", "list_items_items_get", mount="/api/sub"), {"list_items"}, True),
+        (_op_id("GET", "/auth/login", "login_auth_login_get"), {"logout"}, False),
+        (_op_id("GET", "/auth/login", "login_auth_login_get"), {"log"}, False),  # a prefix of the name is not the name
+        (_op_id("POST", "/auth/login", "login_auth_login_get"), {"login"}, False),  # method is part of the id
+        # custom generate_unique_id
+        (_op_id("GET", "/auth/login", "login"), {"login"}, True),
+        (_op_id("GET", "/auth/login", "auth-login"), {"login"}, True),
+        (_op_id("GET", "/auth/login", "auth-relogin"), {"login"}, False),
+        (_op("GET", "/auth/login"), {"login"}, False),  # no operationId (older openapi file): nothing to go on
+    ],
+)
+def test_is_named_by(op: au.Operation, names: set[str], expected: bool) -> None:
+    assert au.is_named_by(op, names) is expected
+
+
+def test_route_referenced_by_url_for_is_not_reported(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "openapi.json",
+        json.dumps(
+            {
+                "paths": {
+                    "/auth/callback": {"get": {"operationId": "auth_callback_auth_callback_get"}},
+                    "/auth/dead": {"get": {"operationId": "dead_auth_dead_get"}},
+                }
+            }
+        ),
+    )
+    _write(tmp_path, "fe/src/a.ts", "export {};\n")
+    _write(tmp_path, "backend/auth.py", 'redirect_uri = request.url_for("auth_callback")\n')
+    _write(
+        tmp_path,
+        "pyproject.toml",
+        """
+        [[tool.bdt.dead_code.apps]]
+        openapi = "openapi.json"
+        app_dir = "backend"
+        frontends = ["fe/src"]
+        """,
+    )
+    findings = au.check_app(_config(tmp_path), repo_root=tmp_path)
+    assert [f.message.split(" ")[:2] for f in findings] == [["GET", "/auth/dead"]]
+
+
+def test_url_for_functions_are_configurable(tmp_path: Path) -> None:
+    _project(tmp_path, extra='url_for_functions = ["reverse"]')
+    _write(tmp_path, "openapi.json", json.dumps({"paths": {"/api/x": {"get": {"operationId": "x_api_x_get"}}}}))
+    _write(tmp_path, "svc.py", 'reverse("x")\n')
+    assert au.check_app(_config(tmp_path), repo_root=tmp_path) == []
+    _write(tmp_path, "svc.py", 'url_for("x")\n')  # not one of the configured functions any more
+    assert len(au.check_app(_config(tmp_path), repo_root=tmp_path)) == 1
+
+
 # ------------------------------------------------------------------ CLI
 
 
@@ -517,31 +606,49 @@ def test_cli_exit_codes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     runner = CliRunner()
     _project(tmp_path)
     monkeypatch.chdir(tmp_path)
-    result = runner.invoke(app, ["lint-api-usage"])
+    result = runner.invoke(app, ["dead-code"])
     assert result.exit_code == 1
     assert "GET /api/dead" in result.output
     assert "bdt lint:" not in result.output  # not the `bdt lint` summary line
 
     _write(tmp_path, "fe/src/b.ts", "fetch('/api/dead');\n")
-    clean = runner.invoke(app, ["lint-api-usage"])
+    clean = runner.invoke(app, ["dead-code"])
     assert clean.exit_code == 0
-    assert "no uncalled routes" in clean.output
+    assert "no dead code found" in clean.output
 
     _write(tmp_path, "pyproject.toml", "[project]\nname='x'\n")
-    broken = runner.invoke(app, ["lint-api-usage"])
+    broken = runner.invoke(app, ["dead-code"])
     assert broken.exit_code == 2
-    assert "no [[tool.bdt.api_usage.apps]]" in broken.output
+    assert "nothing to check" in broken.output
 
     _write(tmp_path, "pyproject.toml", "[project\n")
-    assert runner.invoke(app, ["lint-api-usage"]).exit_code == 2  # invalid TOML is a setup error, not a traceback
+    assert runner.invoke(app, ["dead-code"]).exit_code == 2  # invalid TOML is a setup error, not a traceback
+
+
+def test_cli_runs_sql_and_routes_checks_together(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    _project(tmp_path, extra='\n[tool.bdt.dead_code]\nsql_roots = ["sql"]')
+    _write(tmp_path, "sql/q/orphan.sql", "select 1")
+    monkeypatch.chdir(tmp_path)
+    both = runner.invoke(app, ["dead-code"])
+    assert both.exit_code == 1
+    assert "orphan.sql" in both.output
+    assert "GET /api/dead" in both.output
+    assert "2 issue(s) found" in both.output
+    sql_only = runner.invoke(app, ["dead-code", "--only", "sql"])
+    assert "orphan.sql" in sql_only.output
+    assert "GET /api/dead" not in sql_only.output
+    routes_only = runner.invoke(app, ["dead-code", "--only", "routes"])
+    assert "GET /api/dead" in routes_only.output
+    assert "orphan.sql" not in routes_only.output
 
 
 def test_cli_update_baseline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runner = CliRunner()
     _project(tmp_path, baseline=True)
     monkeypatch.chdir(tmp_path)
-    assert runner.invoke(app, ["lint-api-usage"]).exit_code == 1
-    updated = runner.invoke(app, ["lint-api-usage", "--update-baseline"])
+    assert runner.invoke(app, ["dead-code"]).exit_code == 1
+    updated = runner.invoke(app, ["dead-code", "--update-baseline"])
     assert updated.exit_code == 0
     assert "baseline(s) updated" in updated.output
-    assert runner.invoke(app, ["lint-api-usage"]).exit_code == 0
+    assert runner.invoke(app, ["dead-code"]).exit_code == 0

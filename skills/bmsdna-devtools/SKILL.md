@@ -5,8 +5,8 @@ description: >
   commands or repo-local scripts for: checking PR build/check status, creating
   a PR, creating a git worktree, committing and pushing files (with pre-flight
   checks), claiming an issue / work item (`bdt issue take`), a one-shot PR summary
-  (`bdt pr info`: link, build state, closed issues), querying Azure logs, and static checks (`bdt lint`: SQL/psycopg rules, unreferenced .sql
-  files; `bdt lint-api-usage`: backend routes no frontend code calls). `bdt pr *` works against both Azure DevOps
+  (`bdt pr info`: link, build state, closed issues), querying Azure logs, and static checks (`bdt lint`: SQL/psycopg rules, pydantic placement, tooling; `bdt dead-code`:
+  unreferenced .sql files and backend routes nothing calls). `bdt pr *` works against both Azure DevOps
   and GitHub — it auto-detects which one from the `origin` remote. Trigger
   whenever the user asks to check a build/PR status, create a PR, make a
   worktree, commit changes, fetch/tail application logs, lint a repo, find dead API routes /
@@ -123,12 +123,12 @@ vendor a git submodule under that path.
 
 ## Static checks
 
-- `bdt lint [paths]` -- SQL/psycopg rules, pydantic-model placement, hand-wired HTTP in TypeScript, baseline tooling,
-  and (opt-in via `[tool.bdt.lint] sql_roots = [...]`) `.sql` files no Python code references.
-- `uv run bdt lint-api-usage` -- FastAPI operations that no non-generated frontend code calls. Configured via
-  `[[tool.bdt.api_usage.apps]]` in pyproject.toml (app or openapi file, frontends, excludes, optional `baseline`);
-  adopt it with `--update-baseline`. It imports the app, so run it with the repo's own interpreter (`uv run`).
-  Generated API-client code and tests never count as callers.
+- `bdt lint [paths]` -- SQL/psycopg rules, pydantic-model placement, hand-wired HTTP in TypeScript, baseline tooling.
+- `uv run bdt dead-code` -- dead code a linter can't see, configured under `[tool.bdt.dead_code]` in pyproject.toml:
+  `.sql` files no Python code loads (`sql_roots`) and FastAPI routes that neither non-generated frontend code nor a
+  `url_for(...)` call uses (`[[tool.bdt.dead_code.apps]]`: app or openapi file, frontends, excludes, optional `baseline`;
+  adopt with `--update-baseline`). `--only sql|routes` runs one check. The routes check imports the app, so run it with
+  the repo's own interpreter (`uv run`). Generated API-client code and tests never count as callers.
 
 ## Application Insights logs
 
