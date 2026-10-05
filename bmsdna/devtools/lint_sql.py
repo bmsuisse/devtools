@@ -508,11 +508,17 @@ class _ExecuteCallVisitor(ast.NodeVisitor):
         if parsed is not None:
             self.findings.extend(_complexity_findings(parsed, value.value, self.path, lineno))
 
+    def _all_bare_strings(self, name: str) -> bool:
+        """Is every assignment of `name` a bare string literal -- the only kind `_check_sql_named_literal`
+        reports `sql-inline-too-complex` for at the assignment?"""
+        values = self._lookup(name)
+        return bool(values) and all(isinstance(v, ast.Constant) and isinstance(v.value, str) for v in values)
+
     def visit_Call(self, node: ast.Call) -> None:
         query_arg = _execute_query_arg(node)
         if query_arg is not None:
             found = _check_query_arg(query_arg, self._lookup, self.path, node.lineno, self.trust, self.review)
-            if isinstance(query_arg, ast.Name) and _is_sql_named(query_arg.id):
+            if isinstance(query_arg, ast.Name) and _is_sql_named(query_arg.id) and self._all_bare_strings(query_arg.id):
                 found = [f for f in found if f.rule != "sql-inline-too-complex"]  # already reported at the assignment
             self.findings.extend(found)
         self.generic_visit(node)

@@ -151,14 +151,15 @@ def retry_hint() -> str:
     return "Hint: to retry just the failed stage(s)/job(s) instead of queuing a full rerun, run: `bdt pr retry`"
 
 
-def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, target_branch: str) -> dict:
+def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, target_branch: str | None) -> dict:
+    """The PR from `source_branch` (active first, else completed). `target_branch=None` doesn't filter on the target."""
     url = f"{_base_url(remote)}/_apis/git/repositories/{remote.repo}/pullrequests"
     for status in ["active", "completed"]:
         r = session.get(
             url,
             params={
                 "searchCriteria.sourceRefName": f"refs/heads/{source_branch}",
-                "searchCriteria.targetRefName": f"refs/heads/{target_branch}",
+                **({"searchCriteria.targetRefName": f"refs/heads/{target_branch}"} if target_branch else {}),
                 "searchCriteria.status": status,
                 "$top": 1,
                 "api-version": "7.1",
@@ -174,7 +175,7 @@ def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, tar
                 sys.exit(conflict)
             return pr
 
-    print(f"No PR found from '{source_branch}' → '{target_branch}'")
+    print(f"No PR found from '{source_branch}'" + (f" → '{target_branch}'" if target_branch else ""))
     sys.exit(1)
 
 
@@ -414,7 +415,7 @@ def get_builds_for_branch(session: requests.Session, remote: AdoRemote, branch: 
     return builds
 
 
-def deploy_build_hint(session: requests.Session, remote: AdoRemote, target_branch: str) -> str | None:
+def deploy_build_hint(session: requests.Session, remote: AdoRemote, target_branch: str | None) -> str | None:
     """Best-effort: None unless a build has already been triggered directly on `target_branch`
     (as opposed to this PR's own merge/source refs) -- e.g. a post-merge pipeline that deploys.
     When one exists, a hint suggesting `bdt pr watch-deploy` to watch it.
@@ -423,6 +424,8 @@ def deploy_build_hint(session: requests.Session, remote: AdoRemote, target_branc
     failures here (auth, permissions, network) fail open (return None) rather than blocking
     or crashing `pr status` over a step that's purely nice-to-have, same as `has_build_policy`.
     """
+    if not target_branch:
+        return None
     try:
         builds = get_builds_for_branch(session, remote, target_branch, top=1)
     except requests.RequestException:
@@ -543,7 +546,7 @@ def retry_failed_build(session: requests.Session, remote: AdoRemote, build_id: i
 
 
 def _resolve_pr_and_branch(
-    session: requests.Session, remote: AdoRemote, target_branch: str, source_branch: str | None, pr_id: int | None
+    session: requests.Session, remote: AdoRemote, target_branch: str | None, source_branch: str | None, pr_id: int | None
 ) -> tuple[dict, str]:
     """(pr, source_branch) -- shared by `retry()` and `run()`: resolves the PR by `pr_id`
     directly if given, deriving `source_branch` from the PR's own `sourceRefName` (since
@@ -559,7 +562,7 @@ def _resolve_pr_and_branch(
 
 
 def retry(
-    remote: AdoRemote, pat: str | None, target_branch: str, source_branch: str | None = None, pr_id: int | None = None
+    remote: AdoRemote, pat: str | None, target_branch: str | None, source_branch: str | None = None, pr_id: int | None = None
 ) -> None:
     """Retry the failed stage(s)/job(s) of the most recent build(s) for the PR opened
     from the current branch, or for `pr_id` directly if given -- one retry call per
@@ -668,7 +671,7 @@ def exit_if_blocked_on_approval(
 def run(
     remote: AdoRemote,
     pat: str | None,
-    target_branch: str,
+    target_branch: str | None,
     wait: bool,
     source_branch: str | None = None,
     pr_id: int | None = None,
@@ -681,8 +684,10 @@ def run(
         sync with the PR's actual source ref when resolving by id, since `get_builds_for_pr`
         below needs it and there may be no matching branch checked out locally at all.
         """
-        nonlocal source_branch
+        nonlocal source_branch, target_branch
         pr, source_branch = _resolve_pr_and_branch(session, remote, target_branch, source_branch, pr_id)
+        if target_branch is None:  # unfiltered lookup: the deploy-build hint needs the PR's actual target
+            target_branch = pr.get("targetRefName", "").removeprefix("refs/heads/") or None
         return pr
 
     # When waiting, a pipeline's "latest" build may already be a *completed* run from before

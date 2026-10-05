@@ -75,6 +75,13 @@ def test_github_info_ignores_closed_issues_of_other_repos() -> None:
     assert pr_info.github_info({**GH_PR, "closingIssuesReferences": [other]}, GITHUB_REMOTE).issues == []
 
 
+def test_github_info_ignores_same_named_repo_of_another_owner() -> None:
+    other = {"number": 9, "url": "https://github.com/otherorg/repo/issues/9", "repository": {"name": "repo", "owner": {"login": "otherorg"}}}
+    mine = {"number": 8, "url": "https://github.com/Owner/repo/issues/8", "repository": {"name": "repo", "owner": {"login": "Owner"}}}
+    info = pr_info.github_info({**GH_PR, "closingIssuesReferences": [other, mine]}, GITHUB_REMOTE)
+    assert [i.number for i in info.issues] == [8]
+
+
 def test_github_info_strips_terminal_escapes_from_title() -> None:
     info = pr_info.github_info({**GH_PR, "title": "evil\x1b]8;;http://x\x07 \u202etitle"}, GITHUB_REMOTE)
     assert info.title == "evil]8;;http://x title"
@@ -272,13 +279,14 @@ def _target_options(command, path=()):
             yield " ".join(path), param.default
 
 
-def test_every_target_option_defaults_to_dev() -> None:
+def test_target_options_default_to_dev_except_lookups_which_do_not_filter() -> None:
     import typer.main
 
     found = dict(_target_options(typer.main.get_command(app)))
 
     assert {"pr create", "pr status", "pr info", "pr retry", "pr publish", "pr update", "pr comment", "pr watch-deploy", "issue take"} <= set(found)
-    assert {k: v for k, v in found.items() if v != "dev"} == {}
+    # status/info/take only look a PR up: no target given means no filter on it
+    assert {k: v for k, v in found.items() if v != "dev"} == {"pr status": None, "pr info": None, "issue take": None}
 
 
 # -- bdt issue do takes the issue first ---------------------------------------
@@ -352,7 +360,10 @@ def test_issue_do_other_agent_is_taken_without_a_session(monkeypatch) -> None:
 # -- never take twice ---------------------------------------------------------
 
 
-@pytest.mark.parametrize("last", ["Taken by octocat", "Taken by someone-else\n\nClaude Session: https://claude.ai/code/session_x", "  Taken by x"])
+@pytest.mark.parametrize(
+    "last",
+    ["Taken by octocat", "Taken by octocat\n\nClaude Session: https://claude.ai/code/session_x", "  Taken by OctoCat (via codex)"],
+)
 def test_issue_take_skips_when_the_last_comment_is_already_a_take(monkeypatch, last) -> None:
     calls = _take_cli(monkeypatch)
     monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: last)
@@ -360,7 +371,26 @@ def test_issue_take_skips_when_the_last_comment_is_already_a_take(monkeypatch, l
     result = runner.invoke(app, ["issue", "take", "12"])
 
     assert result.exit_code == 0 and calls == []
-    assert "already taken" in result.output
+    assert "already taken by you" in result.output
+
+
+def test_issue_take_refuses_someone_elses_claim_without_force(monkeypatch) -> None:
+    calls = _take_cli(monkeypatch)
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: "Taken by someone-else\n\nClaude Session: x")
+
+    result = runner.invoke(app, ["issue", "take", "12"])
+
+    assert result.exit_code == 1 and calls == []
+    assert "already taken by someone-else" in result.output and "--force" in result.output
+
+
+def test_issue_take_force_takes_over_someone_elses_claim(monkeypatch) -> None:
+    calls = _take_cli(monkeypatch)
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: "Taken by someone-else")
+
+    result = runner.invoke(app, ["issue", "take", "12", "--force"])
+
+    assert result.exit_code == 0 and len(calls) == 1
 
 
 def test_issue_take_comments_when_the_last_comment_is_something_else(monkeypatch) -> None:
@@ -382,7 +412,19 @@ def test_issue_take_on_azure_devops_reads_the_html_comment(monkeypatch) -> None:
 
     result = runner.invoke(app, ["issue", "take", "7"])
 
-    assert result.exit_code == 0 and posted == [] and "already taken" in result.output
+    assert result.exit_code == 1 and posted == [] and "already taken by someone" in result.output
+
+
+def test_issue_do_does_not_start_the_agent_on_someone_elses_claim(monkeypatch) -> None:
+    seen = _do_cli(monkeypatch)
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: "Taken by someone-else")
+
+    result = runner.invoke(app, ["issue", "do", "12"])
+
+    assert result.exit_code == 1 and seen["events"] == []
+
+    runner.invoke(app, ["issue", "do", "12", "--force"])
+    assert seen["events"] == ["comment", "agent"]
 
 
 def test_issue_do_still_starts_the_agent_when_already_taken(monkeypatch) -> None:
