@@ -19,6 +19,7 @@ from .ado_issue import _base_url
 from .gitrepo import AdoRemote
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+TAKEN_PREFIX = "Taken by"
 
 
 def fetch_github(gh: str, number: int) -> tuple[str, str]:
@@ -49,20 +50,37 @@ def build_prompt(number: int, title: str, body: str) -> str:
     return (
         f"Work on issue {number}: {title}\n\n{body.strip() or '(no description)'}\n\n"
         "Follow the dev-workflow skill: worktree, draft PR early, implement, test, publish the PR "
-        f"and reference issue {number} in it. Do not merge."
+        f"and reference issue {number} in it. Do not merge. `bdt issue do` has already marked "
+        f"issue {number} as taken (with this session), so don't run `bdt issue take`."
     )
 
 
-def build_command(agent: str, number: int, title: str, body: str, extra: list[str]) -> list[str]:
+def is_take_comment(text: str | None) -> bool:
+    """Is `text` (a comment, markdown or ADO HTML) a "Taken by ..." claim -- what `take_message` and
+    `bdt issue take` post?"""
+    return _HTML_TAG_RE.sub("", text or "").strip().startswith(TAKEN_PREFIX)
+
+
+def take_message(user: str, agent: str, session_id: str | None) -> str:
+    """The "Taken by" comment `bdt issue do` posts before the agent starts. It names the session itself,
+    because the agent's own session doesn't exist yet and `bdt`'s auto-detected one (if `bdt issue do` is
+    run from inside an agent) would be the wrong one."""
+    if session_id is None:
+        return f"{TAKEN_PREFIX} {user} (via {agent})"
+    return f"{TAKEN_PREFIX} {user}\n\nClaude Session: {session_id} (resume with `claude --resume {session_id}`)"
+
+
+def build_command(agent: str, number: int, title: str, body: str, extra: list[str], session_id: str | None = None) -> list[str]:
     prompt = build_prompt(number, title, body)
     if agent == "claude":
-        return [agent, "-p", prompt, "--name", session_name(number, title), *extra]
+        session = ["--session-id", session_id] if session_id else []
+        return [agent, "-p", prompt, "--name", session_name(number, title), *session, *extra]
     # Other agents: no known naming flag, so just hand over the prompt.
     return [agent, *extra, prompt]
 
 
-def run(number: int, title: str, body: str, *, agent: str, extra: list[str], dry_run: bool) -> None:
-    cmd = build_command(agent, number, title, body, extra)
+def run(number: int, title: str, body: str, *, agent: str, extra: list[str], dry_run: bool, session_id: str | None = None) -> None:
+    cmd = build_command(agent, number, title, body, extra, session_id)
     if dry_run:
         print(" ".join(json.dumps(c) if " " in c or "\n" in c else c for c in cmd))
         return

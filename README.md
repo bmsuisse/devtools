@@ -1,7 +1,7 @@
 # bmsdna-devtools
 
-Shared developer tooling for BMS projects: PR build/check status, PR
-creation, issue/work item creation and comments, git worktrees (creation and
+Shared developer tooling for BMS projects: PR build/check status and a
+one-shot PR summary (`bdt pr info`), PR creation, claiming an issue (`bdt issue take`), issue/work item creation and comments, git worktrees (creation and
 merged-worktree/orphaned-test-DB cleanup), a commit-and-push helper with
 pre-flight checks, Azure log queries, and static checks (`bdt lint`) for
 postgres/psycopg SQL rules, pydantic-model placement, hand-wired HTTP access in
@@ -36,8 +36,11 @@ Find the PR opened from the current branch and report build/check status
 GitHub — whichever `origin` points at.
 
 ```bash
-bdt pr status [--target-branch main] [--wait]
+bdt pr status [--target-branch dev] [--wait]
 ```
+
+Every `--target` / `--target-branch` option in bdt (`pr create/status/info/retry/publish/update/comment/watch-deploy`,
+`issue take`, `commit`) defaults to `dev`; pass `--target main` (or whatever your PRs go into) to override.
 
 If the PR can't be merged, that's reported immediately instead of polling
 for builds/checks that will never run — e.g. on Azure DevOps:
@@ -73,6 +76,25 @@ locally at all. `bdt pr retry`, `pr publish`, `pr update`, and `pr comment`
 all accept the same option, for the same reason. (`pr watch-deploy` doesn't:
 it watches a branch-triggered build/workflow run, not any particular PR.)
 
+## `bdt pr info`
+
+```bash
+bdt pr info [--json] [--pr-id N] [--target-branch dev]
+```
+
+One-shot summary of the current branch's PR: link, state (open/merged/closed, draft), aggregate
+build state (`passing`, `failing`, `pending`, `waiting` for a manual approval, `none`) and the
+issue(s)/work item(s) it closes, with links. Exits 1 when the branch has no PR. `--json` is what
+a status integration reads (e.g. the Claude Code mod planned in bmsuisse/skills#61). Build state is judged the way `bdt pr status` does: on GitHub from
+the check rollup (only a failed check fails it; skipped/cancelled ones don't count), on Azure DevOps
+from the latest build of each pipeline (any failed result fails it; unfinished builds are pending, or
+`waiting` when a stage needs approval). `unknown` if Azure DevOps can't be asked.
+
+Azure DevOps limits: the PR is found by the current branch into `--target-branch` (default `dev`),
+a PR with merge conflicts is reported as an error (exit 1) like `pr status` does, and the closed
+work items are only those whose URL is in the PR description -- not ones linked via
+`bdt pr create --issue`.
+
 ## `bdt pr retry`
 
 Retry only the **failed** job(s)/stage(s) of the most recent build/run for the
@@ -80,7 +102,7 @@ PR opened from the current branch — not a whole new build/run. Whenever `bdt
 pr status` reports a failure, it prints a hint to run this.
 
 ```bash
-bdt pr retry [--target-branch main]
+bdt pr retry [--target-branch dev]
 ```
 
 No build/run ID needed — like `bdt pr status`, it resolves the PR (and its
@@ -113,7 +135,7 @@ workflow run triggered *directly* on `--target-branch` and reports its
 status the same way `pr status` does (failed steps print their logs inline).
 
 ```bash
-bdt pr watch-deploy [--target-branch main] [--wait]
+bdt pr watch-deploy [--target-branch dev] [--wait]
 ```
 
 After `bdt pr status` reports the PR's build/checks succeeded, if a build/
@@ -134,7 +156,7 @@ branch. Failed steps are printed via `gh run view <id> --log-failed`.
 ## `bdt pr create`
 
 ```bash
-bdt pr create --target main   # or --target test
+bdt pr create --target dev   # or --target main / test
 ```
 
 Creates a PR from the current branch into `--target`. On Azure DevOps,
@@ -142,7 +164,7 @@ a thin wrapper around `az repos pr create` (org/project/repo inferred by
 `az` itself from the git remote). On GitHub, `gh pr create --fill` (autofills
 title/body from commit info so it never blocks on an interactive prompt).
 Extra arguments pass through either way, e.g.
-`bdt pr create --target main -- --title "..."`.
+`bdt pr create --target dev -- --title "..."`.
 
 PRs are created as **drafts by default**; a successful create always prints
 the PR's link plus `bdt pr publish` (which abstracts over the host) to mark
@@ -285,6 +307,26 @@ Hands an issue (GitHub) or work item (Azure DevOps) to a coding agent. Fetches t
 description and runs `claude -p "<prompt>" --name "60: <title>"`, so the session is easy to find
 with `claude --resume`. `--agent` picks another executable (it then gets just the prompt as its
 last argument); extra args are passed through; `--dry-run` prints the command.
+
+It takes the issue first (like `bdt issue take`): before the agent starts it comments `Taken by <you>`
+on the issue, naming the session it is about to start -- for `claude` a `--session-id` is generated and
+passed, so the comment says `claude --resume <id>`; the prompt tells the agent not to take it again. For
+another `--agent` the comment just says `(via <agent>)`. `--dry-run` posts nothing. Like `issue take`, it doesn't comment again when the newest comment already is a claim.
+
+## `bdt issue take`
+
+```bash
+bdt issue take [NUMBER] [--target-branch dev]
+```
+
+Claims an issue (GitHub) or work item (Azure DevOps): comments `Taken by <you>` on it, followed by the
+running coding agent's session (the same `<Agent> Session: <id>` note every bdt comment gets: a
+claude.ai link under a bridged Claude session, otherwise the bare session id; nothing outside an
+agent), so others can see who is on it. `<you>` is the GitHub login
+`gh` is authenticated as, else the git `user.name`. Without `NUMBER` it takes the issue the current
+branch's PR closes (`Fixes #N`, or an issue/work-item URL in the PR body); it refuses to guess if
+that is none or several. If the issue's newest comment already is a "Taken by ..." claim (by anyone) it
+says so and posts nothing, so it's safe to run repeatedly -- including before `bdt issue do`.
 
 ## `bdt worktree`
 
