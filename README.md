@@ -5,7 +5,8 @@ one-shot PR summary (`bdt pr info`), PR creation, claiming an issue (`bdt issue 
 merged-worktree/orphaned-test-DB cleanup), a commit-and-push helper with
 pre-flight checks, Azure log queries, and static checks (`bdt lint`) for
 postgres/psycopg SQL rules, pydantic-model placement, hand-wired HTTP access in
-TypeScript, and baseline tooling.
+TypeScript and baseline tooling, plus `bdt dead-code` for `.sql` files nothing loads and
+backend routes nothing calls.
 `bdt pr *` and `bdt issue *` auto-detect whether the current repo's `origin`
 remote is Azure DevOps or GitHub and use `az`/`gh` accordingly.
 Consolidates near-duplicate scripts that used to be copy-pasted across
@@ -559,8 +560,9 @@ bdt logs fetch --env prod --out logs/ --keep-archive
 ## `bdt lint`
 
 Static checks (implementing [bmsuisse/skills#52](https://github.com/bmsuisse/skills/issues/52))
-for the `postgres-best-practices` skill's SQL rules, pydantic-model placement, and
-that the repo has its baseline tooling actually set up:
+for the `postgres-best-practices` skill's SQL rules, pydantic-model placement, hand-wired HTTP in
+TypeScript, and that the repo has its baseline tooling actually set up. Unused `.sql` files and
+dead backend routes are a separate command, [`bdt dead-code`](#bdt-dead-code):
 
 ```bash
 bdt lint                       # scan the current directory, recursively
@@ -648,6 +650,112 @@ Requires [sqlglot](https://pypi.org/project/sqlglot/) for the SQL checks —
 already pulled in transitively via `pgdevkit[db]`, but declared explicitly as
 the `bmsdna-devtools[lint]` extra; a clear install hint is printed (not a raw
 `ImportError`) if it's ever missing.
+
+## `bdt dead-code`
+
+Dead code a linter can't see, in one command and one config table, `[tool.bdt.dead_code]`:
+
+- **`sql`** -- `.sql` files that no Python code loads;
+- **`routes`** -- backend (FastAPI) routes that neither non-generated frontend code nor a `url_for(...)`
+  call uses.
+
+Each check runs when it is configured (`sql_roots`, resp. `[[tool.bdt.dead_code.apps]]`); `--only sql` /
+`--only routes` (repeatable) narrows a run, e.g. to keep the slow one -- `routes` imports the app, so run
+`bdt` with the repo's own interpreter (`uv run bdt dead-code`) -- out of a prek hook. Exit code is 0 (clean), 1
+(findings) or 2 (setup problem: invalid config or pyproject.toml, nothing configured, the app doesn't import
+within 5 minutes -- the error shows the import's output).
+
+### `sql` -- unreferenced `.sql` files
+
+A `.sql` file that no Python code loads is a query left behind after its caller was deleted or renamed. Name the
+folders that hold *loadable* SQL (not schema/migration scripts, which are applied rather than loaded) and every
+file under them that nothing references is reported (`sql-file-unreferenced`):
+
+```toml
+[tool.bdt.dead_code]
+sql_roots = ["backend/db/queries"]            # repo-relative; a typo'd root is itself reported
+sql_loader_functions = ["load_sql"]           # default; add your own loader's name if it differs
+sql_unreferenced_ignore = ["backend/db/queries/legacy/*.sql"]   # globs for files reached some other way
+# exclude_dirs = ["generated"]                # extra directory names to skip, beyond .venv/node_modules/etc.
+```
+
+A file counts as referenced by a literal `load_sql("topic", "name")` call (positional or `topic=`/`name=`;
+topic = the file's parent directory, name = its stem); by a `load_sql("topic", some_var)` call in a Python file that
+also contains the stem as a string literal (so `name = "a" if x else "b"` and lookup tables work);
+by a string literal that is a path whose trailing segments equal the file's repo-relative path
+(`get_sql_with_prm_list("backend/api/sql/x.sql")`); or by its bare filename as a literal in a
+Python file under the SQL folder's parent (`_SQL_DIR / "x.sql"`). It never executes code, so a
+file reached through a fully computed path is a false positive -- list it in
+`sql_unreferenced_ignore`. References are searched across the whole repo, since the caller can live anywhere.
+A Python file that can't be parsed (including syntax newer than the interpreter running `bdt`) is itself
+reported as `sql-check-python-unparseable`, because references in it are unknown.
+
+### `routes` -- backend routes nobody uses
+
+Backend (FastAPI) operations that **no non-generated frontend code calls and no backend code references by
+name** -- dead routes that still have to be maintained, secured and tested.
+
+```toml
+[[tool.bdt.dead_code.apps]]
+name = "akeneo"                                   # label used in the report
+app = "main_app:app"                              # module:attribute, imported in a subprocess ...
+app_dir = "akeneo_editor/backend"                 # ... with this directory (repo-relative) as cwd/import root
+# openapi = "frontend/openapi.json"               # alternative to `app`: a committed OpenAPI document
+frontends = ["akeneo_editor/frontend/src"]        # repo-relative dirs or globs, e.g. "mdmapp/app/react_apps/*/src"
+exclude_prefixes = ["/external_api"]              # routes meant for other callers (external API, webhooks)
+exclude_tags = ["agent"]                          # e.g. LLM/MCP tools
+exclude_paths = ["/auth/*", "GET /health"]        # fnmatch globs on "/path" or "METHOD /path"
+baseline = "dead-code-baseline.txt"               # optional ratchet, see below
+# env = { SOME_REQUIRED_SETTING = "x" }           # extra environment for importing the app
+# exclude_frontend_globs = ["src/legacy/*"]       # repo-relative frontend files to ignore as callers
+# url_for_functions = ["url_for", "url_path_for"] # default; functions whose first argument names a route
+```
+
+Pair each backend app with *its own* frontends (one `[[...apps]]` entry per backend) -- a route
+called only by another backend's frontend is still unused here.
+
+The backend inventory is `app.openapi()` of the app **and of every mounted sub-app** (with the
+mount prefix), so it needs no committed schema and can't go stale; routes with
+`include_in_schema=False` are not considered.
+
+**Generated code never counts as a caller.** A generated client lists *every* route, so it is
+skipped (`generated/`, `*.gen.*`, `*.generated.*`, `api-types*`, `openapi_schema*`, `*.d.ts`), as are
+tests and e2e specs (`*.test.*`, `*.spec.*`, `__tests__/`, `tests/`, `e2e/`) -- for TypeScript,
+JavaScript and Vue files alike. Comments are blanked before scanning. An operation is called when
+non-generated code of one of the app's frontends has (strongest first):
+
+- **sdk** -- a reference to a hey-api SDK function (read from the `sdk.gen.ts` under that same frontend
+  directory, matched on method *and* url) or one of its react-query helpers (`fooOptions`, `fooMutation`,
+  `fooQueryKey`, ...). Each `frontends` directory is scoped to its own SDK, so two apps that both generate
+  `listItems` aren't confused;
+- **fetch** -- an openapi-fetch call `.GET("/path"` naming this method and path (a `DELETE` of the
+  same path with no call of its own is still reported);
+- **url** -- a string/template literal equal to the path template (any method), e.g. a hand-written
+  `fetch(`/api/x/${id}`)`, `"/api/x/" + id` or an `<a href=...>` -- nested templates like
+  `${qs ? `?a=${b}` : ""}` are handled;
+- **url-sfx** -- a literal (two or more segments) that is a suffix of the route (a client with a base URL,
+  or a `${base}` prefix).
+
+**Routes the backend refers to by name are used, too.** Auth redirects and OAuth callbacks have no frontend caller
+by nature -- the backend builds their URL: `request.url_for("auth_callback")`, `app.url_path_for("login")`,
+`{{ url_for('login') }}` in a template. A string literal passed (first argument, or `name=`) to one of
+`url_for_functions` in a non-test Python file or Jinja-style template (`.html`, `.jinja`, `.jinja2`, `.j2`) under the app's `app_dir`
+marks the route of that name as used (`"mount:name"` for a mounted sub-app counts as `name`). The route name is recovered from
+its `operationId`: FastAPI's default `name + path + method` form, a bare `name`, or `<prefix>-<name>` from a custom
+`generate_unique_id`; an OpenAPI file without operation ids can't be matched this way. It is a text match, so a call
+in a comment counts too.
+
+It is a heuristic: no type information, a URL literal matches every method of that path (and so does an
+SPA `<Link to="/users/${id}">`), and URLs assembled from non-literal pieces (including a non-literal route
+name in `url_for`) or handed to the client by the server are invisible -- exclude those routes explicitly. An app
+that exposes no documented operations (e.g. one wrapped in middleware that hides `openapi()`) is a setup error,
+not a clean pass. Run against our repos, the usual legitimate exclusions are health checks, the SPA
+catch-all, service-to-service endpoints and an external API folder.
+
+**Adopting it without fixing everything first:** set `baseline`, run
+`uv run bdt dead-code --update-baseline` once (it concerns the `routes` check only), and commit the file. From
+then on only *new* unused routes fail -- and a baseline line whose route has since been deleted, excluded or
+used is reported as `api-route-baseline-stale`, so the list can only shrink.
 
 ## `bdt find-injection`
 
