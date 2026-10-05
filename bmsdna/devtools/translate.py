@@ -9,6 +9,7 @@ Configuration lives in the consuming repo's pyproject.toml::
     [tool.bdt.translate]
     file = "translations.toml"               # default
     languages = ["en", "de", "fr", "it"]     # default
+    required_languages = ["en"]              # default; `bdt translate add` fails without these
     output = ["frontend/src/assets/i18n"]    # dir(s) that receive <lng>.json
     nested = false                           # true: split keys on "." into nested JSON objects
     scan = ["frontend/src"]                  # t("KEY") usages in .ts/.tsx/.js/.jsx/.vue
@@ -49,6 +50,7 @@ class Config:
     root: Path
     file: Path
     languages: list[str] = field(default_factory=lambda: ["en", "de", "fr", "it"])
+    required_languages: list[str] = field(default_factory=lambda: ["en"])
     output: list[Path] = field(default_factory=list)
     nested: bool = False
     scan: list[Path] = field(default_factory=list)
@@ -68,6 +70,7 @@ def load_config(start: Path | None = None) -> Config:
         root=root,
         file=root / table.get("file", "translations.toml"),
         languages=list(table.get("languages", ["en", "de", "fr", "it"])),
+        required_languages=list(table.get("required_languages", ["en"])),
         output=paths("output"),
         nested=bool(table.get("nested", False)),
         scan=paths("scan"),
@@ -275,8 +278,9 @@ def add_key(cfg: Config, key: str, values: dict[str, str], *, force: bool = Fals
     unknown = sorted(set(values) - set(cfg.languages))
     if unknown:
         raise ValueError(f"Unknown language(s) {', '.join(unknown)}; configured: {', '.join(cfg.languages)}")
-    if not values.get("en", "").strip():
-        raise ValueError("An English translation is required, e.g. en=Add de=Hinzufügen")
+    missing = [lng for lng in cfg.required_languages if not values.get(lng, "").strip()]
+    if missing:
+        raise ValueError(f"Missing required translation(s): {', '.join(missing)} (e.g. en=Add de=Hinzufügen)")
     transls = load_translations(cfg.file)
     if key in transls and not force:
         raise ValueError(f"Key {key!r} already exists in {cfg.file.name} (use --force to overwrite)")

@@ -156,3 +156,10 @@ def test_add_key_cli(tmp_path, monkeypatch):
     assert runner.invoke(app, ["translate", "add", "K", "oops"]).exit_code == 2
     assert runner.invoke(app, ["translate", "add", "K", "de=nur deutsch"]).exit_code == 1  # en is required
     assert runner.invoke(app, ["translate", "add", "K", "en="]).exit_code == 1
+
+
+def test_add_required_languages_configurable(tmp_path, monkeypatch):
+    make_repo(tmp_path, "", PYPROJECT + 'required_languages = ["en", "de"]\n')
+    monkeypatch.chdir(tmp_path)
+    assert runner.invoke(app, ["translate", "add", "K", "en=x"]).exit_code == 1  # de now required too
+    assert runner.invoke(app, ["translate", "add", "K", "en=x", "de=y"]).exit_code == 0
