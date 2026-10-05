@@ -280,20 +280,26 @@ def _injection_finding(text: str, path: Path, lineno: int, rule: str, how: str) 
     return [Finding(path, lineno, rule, f"SQL built with {how} -- injection risk. {fix}")]
 
 
-def _literal_findings(text: str, path: Path, lineno: int) -> list[Finding]:
-    parsed = parse_sql_text(text)
-    if parsed is None:
-        return []
+def _complexity_findings(parsed: "exp.Expression", text: str, path: Path, lineno: int) -> list[Finding]:
     findings: list[Finding] = []
-
     line_count = len([line for line in text.splitlines() if line.strip()])
-    is_complex = (
-        line_count > 4
-        or parsed.find(exp.Join) is not None
+    has_complex_construct = (
+        parsed.find(exp.Join) is not None
         or parsed.find(exp.With) is not None
         or parsed.find(exp.Subquery) is not None
         or parsed.find(exp.AggFunc) is not None
     )
+    if isinstance(parsed, (exp.Insert, exp.Update, exp.Delete)):
+        # A simple write may span many lines (long column lists) -- only its shape counts:
+        # INSERT ... SELECT, UPDATE ... FROM and DELETE ... USING are query logic, so they're complex.
+        is_complex = (
+            has_complex_construct
+            or parsed.find(exp.Select) is not None
+            or parsed.find(exp.From) is not None
+            or bool(parsed.args.get("using"))
+        )
+    else:
+        is_complex = line_count > 4 or has_complex_construct
     if is_complex:
         findings.append(
             Finding(
@@ -304,6 +310,14 @@ def _literal_findings(text: str, path: Path, lineno: int) -> list[Finding]:
                 "-- move it to its own .sql file and load it with load_sql()/SqlLoader.",
             )
         )
+    return findings
+
+
+def _literal_findings(text: str, path: Path, lineno: int) -> list[Finding]:
+    parsed = parse_sql_text(text)
+    if parsed is None:
+        return []
+    findings = _complexity_findings(parsed, text, path, lineno)
 
     if _POSITIONAL_PARAM_RE.search(text):
         findings.append(
@@ -430,6 +444,12 @@ def _check_query_arg(
     return findings
 
 
+def _is_sql_named(name: str) -> bool:
+    """`FOO_SQL` / `foo_sql` (or a bare `sql`/`SQL`): a variable whose name says it holds SQL text."""
+    lowered = name.lower()
+    return lowered == "sql" or lowered.endswith("_sql")
+
+
 def _execute_query_arg(call: ast.Call) -> ast.expr | None:
     if not (isinstance(call.func, ast.Attribute) and call.func.attr in ("execute", "executemany")):
         return None
@@ -470,12 +490,31 @@ class _ExecuteCallVisitor(ast.NodeVisitor):
     def visit_Assign(self, node: ast.Assign) -> None:
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             self._scopes[-1].setdefault(node.targets[0].id, []).append(node.value)
+            self._check_sql_named_literal(node.targets[0].id, node.value, node.lineno)
         self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if isinstance(node.target, ast.Name) and node.value is not None:
+            self._scopes[-1].setdefault(node.target.id, []).append(node.value)
+            self._check_sql_named_literal(node.target.id, node.value, node.lineno)
+        self.generic_visit(node)
+
+    def _check_sql_named_literal(self, name: str, value: ast.expr, lineno: int) -> None:
+        """A `*_sql`/`*_SQL` variable bound to a literal is inline SQL even if it never reaches an
+        `.execute()` call in this file (e.g. it's passed to a helper) -- apply the complexity rule."""
+        if not (_is_sql_named(name) and isinstance(value, ast.Constant) and isinstance(value.value, str)):
+            return
+        parsed = parse_sql_text(value.value)
+        if parsed is not None:
+            self.findings.extend(_complexity_findings(parsed, value.value, self.path, lineno))
 
     def visit_Call(self, node: ast.Call) -> None:
         query_arg = _execute_query_arg(node)
         if query_arg is not None:
-            self.findings.extend(_check_query_arg(query_arg, self._lookup, self.path, node.lineno, self.trust, self.review))
+            found = _check_query_arg(query_arg, self._lookup, self.path, node.lineno, self.trust, self.review)
+            if isinstance(query_arg, ast.Name) and _is_sql_named(query_arg.id):
+                found = [f for f in found if f.rule != "sql-inline-too-complex"]  # already reported at the assignment
+            self.findings.extend(found)
         self.generic_visit(node)
 
 

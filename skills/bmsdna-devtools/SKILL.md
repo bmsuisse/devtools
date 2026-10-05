@@ -4,10 +4,12 @@ description: >
   Use the `bdt` CLI (from the bmsdna-devtools package) instead of ad hoc git/az/gh
   commands or repo-local scripts for: checking PR build/check status, creating
   a PR, creating a git worktree, committing and pushing files (with pre-flight
-  checks), and querying Azure logs. `bdt pr *` works against both Azure DevOps
+  checks), claiming an issue / work item (`bdt issue take`), a one-shot PR summary
+  (`bdt pr info`: link, build state, closed issues), and querying Azure logs. `bdt pr *` works against both Azure DevOps
   and GitHub — it auto-detects which one from the `origin` remote. Trigger
   whenever the user asks to check a build/PR status, create a PR, make a
-  worktree, commit changes, or fetch/tail application logs in a repo that has
+  worktree, commit changes, fetch/tail application logs, or start working on /
+  take an issue ("work on issue #N"), in a repo that has
   bmsdna-devtools installed (check for `bdt` on PATH, or `bmsdna-devtools` in
   pyproject.toml, before assuming it applies).
 ---
@@ -32,7 +34,7 @@ CLI to install rather than trying to work around it.
 ## Checking PR build/check status
 
 ```bash
-bdt pr status [--target-branch main] [--wait]
+bdt pr status [--target-branch dev] [--wait]
 ```
 
 Finds the PR opened from the current branch and prints build/check status,
@@ -57,17 +59,40 @@ available); GitHub uses whatever `gh auth login` session is active.
 ## Creating a PR
 
 ```bash
-bdt pr create --target main    # or --target test
+bdt pr create --target dev    # or --target main / test
 ```
 
 Uses the current branch as source. On Azure DevOps this wraps `az repos pr
 create`; on GitHub, `gh pr create --fill` (autofills title/body from commit
 info, so it never blocks waiting on an interactive prompt). Extra args pass
 straight through either way, e.g.
-`bdt pr create --target main -- --title "..." --description "..."`.
+`bdt pr create --target dev -- --title "..." --description "..."`.
 
 After creating a PR, use `bdt pr status` (see above) to check whether the
 CI build passes.
+
+## Taking an issue
+
+```bash
+bdt issue take [NUMBER]
+```
+
+When you start working on an issue / work item, run this first: it comments `Taken by <user>` plus
+your session (the claude.ai link under a bridged Claude session, otherwise the bare session id; nothing
+when no agent is detected) so others can see it's being worked on. No parameters needed
+-- the session is detected, and without `NUMBER` the issue is the one the current branch's PR closes
+(so open the PR with `Fixes #N` first, or pass the number). It does nothing if the issue's newest comment already is a "Taken by" claim, so repeating it is harmless. (`bdt issue do N` already does this for you before it starts the agent -- don't repeat it there.) Don't hand-write a
+session-link comment instead.
+
+## PR summary
+
+```bash
+bdt pr info [--json]
+```
+
+PR link, state, aggregate build state and the issue(s) it closes, in one call -- cheaper than
+`bdt pr status` when you only need to know where things stand. Exits 1 if the branch has no PR.
+(`bdt pr status --wait` is still what to use to wait for CI.)
 
 ## Creating a worktree
 
