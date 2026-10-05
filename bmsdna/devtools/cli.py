@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import sys
+import tomllib
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
@@ -14,7 +15,7 @@ import requests
 import typer
 from pgdevkit.testdb import constants as pgdevkit_constants
 
-from . import ado_issue, app_service_logs, commit as commit_mod
+from . import ado_issue, api_usage as api_usage_mod, app_service_logs, commit as commit_mod, dead_code as dead_code_mod
 from . import env_config
 from . import find_repo as find_repo_mod
 from . import issue_do as issue_do_mod
@@ -24,8 +25,10 @@ from . import lint as lint_mod
 from . import logs as logs_mod
 from . import pr_build, pr_info as pr_info_mod, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
+from .bdt_config import find_pyproject, load_bdt_table
 from .cli_tools import CLI_TIMEOUT_SECS, detect_agent_session, require_az, require_gh
 from .gitrepo import AdoRemote, GitHubRemote, UnknownRemoteError, current_branch, current_remote, head_commit_subject
+from .lint_findings import render_findings
 
 # Non-ASCII output (checkmarks, en-dashes in ADO project names, etc.) needs a
 # UTF-8 stream — the default Windows console codepage isn't UTF-8, and would
@@ -1060,10 +1063,50 @@ def lint(
     """Static checks (bmsuisse/skills#52): postgres/psycopg SQL rules on every `.execute()` call
     (must use load_sql()/a .sql file, a t-string, or psycopg.sql for anything beyond a trivial
     query; never an f-string/concatenation/`%`-formatting), pydantic-model placement under api/
-    directories, and that the repo declares/configures ty, ruff, pytest and prek.
+    directories, hand-wired HTTP in TypeScript, and that the repo declares/configures ty, ruff, pytest and prek.
+    For unused .sql files and dead backend routes see `dead-code`.
     """
     result = lint_mod.run(paths or [], skip_tooling_check=no_tooling_check)
     raise typer.Exit(lint_mod.print_report(result))
+
+
+@app.command("dead-code")
+def dead_code(
+    only: list[str] = typer.Option(
+        None,
+        "--only",
+        help="Run just this check (repeatable): `sql` (unreferenced .sql files) or `routes` (backend routes nothing "
+        "calls; imports the app, so it is the slow one). Default: every check that is configured.",
+    ),
+    update_baseline: bool = typer.Option(
+        False,
+        "--update-baseline",
+        help="Routes only: rewrite each app's `baseline` file with the routes currently uncalled (and report nothing). "
+        "Use once to adopt the check, then only to remove lines.",
+    ),
+) -> None:
+    """Dead code that is invisible to a linter: `.sql` files no Python code loads (`sql_roots`) and backend
+    (FastAPI) routes that neither non-generated frontend code nor a `url_for(...)` call references (the `apps`
+    array of tables). Both are configured under tool.bdt.dead_code in pyproject.toml; generated API-client code and
+    tests never count as callers. Exit 0 clean, 1 findings, 2 setup error.
+    """
+    root = Path.cwd()
+    pyproject = find_pyproject(root)
+    repo_root = pyproject.parent if pyproject else root
+    try:
+        findings = dead_code_mod.run(load_bdt_table("dead_code", root), repo_root=repo_root, only=only or [], update_baseline=update_baseline)
+    except (api_usage_mod.ApiUsageError, tomllib.TOMLDecodeError) as exc:
+        typer.echo(f"bdt dead-code: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    if update_baseline:
+        typer.echo("bdt dead-code: baseline(s) updated")
+        raise typer.Exit(0)
+    if not findings:
+        typer.echo("bdt dead-code: no dead code found")
+        raise typer.Exit(0)
+    typer.echo(render_findings(findings))
+    typer.echo(f"\n{len(findings)} issue(s) found.")
+    raise typer.Exit(1)
 
 
 @app.command("find-injection")
