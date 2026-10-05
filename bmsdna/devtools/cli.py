@@ -23,6 +23,7 @@ from . import gh_issue, gh_pr
 from . import find_injection as find_injection_mod
 from . import lint as lint_mod
 from . import logs as logs_mod
+from . import translate as translate_mod
 from . import pr_build, pr_info as pr_info_mod, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
 from .bdt_config import find_pyproject, load_bdt_table
@@ -69,6 +70,9 @@ def main(
 
 pr_app = typer.Typer(name="pr", help="Pull request commands (Azure DevOps or GitHub, auto-detected from the git remote)")
 app.add_typer(pr_app, name="pr")
+
+translate_app = typer.Typer(name="translate", help="Generate <lng>.json files from translations.toml")
+app.add_typer(translate_app, name="translate")
 
 issue_app = typer.Typer(name="issue", help="Issue / work item commands (Azure DevOps or GitHub, auto-detected from the git remote)")
 app.add_typer(issue_app, name="issue")
@@ -1154,6 +1158,83 @@ def find_injection_cmd(
     """
     result = find_injection_mod.run(paths or [], diff=diff, base=base, exclude=exclude or [], respect_gitignore=not no_gitignore)
     raise typer.Exit(find_injection_mod.print_report(result, strict=strict))
+
+
+@translate_app.callback(invoke_without_command=True)
+def translate_cmd(
+    ctx: typer.Context,
+    check: bool = typer.Option(
+        False, "--check", help="Don't write anything; exit 1 if code uses keys missing from translations.toml or generated files are stale"
+    ),
+    import_json: bool = typer.Option(
+        False, "--import", help="One-time migration: merge existing <lng>.json files into translations.toml first"
+    ),
+) -> None:
+    """Generate <lng>.json files from the single translations.toml (configured in `[tool.bdt.translate]`).
+
+    Keys used in code (`t("KEY")`, `"KEY" | tr`) but missing from translations.toml are appended
+    with an English placeholder and the run fails until real translations are filled in. Generated
+    JSON files should be git-ignored.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+    cfg = translate_mod.load_config()
+    if not cfg.output and not check:
+        typer.echo("No `output` configured under [tool.bdt.translate] in pyproject.toml", err=True)
+        raise typer.Exit(2)
+    try:
+        res = translate_mod.run(cfg, check=check, import_json=import_json)
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
+    if res.imported:
+        typer.echo(f"Imported {res.imported} value(s) from existing JSON files")
+    for key in res.new_keys:
+        typer.echo(f"{'missing' if check else 'added'}: {key}", err=True)
+    for key, langs in res.incomplete.items():
+        typer.echo(f"warning: {key} has no {', '.join(langs)} (falls back to de/en)", err=True)
+    for p in res.stale:
+        typer.echo(f"stale: {p} (run `bdt translate`)", err=True)
+    if res.stale:
+        raise typer.Exit(1)
+    if res.new_keys:
+        typer.echo(
+            "Keys used in code are missing from translations.toml."
+            if check
+            else "New keys found in code. Add their translations to translations.toml and rerun.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    if not check:
+        typer.echo(f"Wrote {len(res.written)} file(s)")
+
+
+@translate_app.command("add")
+def translate_add(
+    key: str = typer.Argument(..., help="Translation key, e.g. ADD_BUTTON"),
+    texts: list[str] = typer.Argument(..., metavar="LANG=TEXT...", help="Translations, e.g. en=Add de=Hinzufügen fr=Ajouter it=Aggiungi"),
+    force: bool = typer.Option(False, "--force", help="Overwrite the key if it already exists"),
+) -> None:
+    """Add KEY with its translations to translations.toml and regenerate all <lng>.json files."""
+    values: dict[str, str] = {}
+    for t in texts:
+        lng, sep, text = t.partition("=")
+        if not sep or not lng:
+            typer.echo(f"Expected LANG=TEXT, got {t!r}", err=True)
+            raise typer.Exit(2)
+        values[lng] = text
+    cfg = translate_mod.load_config()
+    try:
+        res = translate_mod.add_key(cfg, key, values, force=force)
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
+    missing = [lng for lng in cfg.languages if lng not in values]
+    if missing:
+        typer.echo(f"warning: no {', '.join(missing)} translation given (falls back to de/en)", err=True)
+    for k in res.new_keys:
+        typer.echo(f"added placeholder for key used in code: {k}", err=True)
+    typer.echo(f"Added {key}; wrote {len(res.written)} file(s)")
 
 
 @app.command("find-repo")

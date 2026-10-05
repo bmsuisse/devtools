@@ -329,6 +329,43 @@ branch's PR closes (`Fixes #N`, or an issue/work-item URL in the PR body); it re
 that is none or several. If the issue's newest comment already is a "Taken by ..." claim (by anyone) it
 says so and posts nothing, so it's safe to run repeatedly -- including before `bdt issue do`.
 
+## `bdt translate`
+
+One `translations.toml` is the source of truth for all UI translations; `bdt translate` generates the
+per-language `de.json` / `en.json` / ... files from it. The generated files are build artifacts --
+add them to `.gitignore` and run `bdt translate` in your `just install` / build / CI steps.
+
+```toml
+# translations.toml (keys with dots must be quoted when `nested = true`)
+[ADD_BUTTON]
+en = "Add"
+de = "Hinzufügen"
+fr = "Ajouter"
+it = "Aggiungi"
+server_only = true   # optional: never emitted into the JSON files (backend-only text)
+```
+
+```toml
+# pyproject.toml
+[tool.bdt.translate]
+file = "translations.toml"             # default
+languages = ["en", "de", "fr", "it"]   # default
+required_languages = ["en"]            # default; `bdt translate add` fails without these
+output = ["frontend/src/assets/i18n"]  # directories receiving <lng>.json
+nested = false                         # true: "a.b.c" keys become nested JSON objects
+scan = ["frontend/src"]                # t("KEY") / $t("KEY") in .ts/.tsx/.js/.jsx/.vue
+scan_jinja = ["backend/print"]         # "KEY" | tr in .jinja2/.j2/.html
+```
+
+- A missing language falls back to `de`, then `en`, then the key itself.
+- Keys used in code but absent from `translations.toml` are appended with an English placeholder and
+  the command exits 1 without generating anything -- fill in the translations and rerun.
+- `bdt translate add KEY en=Add de=Hinzufügen fr=Ajouter it=Aggiungi` adds a key to `translations.toml` and
+  regenerates all JSON files in one go (the `required_languages` are mandatory; `--force` overwrites an existing key).
+- `bdt translate --check` writes nothing and exits 1 if code uses keys missing from the toml (for CI).
+- `bdt translate --import` merges existing `<lng>.json` files into `translations.toml` once, to migrate
+  a repo that so far hand-maintained its JSON files; then `git rm --cached` them and ignore them.
+
 ## `bdt worktree`
 
 ```bash
