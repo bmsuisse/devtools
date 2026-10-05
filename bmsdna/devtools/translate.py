@@ -275,8 +275,8 @@ def add_key(cfg: Config, key: str, values: dict[str, str], *, force: bool = Fals
     unknown = sorted(set(values) - set(cfg.languages))
     if unknown:
         raise ValueError(f"Unknown language(s) {', '.join(unknown)}; configured: {', '.join(cfg.languages)}")
-    if not values:
-        raise ValueError("Give at least one translation, e.g. en=Add de=Hinzufügen")
+    if not values.get("en", "").strip():
+        raise ValueError("An English translation is required, e.g. en=Add de=Hinzufügen")
     transls = load_translations(cfg.file)
     if key in transls and not force:
         raise ValueError(f"Key {key!r} already exists in {cfg.file.name} (use --force to overwrite)")

@@ -360,7 +360,7 @@ scan_jinja = ["backend/print"]         # "KEY" | tr in .jinja2/.j2/.html
 - Keys used in code but absent from `translations.toml` are appended with an English placeholder and
   the command exits 1 without generating anything -- fill in the translations and rerun.
 - `bdt translate add KEY en=Add de=Hinzufügen fr=Ajouter it=Aggiungi` adds a key to `translations.toml` and
-  regenerates all JSON files in one go (`--force` overwrites an existing key).
+  regenerates all JSON files in one go (`en` is required; `--force` overwrites an existing key).
 - `bdt translate --check` writes nothing and exits 1 if code uses keys missing from the toml (for CI).
 - `bdt translate --import` merges existing `<lng>.json` files into `translations.toml` once, to migrate
   a repo that so far hand-maintained its JSON files; then `git rm --cached` them and ignore them.
