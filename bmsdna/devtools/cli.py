@@ -20,6 +20,7 @@ from . import gh_issue, gh_pr
 from . import find_injection as find_injection_mod
 from . import lint as lint_mod
 from . import logs as logs_mod
+from . import translate as translate_mod
 from . import pr_build, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
 from .cli_tools import detect_agent_session, require_az, require_gh
@@ -974,6 +975,48 @@ def find_injection_cmd(
     """
     result = find_injection_mod.run(paths or [], diff=diff, base=base, exclude=exclude or [], respect_gitignore=not no_gitignore)
     raise typer.Exit(find_injection_mod.print_report(result, strict=strict))
+
+
+@app.command("translate")
+def translate_cmd(
+    check: bool = typer.Option(
+        False, "--check", help="Don't write anything; exit 1 if code uses keys missing from translations.toml"
+    ),
+    import_json: bool = typer.Option(
+        False, "--import", help="One-time migration: merge existing <lng>.json files into translations.toml first"
+    ),
+) -> None:
+    """Generate <lng>.json files from the single translations.toml (configured in `[tool.bdt.translate]`).
+
+    Keys used in code (`t("KEY")`, `"KEY" | tr`) but missing from translations.toml are appended
+    with an English placeholder and the run fails until real translations are filled in. Generated
+    JSON files should be git-ignored.
+    """
+    cfg = translate_mod.load_config()
+    if not cfg.output and not check:
+        typer.echo("No `output` configured under [tool.bdt.translate] in pyproject.toml", err=True)
+        raise typer.Exit(2)
+    try:
+        res = translate_mod.run(cfg, check=check, import_json=import_json)
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
+    if res.imported:
+        typer.echo(f"Imported {res.imported} value(s) from existing JSON files")
+    for key in res.new_keys:
+        typer.echo(f"{'missing' if check else 'added'}: {key}", err=True)
+    for key, langs in res.incomplete.items():
+        typer.echo(f"warning: {key} has no {', '.join(langs)} (falls back to de/en)", err=True)
+    if res.new_keys:
+        typer.echo(
+            "Keys used in code are missing from translations.toml."
+            if check
+            else "New keys found in code. Add their translations to translations.toml and rerun.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    if not check:
+        typer.echo(f"Wrote {len(res.written)} file(s)")
 
 
 @app.command("find-repo")

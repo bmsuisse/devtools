@@ -16,6 +16,7 @@ readme = "README.md"
 requires-python = ">=3.14"  # pgdevkit>=0.7.1 requires 3.14; was >=3.11 before adding it as a dependency
 dependencies = [
     "requests>=2.32.0",
+    "tomli-w>=1.0.0",
     "typer>=0.26.7",
     "rich>=13.0.0",
     # [db] extra: pgdevkit.testdb unconditionally imports pgdevkit.db.complex_types
