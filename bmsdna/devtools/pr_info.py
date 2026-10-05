@@ -70,6 +70,14 @@ def build_state(checks: list[dict]) -> str:
     return BUILD_PASSING
 
 
+def _is_this_repo(repo: dict, remote: GitHubRemote) -> bool:
+    """Is a `closingIssuesReferences[].repository` this repo -- owner and name (an `otherorg/api` issue isn't `myorg/api`'s)?"""
+    owner = (repo.get("owner") or {}).get("login", remote.owner)
+    return (
+        owner.casefold() == remote.owner.casefold() and repo.get("name", remote.repo).casefold() == remote.repo.casefold()
+    )
+
+
 def github_info(pr: dict, remote: GitHubRemote) -> PrInfo:
     """`pr` is `gh pr view --json` output with `gh_pr.PR_INFO_FIELDS`. Only issues of this repo are listed."""
     # GitHub's own answer to "which issues does merging this close" (closing keywords in the body,
@@ -77,7 +85,7 @@ def github_info(pr: dict, remote: GitHubRemote) -> PrInfo:
     issues = [
         IssueRef(i["number"], i["url"])
         for i in pr.get("closingIssuesReferences") or []
-        if i.get("repository", {}).get("name", remote.repo).casefold() == remote.repo.casefold()
+        if _is_this_repo(i.get("repository") or {}, remote)
     ]
     return PrInfo(
         number=pr["number"],

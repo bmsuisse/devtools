@@ -19,6 +19,7 @@ from bmsdna.devtools.pr_build import (
     deploy_build_hint,
     ensure_session_note,
     get_builds_for_branch,
+    get_pr,
     retry,
     retry_failed_build,
     run,
@@ -558,3 +559,22 @@ def test_run_skips_deploy_hint_when_pr_build_failed(monkeypatch, capsys) -> None
 
     assert hint_calls == []
     assert "should not print" not in capsys.readouterr().out
+
+
+def test_get_pr_without_target_does_not_filter_on_it() -> None:
+    seen = []
+
+    class Resp:
+        def raise_for_status(self): ...
+        def json(self):
+            return {"value": [{"pullRequestId": 1, "mergeStatus": "succeeded"}]}
+
+    class Sess:
+        def get(self, url, params, timeout):
+            seen.append(params)
+            return Resp()
+
+    assert get_pr(Sess(), REMOTE, "feat", None)["pullRequestId"] == 1
+    assert "searchCriteria.targetRefName" not in seen[0]
+    get_pr(Sess(), REMOTE, "feat", "main")
+    assert seen[1]["searchCriteria.targetRefName"] == "refs/heads/main"

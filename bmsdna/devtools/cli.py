@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import sys
+import tomllib
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
@@ -14,7 +15,7 @@ import requests
 import typer
 from pgdevkit.testdb import constants as pgdevkit_constants
 
-from . import ado_issue, app_service_logs, commit as commit_mod
+from . import ado_issue, api_usage as api_usage_mod, app_service_logs, commit as commit_mod, dead_code as dead_code_mod
 from . import env_config
 from . import find_repo as find_repo_mod
 from . import issue_do as issue_do_mod
@@ -25,8 +26,10 @@ from . import logs as logs_mod
 from . import translate as translate_mod
 from . import pr_build, pr_info as pr_info_mod, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
+from .bdt_config import find_pyproject, load_bdt_table
 from .cli_tools import CLI_TIMEOUT_SECS, detect_agent_session, require_az, require_gh
 from .gitrepo import AdoRemote, GitHubRemote, UnknownRemoteError, current_branch, current_remote, head_commit_subject
+from .lint_findings import render_findings
 
 # Non-ASCII output (checkmarks, en-dashes in ADO project names, etc.) needs a
 # UTF-8 stream — the default Windows console codepage isn't UTF-8, and would
@@ -110,7 +113,7 @@ _PG_USER_OPTION = typer.Option(
 )
 
 
-def _resolve_ado_pr(pat: str | None, remote: AdoRemote, target: str, pr_id: int | None = None) -> tuple[requests.Session, dict]:
+def _resolve_ado_pr(pat: str | None, remote: AdoRemote, target: str | None, pr_id: int | None = None) -> tuple[requests.Session, dict]:
     """Resolve the PR to act on -- by `pr_id` directly if given (no branch involved at all,
     so this works even without that PR's branch checked out locally), else by searching for
     the current branch's PR into `target`, as before.
@@ -124,7 +127,7 @@ def _resolve_ado_pr(pat: str | None, remote: AdoRemote, target: str, pr_id: int 
     return session, pr
 
 
-def _current_pr_info(pr_id: int | None, target_branch: str, pat: str | None) -> pr_info_mod.PrInfo:
+def _current_pr_info(pr_id: int | None, target_branch: str | None, pat: str | None) -> pr_info_mod.PrInfo:
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
         return pr_info_mod.github_info(gh_pr.get_pr(require_gh(), pr_id, fields=gh_pr.PR_INFO_FIELDS), remote)
@@ -410,7 +413,7 @@ def pr_publish(
 
 @pr_app.command("status")
 def pr_status(
-    target_branch: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target-branch", help="Target branch of the PR (Azure DevOps only — gh has no equivalent filter, it always resolves the PR for the current branch)"),
+    target_branch: str | None = typer.Option(None, "--target-branch", help="Only consider PRs into this target branch (Azure DevOps only; default: any target — gh has no such filter, it always resolves the PR for the current branch)"),
     wait: bool = typer.Option(False, "--wait", help="Poll until all pipelines/checks are completed; stops early and reports status if one needs manual approval"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
@@ -428,7 +431,7 @@ def pr_status(
 @pr_app.command("info")
 def pr_info(
     as_json: bool = typer.Option(False, "--json", help="Print machine-readable JSON (for status integrations that poll it)"),
-    target_branch: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target-branch", help="Target branch of the PR (Azure DevOps only)"),
+    target_branch: str | None = typer.Option(None, "--target-branch", help="Only consider PRs into this target branch (Azure DevOps only; default: any target)"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
 ) -> None:
@@ -739,6 +742,7 @@ def issue_do(
     number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
     agent: str = typer.Option("claude", "--agent", help="Agent executable to start (claude runs headless: `claude -p ... --name '<number>: <title>'`)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print the agent command instead of running it"),
+    force: bool = typer.Option(False, "--force", help="Start even if someone else already holds the claim (comments 'Taken by' anyway)"),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -761,14 +765,17 @@ def issue_do(
     if dry_run:
         typer.echo(f"(dry run: would comment 'Taken by ...' on #{number} first)", err=True)
     else:
-        _take(remote, number, issue_do_mod.take_message(_current_user(remote), agent, session_id), pat, agent_note=False)
+        user = _current_user(remote)
+        if not _take(remote, number, issue_do_mod.take_message(user, agent, session_id), pat, user=user, force=force, agent_note=False):
+            raise typer.Exit(1)
     issue_do_mod.run(number, title, body, agent=agent, extra=extra, dry_run=dry_run, session_id=session_id)
 
 
 @issue_app.command("take")
 def issue_take(
     number: int | None = typer.Argument(None, help="Issue number (GitHub) or work item ID (Azure DevOps). Default: the issue the current branch's PR closes"),
-    target_branch: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target-branch", help="Target branch of the PR (Azure DevOps only; only used to find the issue when no number is given)"),
+    target_branch: str | None = typer.Option(None, "--target-branch", help="Only consider PRs into this target branch (Azure DevOps only; default: any target; only used to find the issue when no number is given)"),
+    force: bool = typer.Option(False, "--force", help="Comment even if someone else already holds the claim"),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
 ) -> None:
     """Claim an issue / work item: comment "Taken by <you>" on it, with this coding agent's
@@ -784,18 +791,38 @@ def issue_take(
                 else "No issue number given, and the current branch's PR doesn't reference one (e.g. 'Fixes #N')"
             )
         number = issues[0].number
-    _take(remote, number, f"{issue_do_mod.TAKEN_PREFIX} {_current_user(remote)}", pat)
+    user = _current_user(remote)
+    if not _take(remote, number, f"{issue_do_mod.TAKEN_PREFIX} {user}", pat, user=user, force=force):
+        raise typer.Exit(1)
 
 
-def _take(remote: AdoRemote | GitHubRemote, number: int, message: str, pat: str | None, *, agent_note: bool = True) -> None:
+def _take(
+    remote: AdoRemote | GitHubRemote,
+    number: int,
+    message: str,
+    pat: str | None,
+    *,
+    user: str,
+    force: bool = False,
+    agent_note: bool = True,
+) -> bool:
     """Comment `message` ("Taken by ...") on the issue -- unless its newest comment already is such a
-    claim, so running this twice (or `issue do` after `issue take`) doesn't post it again."""
+    claim, so running this twice (or `issue do` after `issue take`) doesn't post it again. If that
+    claim is someone else's, nothing is posted without `force`. True if `user` holds the claim now."""
     kind = "issue" if isinstance(remote, GitHubRemote) else "work item"
-    if issue_do_mod.is_take_comment(_last_comment(remote, number, pat)):
-        typer.echo(f"{kind.capitalize()} #{number} is already taken (its last comment says so) -- not commenting again")
-        return
+    last = _last_comment(remote, number, pat)
+    if issue_do_mod.is_take_comment(last):
+        claimant = issue_do_mod.claimant(last)
+        if claimant.casefold() == user.casefold():
+            typer.echo(f"{kind.capitalize()} #{number} is already taken by you (its last comment says so) -- not commenting again")
+            return True
+        if not force:
+            typer.echo(f"{kind.capitalize()} #{number} is already taken by {claimant} -- pass --force to take it anyway", err=True)
+            return False
+        typer.echo(f"{kind.capitalize()} #{number} was taken by {claimant} -- taking it anyway (--force)", err=True)
     typer.echo(f"Taking {kind} #{number}")
     _comment_on_issue(remote, number, message, pat, agent_note=agent_note)
+    return True
 
 
 def _last_comment(remote: AdoRemote | GitHubRemote, number: int, pat: str | None) -> str | None:
@@ -1064,10 +1091,50 @@ def lint(
     """Static checks (bmsuisse/skills#52): postgres/psycopg SQL rules on every `.execute()` call
     (must use load_sql()/a .sql file, a t-string, or psycopg.sql for anything beyond a trivial
     query; never an f-string/concatenation/`%`-formatting), pydantic-model placement under api/
-    directories, and that the repo declares/configures ty, ruff, pytest and prek.
+    directories, hand-wired HTTP in TypeScript, and that the repo declares/configures ty, ruff, pytest and prek.
+    For unused .sql files and dead backend routes see `dead-code`.
     """
     result = lint_mod.run(paths or [], skip_tooling_check=no_tooling_check)
     raise typer.Exit(lint_mod.print_report(result))
+
+
+@app.command("dead-code")
+def dead_code(
+    only: list[str] = typer.Option(
+        None,
+        "--only",
+        help="Run just this check (repeatable): `sql` (unreferenced .sql files) or `routes` (backend routes nothing "
+        "calls; imports the app, so it is the slow one). Default: every check that is configured.",
+    ),
+    update_baseline: bool = typer.Option(
+        False,
+        "--update-baseline",
+        help="Routes only: rewrite each app's `baseline` file with the routes currently uncalled (and report nothing). "
+        "Use once to adopt the check, then only to remove lines.",
+    ),
+) -> None:
+    """Dead code that is invisible to a linter: `.sql` files no Python code loads (`sql_roots`) and backend
+    (FastAPI) routes that neither non-generated frontend code nor a `url_for(...)` call references (the `apps`
+    array of tables). Both are configured under tool.bdt.dead_code in pyproject.toml; generated API-client code and
+    tests never count as callers. Exit 0 clean, 1 findings, 2 setup error.
+    """
+    root = Path.cwd()
+    pyproject = find_pyproject(root)
+    repo_root = pyproject.parent if pyproject else root
+    try:
+        findings = dead_code_mod.run(load_bdt_table("dead_code", root), repo_root=repo_root, only=only or [], update_baseline=update_baseline)
+    except (api_usage_mod.ApiUsageError, tomllib.TOMLDecodeError) as exc:
+        typer.echo(f"bdt dead-code: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    if update_baseline:
+        typer.echo("bdt dead-code: baseline(s) updated")
+        raise typer.Exit(0)
+    if not findings:
+        typer.echo("bdt dead-code: no dead code found")
+        raise typer.Exit(0)
+    typer.echo(render_findings(findings))
+    typer.echo(f"\n{len(findings)} issue(s) found.")
+    raise typer.Exit(1)
 
 
 @app.command("find-injection")
