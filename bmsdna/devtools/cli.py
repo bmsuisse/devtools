@@ -68,6 +68,9 @@ def main(
 pr_app = typer.Typer(name="pr", help="Pull request commands (Azure DevOps or GitHub, auto-detected from the git remote)")
 app.add_typer(pr_app, name="pr")
 
+translate_app = typer.Typer(name="translate", help="Generate <lng>.json files from translations.toml")
+app.add_typer(translate_app, name="translate")
+
 issue_app = typer.Typer(name="issue", help="Issue / work item commands (Azure DevOps or GitHub, auto-detected from the git remote)")
 app.add_typer(issue_app, name="issue")
 
@@ -1090,8 +1093,9 @@ def find_injection_cmd(
     raise typer.Exit(find_injection_mod.print_report(result, strict=strict))
 
 
-@app.command("translate")
+@translate_app.callback(invoke_without_command=True)
 def translate_cmd(
+    ctx: typer.Context,
     check: bool = typer.Option(
         False, "--check", help="Don't write anything; exit 1 if code uses keys missing from translations.toml or generated files are stale"
     ),
@@ -1105,6 +1109,8 @@ def translate_cmd(
     with an English placeholder and the run fails until real translations are filled in. Generated
     JSON files should be git-ignored.
     """
+    if ctx.invoked_subcommand is not None:
+        return
     cfg = translate_mod.load_config()
     if not cfg.output and not check:
         typer.echo("No `output` configured under [tool.bdt.translate] in pyproject.toml", err=True)
@@ -1134,6 +1140,34 @@ def translate_cmd(
         raise typer.Exit(1)
     if not check:
         typer.echo(f"Wrote {len(res.written)} file(s)")
+
+
+@translate_app.command("add")
+def translate_add(
+    key: str = typer.Argument(..., help="Translation key, e.g. ADD_BUTTON"),
+    texts: list[str] = typer.Argument(..., metavar="LANG=TEXT...", help="Translations, e.g. en=Add de=Hinzufügen fr=Ajouter it=Aggiungi"),
+    force: bool = typer.Option(False, "--force", help="Overwrite the key if it already exists"),
+) -> None:
+    """Add KEY with its translations to translations.toml and regenerate all <lng>.json files."""
+    values: dict[str, str] = {}
+    for t in texts:
+        lng, sep, text = t.partition("=")
+        if not sep or not lng:
+            typer.echo(f"Expected LANG=TEXT, got {t!r}", err=True)
+            raise typer.Exit(2)
+        values[lng] = text
+    cfg = translate_mod.load_config()
+    try:
+        res = translate_mod.add_key(cfg, key, values, force=force)
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
+    missing = [lng for lng in cfg.languages if lng not in values]
+    if missing:
+        typer.echo(f"warning: no {', '.join(missing)} translation given (falls back to de/en)", err=True)
+    for k in res.new_keys:
+        typer.echo(f"added placeholder for key used in code: {k}", err=True)
+    typer.echo(f"Added {key}; wrote {len(res.written)} file(s)")
 
 
 @app.command("find-repo")

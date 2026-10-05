@@ -266,3 +266,20 @@ def run(cfg: Config, *, check: bool = False, import_json: bool = False) -> Resul
             )
             res.written.append(p)
     return res
+
+
+def add_key(cfg: Config, key: str, values: dict[str, str], *, force: bool = False) -> Result:
+    """Add `key` with `values` (language -> text) to translations.toml, then regenerate all JSON files."""
+    if not key.strip():
+        raise ValueError("Key must not be empty")
+    unknown = sorted(set(values) - set(cfg.languages))
+    if unknown:
+        raise ValueError(f"Unknown language(s) {', '.join(unknown)}; configured: {', '.join(cfg.languages)}")
+    if not values:
+        raise ValueError("Give at least one translation, e.g. en=Add de=Hinzufügen")
+    transls = load_translations(cfg.file)
+    if key in transls and not force:
+        raise ValueError(f"Key {key!r} already exists in {cfg.file.name} (use --force to overwrite)")
+    transls[key] = dict(values)
+    save_translations(cfg.file, transls)
+    return run(cfg)

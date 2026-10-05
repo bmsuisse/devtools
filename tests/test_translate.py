@@ -140,3 +140,17 @@ def test_scan_regex_variants(tmp_path):
     make_repo(tmp_path, "")
     (tmp_path / "src" / "a.vue").write_text("this.$t('V1'); i18n.t('V2'); t('dyn.' + x); foo.t('NO')")
     assert run(load_config(tmp_path), check=True).new_keys == ["V1", "V2"]
+
+
+def test_add_key_cli(tmp_path, monkeypatch):
+    make_repo(tmp_path, '[A]\nen = "a"\nde = "a"\n')
+    monkeypatch.chdir(tmp_path)
+    r = runner.invoke(app, ["translate", "add", "NEW", "en=New", "de=Neu", "fr=Nouveau"])
+    assert r.exit_code == 0, r.output
+    assert load_translations(tmp_path / "translations.toml")["NEW"] == {"en": "New", "de": "Neu", "fr": "Nouveau"}
+    for lng, text in (("en", "New"), ("de", "Neu"), ("fr", "Nouveau"), ("it", "Neu")):  # it falls back to de
+        assert json.loads((tmp_path / "out" / f"{lng}.json").read_text(encoding="utf-8"))["NEW"] == text
+    assert runner.invoke(app, ["translate", "add", "NEW", "en=x"]).exit_code == 1  # exists
+    assert runner.invoke(app, ["translate", "add", "NEW", "en=x", "--force"]).exit_code == 0
+    assert runner.invoke(app, ["translate", "add", "K", "xx=x"]).exit_code == 1  # unknown language
+    assert runner.invoke(app, ["translate", "add", "K", "oops"]).exit_code == 2
