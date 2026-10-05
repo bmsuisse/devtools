@@ -35,11 +35,12 @@ Find the PR opened from the current branch and report build/check status
 GitHub — whichever `origin` points at.
 
 ```bash
-bdt pr status [--target-branch dev] [--wait]
+bdt pr status [--target-branch BRANCH] [--wait]
 ```
 
-Every `--target` / `--target-branch` option in bdt (`pr create/status/info/retry/publish/update/comment/watch-deploy`,
-`issue take`, `commit`) defaults to `dev`; pass `--target main` (or whatever your PRs go into) to override.
+The `--target` / `--target-branch` option of `pr create/retry/publish/update/comment/watch-deploy` and `commit`
+defaults to `dev`; pass `--target main` (or whatever your PRs go into) to override. `pr status`, `pr info` and
+`issue take` only look a PR up, so by default they don't filter on the target branch at all.
 
 If the PR can't be merged, that's reported immediately instead of polling
 for builds/checks that will never run — e.g. on Azure DevOps:
@@ -60,7 +61,7 @@ one is also waiting on approval.
 `*.visualstudio.com` HTTPS forms). Auth is an explicit PAT (`--pat` or
 `AZURE_DEVOPS_EXT_PAT`/`AZURE_DEVOPS_PAT` env var), falling back to a short-lived token from the
 caller's own `az login` — never embed a PAT literal in a script or CI file.
-`--target-branch` selects which PR to look at (ADO's search API needs one).
+`--target-branch` optionally restricts the lookup to PRs into that branch (default: any).
 
 **GitHub**: uses `gh`'s own auth (`gh auth login`) and always resolves the
 PR opened from the current branch — `gh pr view` has no target-branch
@@ -78,7 +79,7 @@ it watches a branch-triggered build/workflow run, not any particular PR.)
 ## `bdt pr info`
 
 ```bash
-bdt pr info [--json] [--pr-id N] [--target-branch dev]
+bdt pr info [--json] [--pr-id N] [--target-branch BRANCH]
 ```
 
 One-shot summary of the current branch's PR: link, state (open/merged/closed, draft), aggregate
@@ -89,7 +90,7 @@ the check rollup (only a failed check fails it; skipped/cancelled ones don't cou
 from the latest build of each pipeline (any failed result fails it; unfinished builds are pending, or
 `waiting` when a stage needs approval). `unknown` if Azure DevOps can't be asked.
 
-Azure DevOps limits: the PR is found by the current branch into `--target-branch` (default `dev`),
+Azure DevOps limits: the PR is found by the current branch (into `--target-branch` if given, else any target),
 a PR with merge conflicts is reported as an error (exit 1) like `pr status` does, and the closed
 work items are only those whose URL is in the PR description -- not ones linked via
 `bdt pr create --issue`.
@@ -310,12 +311,12 @@ last argument); extra args are passed through; `--dry-run` prints the command.
 It takes the issue first (like `bdt issue take`): before the agent starts it comments `Taken by <you>`
 on the issue, naming the session it is about to start -- for `claude` a `--session-id` is generated and
 passed, so the comment says `claude --resume <id>`; the prompt tells the agent not to take it again. For
-another `--agent` the comment just says `(via <agent>)`. `--dry-run` posts nothing. Like `issue take`, it doesn't comment again when the newest comment already is a claim.
+another `--agent` the comment just says `(via <agent>)`. `--dry-run` posts nothing. Like `issue take`, it doesn't comment again when the newest comment already is your claim; if it is someone else's, it stops (exit 1) unless `--force`.
 
 ## `bdt issue take`
 
 ```bash
-bdt issue take [NUMBER] [--target-branch dev]
+bdt issue take [NUMBER] [--target-branch BRANCH] [--force]
 ```
 
 Claims an issue (GitHub) or work item (Azure DevOps): comments `Taken by <you>` on it, followed by the
