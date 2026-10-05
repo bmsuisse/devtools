@@ -38,7 +38,7 @@ SKIP_DIRS = {
     "generated",
     "__pycache__",
 }
-REGEX_T = re.compile(r"(?<![.\w$])\$?t\([\"']([a-zA-Z0-9\-._]+)[\"']")
+REGEX_T = re.compile(r"(?:(?<![.\w$])t|\$t|\bi18n\.t)\([\"']([a-zA-Z0-9\-._]+)[\"']\s*[,)]")
 REGEX_JINJA = re.compile(r"[\"']([a-zA-Z0-9\-._]+)[\"']\s*\|\s*tr\b")
 
 Translations = dict[str, dict[str, str]]
@@ -75,21 +75,25 @@ def load_config(start: Path | None = None) -> Config:
     )
 
 
-def _is_entry(d: dict) -> bool:
-    """A translation entry maps language codes (and flags like `server_only`) to scalars."""
-    return all(not isinstance(v, dict) for v in d.values())
-
-
 def _flatten_toml(data: dict, prefix: str = "") -> Translations:
     # `[a.b]` in TOML parses as {"a": {"b": {...}}}; fold that back into the key "a.b".
+    # A table may be an entry (its scalar values) and a prefix of other keys at the same time.
     out: Translations = {}
+
+    def add(key: str, entry: dict) -> None:
+        if key in out:
+            raise ValueError(f"Duplicate translation key {key!r} in translations.toml")
+        out[key] = entry
+
     for k, v in data.items():
         key = f"{prefix}.{k}" if prefix else k
-        if isinstance(v, dict):
-            if _is_entry(v):
-                out[key] = v
-            else:
-                out.update(_flatten_toml(v, key))
+        if not isinstance(v, dict):
+            continue
+        scalars = {lk: lv for lk, lv in v.items() if not isinstance(lv, dict)}
+        if scalars:
+            add(key, scalars)
+        for sub_key, sub_entry in _flatten_toml({lk: lv for lk, lv in v.items() if isinstance(lv, dict)}, key).items():
+            add(sub_key, sub_entry)
     return out
 
 
@@ -125,9 +129,12 @@ def import_existing(cfg: Config, transls: Translations) -> int:
             p = out_dir / f"{lng}.json"
             if not p.is_file():
                 continue
-            for key, value in _flatten_json(
-                json.loads(p.read_text(encoding="utf-8-sig"))
-            ).items():
+            data = json.loads(p.read_text(encoding="utf-8-sig"))
+            if not isinstance(data, dict):
+                raise ValueError(f"{p}: expected a JSON object at the top level")
+            for key, value in _flatten_json(data).items():
+                if not isinstance(value, str):
+                    raise ValueError(f"{p}: value of {key!r} is not a string")
                 entry = transls.setdefault(key, {})
                 if lng not in entry:
                     entry[lng] = value
@@ -204,10 +211,11 @@ class Result:
     imported: int = 0
     written: list[Path] = field(default_factory=list)
     toml_changed: bool = False
+    stale: list[Path] = field(default_factory=list)  # --check: generated files that differ from toml
 
     @property
     def ok(self) -> bool:
-        return not self.new_keys
+        return not self.new_keys and not self.stale
 
 
 def run(cfg: Config, *, check: bool = False, import_json: bool = False) -> Result:
@@ -231,6 +239,13 @@ def run(cfg: Config, *, check: bool = False, import_json: bool = False) -> Resul
 
     res.toml_changed = transls != original
     if check:
+        if not res.new_keys:
+            expected = {lng: build_language(transls, lng, cfg.nested) for lng in cfg.languages}
+            for out_dir in cfg.output:
+                for lng, content in expected.items():
+                    p = out_dir / f"{lng}.json"
+                    if not p.is_file() or json.loads(p.read_text(encoding="utf-8-sig")) != content:
+                        res.stale.append(p)
         return res
     if res.toml_changed:
         save_translations(cfg.file, transls)

@@ -980,7 +980,7 @@ def find_injection_cmd(
 @app.command("translate")
 def translate_cmd(
     check: bool = typer.Option(
-        False, "--check", help="Don't write anything; exit 1 if code uses keys missing from translations.toml"
+        False, "--check", help="Don't write anything; exit 1 if code uses keys missing from translations.toml or generated files are stale"
     ),
     import_json: bool = typer.Option(
         False, "--import", help="One-time migration: merge existing <lng>.json files into translations.toml first"
@@ -1007,6 +1007,10 @@ def translate_cmd(
         typer.echo(f"{'missing' if check else 'added'}: {key}", err=True)
     for key, langs in res.incomplete.items():
         typer.echo(f"warning: {key} has no {', '.join(langs)} (falls back to de/en)", err=True)
+    for p in res.stale:
+        typer.echo(f"stale: {p} (run `bdt translate`)", err=True)
+    if res.stale:
+        raise typer.Exit(1)
     if res.new_keys:
         typer.echo(
             "Keys used in code are missing from translations.toml."

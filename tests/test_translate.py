@@ -100,3 +100,43 @@ def test_cli(tmp_path, monkeypatch):
     assert (tmp_path / "out" / "en.json").is_file()
     (tmp_path / "src" / "x.ts").write_text("t('B')")
     assert runner.invoke(app, ["translate", "--check"]).exit_code == 1
+
+
+def test_table_that_is_entry_and_prefix(tmp_path):
+    p = tmp_path / "t.toml"
+    p.write_text('[a]\nen = "top"\n\n[a.c]\nen = "y"\n')
+    assert load_translations(p) == {"a": {"en": "top"}, "a.c": {"en": "y"}}
+
+
+def test_duplicate_flattened_keys_raise(tmp_path):
+    import pytest
+
+    p = tmp_path / "t.toml"
+    p.write_text('[a.b]\nen = "x"\n\n["a.b"]\nen = "y"\n')
+    with pytest.raises(ValueError):
+        load_translations(p)
+
+
+def test_import_rejects_non_string(tmp_path):
+    import pytest
+
+    make_repo(tmp_path, "")
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out" / "en.json").write_text('{"k": null}')
+    with pytest.raises(ValueError):
+        run(load_config(tmp_path), import_json=True)
+
+
+def test_check_detects_stale_and_missing_json(tmp_path):
+    make_repo(tmp_path, '[A]\nen = "a"\n')
+    assert len(run(load_config(tmp_path), check=True).stale) == 4  # nothing generated yet
+    run(load_config(tmp_path))
+    assert run(load_config(tmp_path), check=True).ok
+    (tmp_path / "translations.toml").write_text('[A]\nen = "changed"\n')
+    assert not run(load_config(tmp_path), check=True).ok
+
+
+def test_scan_regex_variants(tmp_path):
+    make_repo(tmp_path, "")
+    (tmp_path / "src" / "a.vue").write_text("this.$t('V1'); i18n.t('V2'); t('dyn.' + x); foo.t('NO')")
+    assert run(load_config(tmp_path), check=True).new_keys == ["V1", "V2"]
