@@ -61,6 +61,17 @@ def is_take_comment(text: str | None) -> bool:
     return _HTML_TAG_RE.sub("", text or "").strip().startswith(TAKEN_PREFIX)
 
 
+def claimant(text: str | None) -> str:
+    """Who a "Taken by <user>" comment (see `is_take_comment`) says holds the claim; "" if it isn't one."""
+    if not is_take_comment(text):
+        return ""
+    # ADO stores HTML: keep block boundaries as line breaks so only the claim's own line is read
+    plain = _HTML_TAG_RE.sub("", re.sub(r"(?i)<br\s*/?>|</(?:div|p)>", "\n", text or ""))
+    first = next(line for line in plain.splitlines() if line.strip())
+    name = first.strip().removeprefix(TAKEN_PREFIX).strip()
+    return re.sub(r"\s*\(via [^)]*\)$", "", name).strip()
+
+
 def take_message(user: str, agent: str, session_id: str | None) -> str:
     """The "Taken by" comment `bdt issue do` posts before the agent starts. It names the session itself,
     because the agent's own session doesn't exist yet and `bdt`'s auto-detected one (if `bdt issue do` is

@@ -109,7 +109,7 @@ _PG_USER_OPTION = typer.Option(
 )
 
 
-def _resolve_ado_pr(pat: str | None, remote: AdoRemote, target: str, pr_id: int | None = None) -> tuple[requests.Session, dict]:
+def _resolve_ado_pr(pat: str | None, remote: AdoRemote, target: str | None, pr_id: int | None = None) -> tuple[requests.Session, dict]:
     """Resolve the PR to act on -- by `pr_id` directly if given (no branch involved at all,
     so this works even without that PR's branch checked out locally), else by searching for
     the current branch's PR into `target`, as before.
@@ -123,7 +123,7 @@ def _resolve_ado_pr(pat: str | None, remote: AdoRemote, target: str, pr_id: int 
     return session, pr
 
 
-def _current_pr_info(pr_id: int | None, target_branch: str, pat: str | None) -> pr_info_mod.PrInfo:
+def _current_pr_info(pr_id: int | None, target_branch: str | None, pat: str | None) -> pr_info_mod.PrInfo:
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
         return pr_info_mod.github_info(gh_pr.get_pr(require_gh(), pr_id, fields=gh_pr.PR_INFO_FIELDS), remote)
@@ -409,7 +409,7 @@ def pr_publish(
 
 @pr_app.command("status")
 def pr_status(
-    target_branch: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target-branch", help="Target branch of the PR (Azure DevOps only — gh has no equivalent filter, it always resolves the PR for the current branch)"),
+    target_branch: str | None = typer.Option(None, "--target-branch", help="Only consider PRs into this target branch (Azure DevOps only; default: any target — gh has no such filter, it always resolves the PR for the current branch)"),
     wait: bool = typer.Option(False, "--wait", help="Poll until all pipelines/checks are completed; stops early and reports status if one needs manual approval"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
@@ -427,7 +427,7 @@ def pr_status(
 @pr_app.command("info")
 def pr_info(
     as_json: bool = typer.Option(False, "--json", help="Print machine-readable JSON (for status integrations that poll it)"),
-    target_branch: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target-branch", help="Target branch of the PR (Azure DevOps only)"),
+    target_branch: str | None = typer.Option(None, "--target-branch", help="Only consider PRs into this target branch (Azure DevOps only; default: any target)"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
 ) -> None:
@@ -738,6 +738,7 @@ def issue_do(
     number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
     agent: str = typer.Option("claude", "--agent", help="Agent executable to start (claude runs headless: `claude -p ... --name '<number>: <title>'`)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print the agent command instead of running it"),
+    force: bool = typer.Option(False, "--force", help="Start even if someone else already holds the claim (comments 'Taken by' anyway)"),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -760,14 +761,17 @@ def issue_do(
     if dry_run:
         typer.echo(f"(dry run: would comment 'Taken by ...' on #{number} first)", err=True)
     else:
-        _take(remote, number, issue_do_mod.take_message(_current_user(remote), agent, session_id), pat, agent_note=False)
+        user = _current_user(remote)
+        if not _take(remote, number, issue_do_mod.take_message(user, agent, session_id), pat, user=user, force=force, agent_note=False):
+            raise typer.Exit(1)
     issue_do_mod.run(number, title, body, agent=agent, extra=extra, dry_run=dry_run, session_id=session_id)
 
 
 @issue_app.command("take")
 def issue_take(
     number: int | None = typer.Argument(None, help="Issue number (GitHub) or work item ID (Azure DevOps). Default: the issue the current branch's PR closes"),
-    target_branch: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target-branch", help="Target branch of the PR (Azure DevOps only; only used to find the issue when no number is given)"),
+    target_branch: str | None = typer.Option(None, "--target-branch", help="Only consider PRs into this target branch (Azure DevOps only; default: any target; only used to find the issue when no number is given)"),
+    force: bool = typer.Option(False, "--force", help="Comment even if someone else already holds the claim"),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
 ) -> None:
     """Claim an issue / work item: comment "Taken by <you>" on it, with this coding agent's
@@ -783,18 +787,38 @@ def issue_take(
                 else "No issue number given, and the current branch's PR doesn't reference one (e.g. 'Fixes #N')"
             )
         number = issues[0].number
-    _take(remote, number, f"{issue_do_mod.TAKEN_PREFIX} {_current_user(remote)}", pat)
+    user = _current_user(remote)
+    if not _take(remote, number, f"{issue_do_mod.TAKEN_PREFIX} {user}", pat, user=user, force=force):
+        raise typer.Exit(1)
 
 
-def _take(remote: AdoRemote | GitHubRemote, number: int, message: str, pat: str | None, *, agent_note: bool = True) -> None:
+def _take(
+    remote: AdoRemote | GitHubRemote,
+    number: int,
+    message: str,
+    pat: str | None,
+    *,
+    user: str,
+    force: bool = False,
+    agent_note: bool = True,
+) -> bool:
     """Comment `message` ("Taken by ...") on the issue -- unless its newest comment already is such a
-    claim, so running this twice (or `issue do` after `issue take`) doesn't post it again."""
+    claim, so running this twice (or `issue do` after `issue take`) doesn't post it again. If that
+    claim is someone else's, nothing is posted without `force`. True if `user` holds the claim now."""
     kind = "issue" if isinstance(remote, GitHubRemote) else "work item"
-    if issue_do_mod.is_take_comment(_last_comment(remote, number, pat)):
-        typer.echo(f"{kind.capitalize()} #{number} is already taken (its last comment says so) -- not commenting again")
-        return
+    last = _last_comment(remote, number, pat)
+    if issue_do_mod.is_take_comment(last):
+        claimant = issue_do_mod.claimant(last)
+        if claimant.casefold() == user.casefold():
+            typer.echo(f"{kind.capitalize()} #{number} is already taken by you (its last comment says so) -- not commenting again")
+            return True
+        if not force:
+            typer.echo(f"{kind.capitalize()} #{number} is already taken by {claimant} -- pass --force to take it anyway", err=True)
+            return False
+        typer.echo(f"{kind.capitalize()} #{number} was taken by {claimant} -- taking it anyway (--force)", err=True)
     typer.echo(f"Taking {kind} #{number}")
     _comment_on_issue(remote, number, message, pat, agent_note=agent_note)
+    return True
 
 
 def _last_comment(remote: AdoRemote | GitHubRemote, number: int, pat: str | None) -> str | None:

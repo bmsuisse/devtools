@@ -367,3 +367,13 @@ def test_sql_named_variable_simple_or_dml_not_flagged(tmp_path: Path) -> None:
 def test_sql_named_variable_used_in_execute_reported_once(tmp_path: Path) -> None:
     source = f"ARTICLES_SQL = {_COMPLEX_SELECT}\n\ndef f(cur):\n    cur.execute(ARTICLES_SQL)\n"
     assert len(_findings(source, tmp_path / "a.py")) == 1
+
+
+def test_sql_named_alias_of_complex_literal_still_flagged_at_execute(tmp_path: Path) -> None:
+    source = f"""
+async def f(cur):
+    base = {_COMPLEX_SELECT}
+    q_sql = base
+    await cur.execute(q_sql)
+"""
+    assert "sql-inline-too-complex" in _rules(_findings(source, tmp_path / "a.py"))
