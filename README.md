@@ -634,6 +634,10 @@ it can't see through):
   with an f-string, `+` concatenation, the `%` operator, or `str.format()`
   instead of a psycopg t-string (3.14+), `psycopg.sql`, or bound params. For an f-string the fix is
   usually just `f"..."` -> `t"..."` (`{value}` is bound, `{name:i}` quotes an identifier).
+- **`sql-sqlglot-string-injection`** — an f-string / concatenation / `%` / `.format()` string passed to a
+  sqlglot builder that parses it as SQL (`select(...)`, `.from_()`, `.where()`, `.order_by()`, `parse_one()`, ...).
+  The result is a sqlglot expression, which the rules above otherwise trust, so this is the hole they'd miss.
+  Use `exp.column()`/`exp.to_identifier()` for names and `exp.Placeholder` + bound params for values.
 - **`sql-positional-param`** — positional `%s` instead of named `%(name)s`.
 - **`sql-forbidden-join`** — `RIGHT JOIN`/`LATERAL JOIN`/`CROSS APPLY` (same
   patterns the `prek` skill's `check_files.py` forbids in `.sql` files).

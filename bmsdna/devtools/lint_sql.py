@@ -468,6 +468,59 @@ def _execute_query_arg(call: ast.Call) -> ast.expr | None:
     return next((kw.value for kw in call.keywords if kw.arg == "query"), None)
 
 
+# sqlglot's builders parse plain strings as SQL (`select(f"a, {x}")`, `.where(f"id = {x}")`), so text
+# interpolated into one is as dangerous as text passed straight to `.execute()` -- even though the
+# result is a sqlglot expression the rules above otherwise trust. Value arguments (`exp.column`,
+# `exp.Placeholder`, `exp.convert`, `exp.to_identifier`, ...) quote/bind safely and aren't listed.
+_SQLGLOT_STRING_BUILDERS = frozenset(
+    {"select", "from_", "where", "join", "order_by", "group_by", "having", "with_", "parse_one", "parse", "condition", "and_", "or_", "maybe_parse"}
+)
+
+
+_SQLGLOT_METHODS = frozenset({"from_", "where", "order_by", "group_by", "having"})
+
+
+def _interpolation_kind(node: ast.expr) -> str | None:
+    """How `node` interpolates non-literal text into a string, or None if it doesn't."""
+    if isinstance(node, ast.JoinedStr):
+        return "an f-string" if any(not isinstance(v, ast.Constant) for v in node.values) else None
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        sides = (node.left, node.right)
+        has_literal = any(isinstance(x, ast.Constant) and isinstance(x.value, str) for x in sides)
+        return "string concatenation" if has_literal and not all(isinstance(x, ast.Constant) for x in sides) else None
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+        return "the `%` string-formatting operator" if isinstance(node.left, ast.Constant) and isinstance(node.left.value, str) else None
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "format":
+        return "`str.format()`" if isinstance(node.func.value, ast.Constant) and isinstance(node.func.value.value, str) else None
+    return None
+
+
+def _sqlglot_builder_findings(call: ast.Call, path: Path, trust: _Trust) -> list[Finding]:
+    if not trust.sqlglot_names:
+        return []
+    func = call.func
+    name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else None
+    from_sqlglot = _call_root_name(func) in trust.sqlglot_names
+    # On a bare variable (`q = select(..); q = q.where(...)`) only the distinctive method names count:
+    # `", ".join(f"...")`-style calls on other receivers would be false positives.
+    if name not in _SQLGLOT_STRING_BUILDERS or not (from_sqlglot or (isinstance(func, ast.Attribute) and name in _SQLGLOT_METHODS)):
+        return []
+    for arg in [*call.args, *(kw.value for kw in call.keywords)]:
+        kind = _interpolation_kind(arg)
+        if kind is not None:
+            return [
+                Finding(
+                    path,
+                    call.lineno,
+                    "sql-sqlglot-string-injection",
+                    f"`{name}(...)` parses its string argument as SQL, and it is built with {kind} -- injection risk. "
+                    "Build it from sqlglot nodes instead (`exp.column()`/`exp.to_identifier()` for names, `exp.Placeholder` "
+                    "+ bound params for values).",
+                )
+            ]
+    return []
+
+
 class _ExecuteCallVisitor(ast.NodeVisitor):
     """Walks a module, tracking a stack of (function/class/module) local-variable scopes so a
     `cur.execute(query, ...)` call can resolve `query` back to every assignment it had in that
@@ -525,6 +578,7 @@ class _ExecuteCallVisitor(ast.NodeVisitor):
         return bool(values) and all(isinstance(v, ast.Constant) and isinstance(v.value, str) for v in values)
 
     def visit_Call(self, node: ast.Call) -> None:
+        self.findings.extend(_sqlglot_builder_findings(node, self.path, self.trust))
         query_arg = _execute_query_arg(node)
         if query_arg is not None:
             found = _check_query_arg(query_arg, self._lookup, self.path, node.lineno, self.trust, self.review)

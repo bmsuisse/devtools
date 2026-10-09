@@ -432,3 +432,54 @@ async def f(client, name):
     return await client.fetch_all(f"users/{name}")
 '''
     assert _findings(source, tmp_path / "a.py") == []
+
+
+def test_sqlglot_builder_with_interpolated_string_is_flagged(tmp_path: Path) -> None:
+    source = '''
+from sqlglot import select
+import sqlglot
+
+async def f(con, user_filter, col):
+    q1 = select("id").from_("t").where(f"name = {user_filter}")
+    q2 = sqlglot.parse_one("select " + col + " from t")
+    q3 = select("id").from_("t").order_by("{} desc".format(col))
+    await fetch_all(q1.sql(dialect="postgres"))
+'''
+    findings = _findings(source, tmp_path / "a.py")
+    assert _rules(findings) == {"sql-sqlglot-string-injection"}
+    assert len(findings) == 3
+
+
+def test_sqlglot_builders_with_literals_and_nodes_are_clean(tmp_path: Path) -> None:
+    source = '''
+from sqlglot import exp, select
+
+async def f(col):
+    q = select("id", "name").from_("dim.customer").where("active = true")
+    q = q.where(exp.column(col).eq(exp.Placeholder(this="id")))
+    q = q.order_by(exp.to_identifier(col).sql())
+    return q
+'''
+    assert _findings(source, tmp_path / "a.py") == []
+
+
+def test_sqlglot_rule_ignores_files_that_do_not_use_sqlglot(tmp_path: Path) -> None:
+    source = '''
+def f(qs, name):
+    return qs.where(f"name = {name}").select(f"x{name}")
+'''
+    assert _findings(source, tmp_path / "a.py") == []
+
+
+def test_sqlglot_method_on_a_variable_is_flagged_but_generic_join_is_not(tmp_path: Path) -> None:
+    source = '''
+from sqlglot import select
+
+def f(user_filter, parts):
+    q = select("id").from_("t")
+    q = q.where(f"name = {user_filter}")
+    label = ", ".join(f"{p}!" for p in parts) + "".join(f"{p}" for p in parts)
+    return q, label
+'''
+    findings = _findings(source, tmp_path / "a.py")
+    assert [f.rule for f in findings] == ["sql-sqlglot-string-injection"]

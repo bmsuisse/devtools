@@ -39,6 +39,7 @@ SQL_INJECTION_RULES = frozenset(
         "sql-percent-format-injection",
         "sql-concat-injection",
         "sql-format-injection",
+        "sql-sqlglot-string-injection",
     }
 )
 _IGNORE_RE = re.compile(r"bdt-lint:\s*ignore\s+([\w-]+(?:\s*,\s*[\w-]+)*)")
