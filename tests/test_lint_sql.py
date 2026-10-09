@@ -805,3 +805,49 @@ async def f(table):
     findings = _findings(source, tmp_path / "a.py")
     assert _rules(findings) == {"sql-fstring-injection"}
     assert len(findings) == 2
+
+
+# --- dynamic fragments that aren't identifiers (probe variants) ---
+
+
+def test_fstring_with_optional_assignment_fragments_is_flagged(tmp_path: Path) -> None:
+    # CCMT2's _write_rule_change: `{is_approved_clause}` is "" or "is_approved = false," -- as an identifier probe
+    # the statement doesn't parse, as nothing/an assignment it does.
+    source = '''
+from pgdevkit.db import execute
+
+async def f(con, fields, tiers):
+    set_clause = ", ".join(f"{c} = %({c})s" for c in fields)
+    is_approved_clause = "is_approved = false," if tiers is not None else ""
+    await execute(
+        f"""
+        UPDATE editing.bonus_rules
+        SET {set_clause},
+            {is_approved_clause}
+            modified_user = %(modified_user)s
+        WHERE bonus_rule_id = %(bonus_rule_id)s
+        """,
+        {**fields, "modified_user": "x", "bonus_rule_id": 1},
+        con=con,
+    )
+'''
+    assert _rules(_findings(source, tmp_path / "a.py")) == {"sql-fstring-injection"}
+
+
+def test_fstring_with_optional_trailing_clause_fragment_is_flagged(tmp_path: Path) -> None:
+    source = '''
+async def f(cur, lock):
+    await cur.execute(f"update t set x = 1 where id = %(id)s {lock}", {"id": 1})
+'''
+    assert _rules(_findings(source, tmp_path / "a.py")) == {"sql-fstring-injection"}
+
+
+def test_probe_variants_do_not_flag_non_sql_or_non_dml_text(tmp_path: Path) -> None:
+    source = '''
+async def f(cur, a, b, c, d, e, name):
+    await cur.execute(f"{a} {b} {c} {d} {e}")
+    await cur.execute(f"update the user {name} please")
+    await cur.execute(f"COPY t TO '/tmp/{name}.csv'")
+    await cur.execute(f"set {name} {a} {b} {c} {d} {e}")
+'''
+    assert _findings(source, tmp_path / "a.py") == []

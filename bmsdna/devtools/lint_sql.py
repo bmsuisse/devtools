@@ -24,6 +24,7 @@ than guessed at -- a linter that can't be sure must stay quiet, not noisy.
 from __future__ import annotations
 
 import ast
+import itertools
 import re
 import sys
 from collections.abc import Mapping
@@ -66,6 +67,13 @@ _POSITIONAL_PARAM_RE = re.compile(r"(?<!%)%s\b")
 # ordinary identifier so the parse doesn't fail on the substitution itself.
 _PROBE_PLACEHOLDER = " __X__ "
 _FORMAT_FIELD_RE = re.compile(r"\{[^{}]*\}")
+
+# A dynamic fragment isn't always an identifier/expression: `SET {assignments}, {extra}` where `extra` is
+# empty or `"is_approved = false,"`, or an optional `{where}` clause. When the probe with every fragment as an
+# identifier doesn't parse, each fragment is retried as "nothing" and as an assignment, all combinations
+# (only up to _MAX_PROBE_SLOTS fragments, so the number of parses stays small).
+_PROBE_SLOT_VARIANTS = (_PROBE_PLACEHOLDER, " ", " __X__ = 1 ")
+_MAX_PROBE_SLOTS = 4
 
 _MAX_RESOLVE_HOPS = 5
 
@@ -286,8 +294,26 @@ _FSTRING_FIX = (
 _GENERIC_FIX = "Use a psycopg t-string (Python 3.14+), psycopg.sql for dynamic SQL, or load_sql()/a .sql file for static SQL."
 
 
+def _parse_probe_text(text: str) -> "exp.Expression | None":
+    """`parse_sql_text` for text with `_PROBE_PLACEHOLDER` standing in for dynamic fragments: the placeholder
+    as an identifier first, then (see `_PROBE_SLOT_VARIANTS`) every fragment as nothing/an assignment."""
+    parsed = parse_sql_text(text)
+    if parsed is not None:
+        return parsed
+    parts = text.split(_PROBE_PLACEHOLDER)
+    slots = len(parts) - 1
+    if not 1 <= slots <= _MAX_PROBE_SLOTS:
+        return None
+    for combination in itertools.product(_PROBE_SLOT_VARIANTS, repeat=slots):
+        candidate = "".join(part + (combination[i] if i < slots else "") for i, part in enumerate(parts))
+        parsed = parse_sql_text(candidate)
+        if parsed is not None:
+            return parsed
+    return None
+
+
 def _injection_finding(text: str, path: Path, lineno: int, rule: str, how: str) -> list[Finding]:
-    if parse_sql_text(text) is None:
+    if _parse_probe_text(text) is None:
         return []
     fix = _FSTRING_FIX if rule == "sql-fstring-injection" else _GENERIC_FIX
     return [Finding(path, lineno, rule, f"SQL built with {how} -- injection risk. {fix}")]

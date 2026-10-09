@@ -642,6 +642,8 @@ instead), a subclass of `PostgresJsonResponse` under another name, and CCMT2's p
   with an f-string, `+` concatenation, the `%` operator, or `str.format()`
   instead of a psycopg t-string (3.14+), `psycopg.sql`, or bound params. For an f-string the fix is
   usually just `f"..."` -> `t"..."` (`{value}` is bound, `{name:i}` quotes an identifier).
+  A dynamic fragment may be an identifier/expression, an optional clause, or a (possibly empty) list of
+  assignments -- the statement is flagged if it parses as DML with any of these readings of its fragments.
 - **`sql-sqlglot-string-injection`** — an f-string / concatenation / `%` / `.format()` string passed to a
   sqlglot builder that parses it as SQL (`select(...)`, `.from_()`, `.where()`, `.order_by()`, `parse_one()`, ...).
   The result is a sqlglot expression, which the rules above otherwise trust, so this is the hole they'd miss.
