@@ -616,8 +616,8 @@ bdt lint backend/db/a.py b.py  # scan only these files -- e.g. from a prek/pre-c
 bdt lint --no-tooling-check    # skip the tooling-config check for this run
 ```
 
-Every `.execute()`/`.executemany()` call -- and pgdevkit's `fetch_all`/`fetch_one`/`fetch_scalar`,
-which only accept a literal string, sqlglot expression, `psycopg.sql` or t-string -- whose SQL argument can be resolved to a
+Every `.execute()`/`.executemany()` call -- and pgdevkit's `fetch_all`/`fetch_one`/`fetch_scalar` and
+`PostgresJsonResponse` (the latter takes no t-string), which only accept a literal string, sqlglot expression, `psycopg.sql` or t-string -- whose SQL argument can be resolved to a
 literal or f-string/concatenation/`%`-format expression is checked (an
 unresolvable argument, e.g. a plain function parameter, is silently skipped --
 this can't false-positive on non-psycopg `.execute()` calls, or on dynamic SQL
@@ -821,7 +821,7 @@ Findings have two severities: **error** (a definite unsafe pattern, exit code 1)
 (depends on where a value comes from; listed with an instruction for an AI/human to verify, exit
 code 0 unless `--strict`).
 
-- **SQL** (Python `.execute()` / `fetch_all()` / `fetch_one()` / `fetch_scalar()`): f-string / `%` / concatenation / `.format()` SQL is an error.
+- **SQL** (Python `.execute()` / `fetch_all()` / `fetch_one()` / `fetch_scalar()` / `PostgresJsonResponse()`): f-string / `%` / concatenation / `.format()` SQL is an error.
   SQL from `load_sql()`, `sql.SQL`, sqlglot (`expr.sql()`, `sqlglot.*`), `cast(LiteralString, <sqlglot expr>)` (the cast is only as safe as its argument) or
   a function in the same file annotated `-> LiteralString` is trusted; SQL from any other function
   call is a `sql-unverified-call` review item. (`bdt lint` accepts the same trusted forms but never
