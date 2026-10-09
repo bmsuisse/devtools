@@ -1093,7 +1093,7 @@ def lint(
     ),
 ) -> None:
     """Static checks (bmsuisse/skills#52): postgres/psycopg SQL rules on every `.execute()` call and pgdevkit
-    `fetch_all`/`fetch_one`/`fetch_scalar`/`PostgresJsonResponse` call
+    `fetch_all`/`fetch_one`/`fetch_scalar`/`execute`/`PostgresJsonResponse` call
     (must use load_sql()/a .sql file, a t-string, or psycopg.sql for anything beyond a trivial
     query; never an f-string/concatenation/`%`-formatting), pydantic-model placement under api/
     directories, hand-wired HTTP in TypeScript, and that the repo declares/configures ty, ruff, pytest and prek.

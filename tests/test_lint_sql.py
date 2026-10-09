@@ -608,3 +608,258 @@ def f(table):
     return PostgresJsonResponse("postgres", f"select id from dim.{table}", parameters={})
 '''
     assert _findings(source, tmp_path / "a.py") == []
+
+
+# --- pgdevkit.db.execute (bare name, gated on a pgdevkit import) ---
+
+
+def test_bare_execute_imported_from_pgdevkit_is_flagged_like_cursor_execute(tmp_path: Path) -> None:
+    # Real pattern from CCMT2's _write_rule_change.
+    source = '''
+from pgdevkit.db import execute
+
+async def f(table, rule_id):
+    await execute(f"UPDATE ccmt.{table} SET active = false WHERE id = %(id)s", {"id": rule_id})
+'''
+    findings = _findings(source, tmp_path / "a.py")
+    assert _rules(findings) == {"sql-fstring-injection"}
+    assert [f.line for f in findings] == [5]
+
+
+def test_bare_execute_flags_concat_format_percent_and_keyword_query(tmp_path: Path) -> None:
+    source = '''
+from pgdevkit.db import execute
+
+async def f(value, table):
+    await execute("delete from t where id = " + str(value))
+    await execute("delete from t where id = %s" % value)
+    await execute("delete from t where id = {}".format(value))
+    await execute(query=f"delete from {table} where id = 1", pool=None)
+'''
+    findings = _findings(source, tmp_path / "a.py")
+    assert _rules(findings) == {
+        "sql-concat-injection",
+        "sql-percent-format-injection",
+        "sql-format-injection",
+        "sql-fstring-injection",
+    }
+    assert len(findings) == 4
+
+
+def test_bare_execute_follows_a_variable_to_its_unsafe_assignment(tmp_path: Path) -> None:
+    source = '''
+from pgdevkit.db import execute
+
+async def f(table):
+    query = f"update dim.{table} set x = 1"
+    await execute(query)
+'''
+    assert _rules(_findings(source, tmp_path / "a.py")) == {"sql-fstring-injection"}
+
+
+def test_bare_execute_import_forms_gate_the_rule(tmp_path: Path) -> None:
+    bad = 'await {call}(f"update t set x = {{v}}")'
+    for i, (imp, call) in enumerate(
+        [
+            ("from pgdevkit.db import execute", "execute"),
+            ("from pgdevkit.db import execute as run", "run"),
+            ("from pgdevkit.db import fetch_all, execute", "execute"),
+            ("from pgdevkit.db.fetch import execute", "execute"),
+        ]
+    ):
+        source = f"{imp}\n\nasync def f(v):\n    {bad.format(call=call)}\n"
+        assert _rules(_findings(source, tmp_path / f"a{i}.py")) == {"sql-fstring-injection"}, imp
+
+
+def test_execute_attribute_forms_are_flagged(tmp_path: Path) -> None:
+    source = '''
+import pgdevkit
+import pgdevkit.db as db
+from pgdevkit import db as pgdb
+
+async def f(v):
+    await db.execute(f"update t set x = {v}")
+    await pgdb.execute("update t set x = " + v)
+    await pgdevkit.db.execute("update t set x = {}".format(v))
+'''
+    findings = _findings(source, tmp_path / "a.py")
+    assert _rules(findings) == {"sql-fstring-injection", "sql-concat-injection", "sql-format-injection"}
+    assert len(findings) == 3
+
+
+def test_bare_execute_accepts_literal_load_sql_sqlglot_template_and_sql_composed(tmp_path: Path) -> None:
+    source = '''
+from psycopg import sql
+from sqlglot import exp
+from pgdevkit.db import execute
+
+async def f(sql_loader, user_id, table):
+    await execute(sql_loader.load_sql("users", "deactivate"), {"id": user_id})
+    await execute(exp.delete("t").where("id = 1").sql(dialect="postgres"))
+    await execute(t"update t set x = 1 where user_id = {user_id}")
+    await execute(sql.SQL("update {} set x = 1").format(sql.Identifier(table)))
+    await execute("update t set x = 1 where user_id = %(id)s", {"id": user_id})
+'''
+    assert _findings(source, tmp_path / "a.py") == []
+
+
+def test_bare_execute_applies_inline_complexity_and_positional_rules(tmp_path: Path) -> None:
+    source = '''
+from pgdevkit.db import execute
+
+async def f():
+    await execute("insert into t (id) select id from u")
+    await execute("update t set x = 1 where id = %s", (1,))
+'''
+    assert _rules(_findings(source, tmp_path / "a.py")) == {"sql-inline-too-complex", "sql-positional-param"}
+
+
+def test_bare_execute_simple_write_is_clean_and_forbidden_join_is_flagged(tmp_path: Path) -> None:
+    source = '''
+from pgdevkit.db import execute
+
+async def f():
+    await execute("update t set x = 1 where id = %(id)s", {"id": 1})
+    await execute("delete from t using u right join v on v.id = u.id where t.id = u.id")
+'''
+    assert "sql-forbidden-join" in _rules(_findings(source, tmp_path / "a.py"))
+
+
+def test_bare_execute_is_reported_as_unverified_call_in_review_mode(tmp_path: Path) -> None:
+    source = '''
+from pgdevkit.db import execute
+
+async def f(build_query):
+    await execute(build_query("t"))
+'''
+    path = tmp_path / "a.py"
+    path.write_text(source)
+    assert check_sql_file(path) == []
+    assert _rules(check_sql_file(path, review=True)) == {"sql-unverified-call"}
+
+
+def test_bare_execute_without_a_pgdevkit_import_is_not_flagged(tmp_path: Path) -> None:
+    # `execute` is a very generic name: no pgdevkit import, no finding -- even when the text is real DML.
+    source = '''
+async def execute(sql):
+    ...
+
+async def f(table):
+    await execute(f"update {table} set x = 1")
+    await execute("update t set x = %s", (1,))
+'''
+    assert _findings(source, tmp_path / "a.py") == []
+
+
+def test_bare_execute_imported_from_another_library_is_not_flagged(tmp_path: Path) -> None:
+    source = '''
+from sqlalchemy import execute
+from mylib.db import execute as run
+from .db import execute as local_run
+from . import execute as dotted
+from pgdevkitx import execute as lookalike
+
+def f(table, name):
+    execute(f"update {table} set x = 1")
+    run(f"update {table} set x = 1")
+    local_run(f"update {table} set x = 1")
+    dotted(f"update {table} set x = 1")
+    lookalike(f"update {table} set x = 1")
+    execute(f"echo {name}")
+'''
+    assert _findings(source, tmp_path / "a.py") == []
+
+
+def test_pgdevkit_import_does_not_make_a_non_sql_execute_flagged(tmp_path: Path) -> None:
+    source = '''
+from pgdevkit.db import execute
+
+async def f(cmd, name):
+    await execute(f"echo {name}")
+    await execute(f"COPY t TO '/tmp/{name}.csv'")
+'''
+    assert _findings(source, tmp_path / "a.py") == []
+
+
+def test_pgdevkit_import_of_other_names_does_not_enable_bare_execute(tmp_path: Path) -> None:
+    source = '''
+import pgdevkit
+from pgdevkit.db import fetch_all
+from other import execute
+
+async def f(table):
+    execute(f"update {table} set x = 1")
+'''
+    assert _findings(source, tmp_path / "a.py") == []
+
+
+def test_aliased_pgdevkit_fetch_helpers_and_json_response_are_flagged(tmp_path: Path) -> None:
+    source = '''
+from pgdevkit.db import fetch_all as fa
+from pgdevkit.fastapi import PostgresJsonResponse as PJR
+
+async def f(table):
+    await fa(f"select id from {table}")
+    return PJR(f"select id from {table}")
+'''
+    findings = _findings(source, tmp_path / "a.py")
+    assert _rules(findings) == {"sql-fstring-injection"}
+    assert len(findings) == 2
+
+
+# --- dynamic fragments that aren't identifiers (probe variants) ---
+
+
+def test_fstring_with_optional_assignment_fragments_is_flagged(tmp_path: Path) -> None:
+    # CCMT2's _write_rule_change: `{is_approved_clause}` is "" or "is_approved = false," -- as an identifier probe
+    # the statement doesn't parse, as nothing/an assignment it does.
+    source = '''
+from pgdevkit.db import execute
+
+async def f(con, fields, tiers):
+    set_clause = ", ".join(f"{c} = %({c})s" for c in fields)
+    is_approved_clause = "is_approved = false," if tiers is not None else ""
+    await execute(
+        f"""
+        UPDATE editing.bonus_rules
+        SET {set_clause},
+            {is_approved_clause}
+            modified_user = %(modified_user)s
+        WHERE bonus_rule_id = %(bonus_rule_id)s
+        """,
+        {**fields, "modified_user": "x", "bonus_rule_id": 1},
+        con=con,
+    )
+'''
+    assert _rules(_findings(source, tmp_path / "a.py")) == {"sql-fstring-injection"}
+
+
+def test_fstring_with_optional_trailing_clause_fragment_is_flagged(tmp_path: Path) -> None:
+    source = '''
+async def f(cur, lock):
+    await cur.execute(f"update t set x = 1 where id = %(id)s {lock}", {"id": 1})
+'''
+    assert _rules(_findings(source, tmp_path / "a.py")) == {"sql-fstring-injection"}
+
+
+def test_probe_variants_do_not_flag_non_sql_or_non_dml_text(tmp_path: Path) -> None:
+    source = '''
+async def f(cur, a, b, c, d, e, name):
+    await cur.execute(f"{a} {b} {c} {d} {e}")
+    await cur.execute(f"update the user {name} please")
+    await cur.execute(f"COPY t TO '/tmp/{name}.csv'")
+    await cur.execute(f"set {name} {a} {b} {c} {d} {e}")
+'''
+    assert _findings(source, tmp_path / "a.py") == []
+
+
+def test_probe_variants_do_not_read_prose_as_dml(tmp_path: Path) -> None:
+    # sqlglot parses these once the fragment is dropped/turned into an assignment ("UPDATE to AS version ...").
+    source = '''
+def f(cur, v):
+    cur.execute(f"Update to version {v}")
+    cur.execute(f"Delete the file {v}")
+    cur.execute(f"Insert coin {v}")
+    cur.execute(f"Update complete, {v} rows changed")
+'''
+    assert _findings(source, tmp_path / "a.py") == []

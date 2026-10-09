@@ -151,6 +151,18 @@ def test_sql_injection_is_error_and_unverified_call_is_review(tmp_path: Path) ->
     assert [f.rule for f in result.reviews] == ["sql-unverified-call"]
 
 
+def test_pgdevkit_execute_is_a_sql_sink_for_find_injection(tmp_path: Path) -> None:
+    (tmp_path / "db.py").write_text(
+        "from pgdevkit.db import execute\n\n"
+        'async def a(x):\n    await execute(f"update t set a = {x}")\n\n'
+        "async def b(x):\n    await execute(build(x))\n"
+    )
+    (tmp_path / "other.py").write_text('from lib import execute\n\ndef a(x):\n    execute(f"update t set a = {x}")\n')
+    result = _run(tmp_path)
+    assert [(f.path.name, f.rule) for f in result.errors] == [("db.py", "sql-fstring-injection")]
+    assert [(f.path.name, f.rule) for f in result.reviews] == [("db.py", "sql-unverified-call")]
+
+
 def test_tests_and_missing_paths(tmp_path: Path) -> None:
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "test_x.py").write_text("eval(x)\n")

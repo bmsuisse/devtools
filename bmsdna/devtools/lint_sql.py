@@ -1,5 +1,5 @@
 """AST rule engine for `bdt lint`'s postgres/psycopg checks (bmsuisse/skills#52):
-every `.execute()`/`.executemany()` call (and pgdevkit's `fetch_all`/`fetch_one`/`fetch_scalar` and
+every `.execute()`/`.executemany()` call (and pgdevkit's `fetch_all`/`fetch_one`/`fetch_scalar`/`execute` and
 `PostgresJsonResponse`) is classified by how its SQL argument was
 built, then checked against the `postgres-best-practices` skill's rules
 (../../skills/postgres-best-practices in a checkout of bmsuisse/skills).
@@ -24,6 +24,7 @@ than guessed at -- a linter that can't be sure must stay quiet, not noisy.
 from __future__ import annotations
 
 import ast
+import itertools
 import re
 import sys
 from collections.abc import Mapping
@@ -63,9 +64,17 @@ _POSITIONAL_PARAM_RE = re.compile(r"(?<!%)%s\b")
 # Placeholder substituted for a non-literal fragment (an f-string {expr}, a concatenated
 # non-constant operand, a str.format() {field}) before attempting an sqlglot parse -- padded
 # with spaces so it never merges into a neighboring identifier/keyword, and looks like an
-# ordinary identifier so the parse doesn't fail on the substitution itself.
+# ordinary identifier so the parse doesn't fail on the substitution itself (see
+# `_PROBE_SLOT_VARIANTS`/`_parse_probe_text` for the fallbacks when an identifier doesn't fit).
 _PROBE_PLACEHOLDER = " __X__ "
 _FORMAT_FIELD_RE = re.compile(r"\{[^{}]*\}")
+
+# A dynamic fragment isn't always an identifier/expression: `SET {assignments}, {extra}` where `extra` is
+# empty or `"is_approved = false,"`, or an optional `{where}` clause. When the probe with every fragment as an
+# identifier doesn't parse, each fragment is retried as "nothing" and as an assignment, all combinations
+# (only up to _MAX_PROBE_SLOTS fragments, so the number of parses stays small).
+_PROBE_SLOT_VARIANTS = (_PROBE_PLACEHOLDER, " ", " __X__ = 1 ")
+_MAX_PROBE_SLOTS = 4
 
 _MAX_RESOLVE_HOPS = 5
 
@@ -127,6 +136,7 @@ class _Trust:
     sqlglot_names: frozenset[str] = frozenset()
     literal_funcs: frozenset[str] = frozenset()
     sqlglot_aliases: Mapping[str, str] = field(default_factory=dict)  # local name -> name it was imported as
+    pgdevkit_sinks: frozenset[str] = frozenset()  # local names bound by `from pgdevkit[.x] import <sql-taking helper>`
 
 
 _NO_TRUST = _Trust()
@@ -185,10 +195,15 @@ def _unwrap_str_call(node: ast.Call) -> ast.expr | None:
     return None
 
 
+def _is_pgdevkit_module(module: str | None) -> bool:
+    return module is not None and (module == "pgdevkit" or module.startswith("pgdevkit."))
+
+
 def _file_trust(tree: ast.AST) -> _Trust:
     literal_funcs: set[str] = set()
     sqlglot_names: set[str] = set()
     sqlglot_aliases: dict[str, str] = {}
+    pgdevkit_sinks: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.returns is not None and _is_literal_string_ref(node.returns):
             literal_funcs.add(node.name)
@@ -197,7 +212,9 @@ def _file_trust(tree: ast.AST) -> _Trust:
         elif isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "sqlglot":
             sqlglot_names.update(a.asname or a.name for a in node.names)
             sqlglot_aliases.update({a.asname or a.name: a.name for a in node.names})
-    return _Trust(frozenset(sqlglot_names), frozenset(literal_funcs), sqlglot_aliases)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and _is_pgdevkit_module(node.module):
+            pgdevkit_sinks.update(a.asname or a.name for a in node.names if a.name in _PGDEVKIT_SQL_CALLEES)
+    return _Trust(frozenset(sqlglot_names), frozenset(literal_funcs), sqlglot_aliases, frozenset(pgdevkit_sinks))
 
 
 def _resolve_single(expr: ast.expr, lookup) -> ast.expr:
@@ -278,8 +295,47 @@ _FSTRING_FIX = (
 _GENERIC_FIX = "Use a psycopg t-string (Python 3.14+), psycopg.sql for dynamic SQL, or load_sql()/a .sql file for static SQL."
 
 
+# Keyword that must literally be in the text before a variant reading (a fragment as nothing/an assignment) may
+# count: sqlglot is lenient enough to read prose like "Update to version {v}" as an UPDATE with the fragment gone.
+_VARIANT_REQUIRED_KEYWORD: dict[type, re.Pattern[str]] = {}
+if exp is not None:
+    _VARIANT_REQUIRED_KEYWORD = {
+        exp.Select: re.compile(r"(?i)\bfrom\b"),
+        exp.Union: re.compile(r"(?i)\bfrom\b"),
+        exp.Insert: re.compile(r"(?i)\binto\b"),
+        exp.Update: re.compile(r"(?i)\bset\b"),
+        exp.Delete: re.compile(r"(?i)\bfrom\b"),
+        exp.Merge: re.compile(r"(?i)\busing\b"),
+    }
+
+
+def _parse_probe_text(text: str) -> "exp.Expression | None":
+    """`parse_sql_text` for text with `_PROBE_PLACEHOLDER` standing in for dynamic fragments: the placeholder
+    as an identifier first, then (see `_PROBE_SLOT_VARIANTS`) every fragment as nothing/an assignment -- the
+    latter only when the literal text carries the statement's own keyword (`_VARIANT_REQUIRED_KEYWORD`)."""
+    parsed = parse_sql_text(text)
+    if parsed is not None:
+        return parsed
+    parts = text.split(_PROBE_PLACEHOLDER)
+    slots = len(parts) - 1
+    if not 1 <= slots <= _MAX_PROBE_SLOTS:
+        return None
+    literal_text = " ".join(parts)
+    for combination in itertools.product(_PROBE_SLOT_VARIANTS, repeat=slots):
+        if all(c == _PROBE_PLACEHOLDER for c in combination):
+            continue  # that's `text` itself, already tried
+        candidate = "".join(a + b for a, b in itertools.zip_longest(parts, combination, fillvalue=""))
+        parsed = parse_sql_text(candidate)
+        if parsed is None:
+            continue
+        keyword = next((rx for t, rx in _VARIANT_REQUIRED_KEYWORD.items() if isinstance(parsed, t)), None)
+        if keyword is not None and keyword.search(literal_text):
+            return parsed
+    return None
+
+
 def _injection_finding(text: str, path: Path, lineno: int, rule: str, how: str) -> list[Finding]:
-    if parse_sql_text(text) is None:
+    if _parse_probe_text(text) is None:
         return []
     fix = _FSTRING_FIX if rule == "sql-fstring-injection" else _GENERIC_FIX
     return [Finding(path, lineno, rule, f"SQL built with {how} -- injection risk. {fix}")]
@@ -455,22 +511,32 @@ def _is_sql_named(name: str) -> bool:
     return lowered == "sql" or lowered.endswith("_sql")
 
 
-# pgdevkit's `fetch_all`/`fetch_one`/`fetch_scalar` and `pgdevkit.fastapi.PostgresJsonResponse` run their first
-# argument as SQL, exactly like `.execute()`, so they get the same rules (plain functions / a class, so matched by
-# bare name too). Matched by name only, so not covered: an alias (`as PJR`), a subclass under another name (the
-# documented `class AppJson(PostgresJsonResponse): expose_errors = ...`), and the pre-pgdevkit
+# pgdevkit's `fetch_all`/`fetch_one`/`fetch_scalar`/`execute` and `pgdevkit.fastapi.PostgresJsonResponse` run their
+# first argument as SQL, exactly like `.execute()`, so they get the same rules. As an attribute (`db.fetch_all(...)`,
+# `pgdevkit.db.execute(...)`) they are matched by name only, like `.execute()` itself.
+_PGDEVKIT_SQL_CALLEES = frozenset({"fetch_all", "fetch_one", "fetch_scalar", "execute", "PostgresJsonResponse"})
+# A bare `execute(...)` is far too generic a name (sqlite helpers, subprocess wrappers, ...): it counts only in a file
+# that imports it from `pgdevkit`/`pgdevkit.db` (also under an alias: `from pgdevkit.db import execute as run`; see
+# `_file_trust`). The import is tracked file-wide, so a local def/parameter named like it is not told apart. The sqlglot
+# DML gate still applies on top. The other callees are matched by bare name too, and by their pgdevkit import alias.
+# Not covered: a re-export through the project's own module (`from app.db import execute`), a subclass of
+# PostgresJsonResponse under another name (the documented `class AppJson(PostgresJsonResponse)`), and the pre-pgdevkit
 # `PostgresJsonResponse("postgres", sql, ...)` copy in CCMT2, whose first argument is a connection source -- its SQL
 # only gets checked once that call site moves to pgdevkit.
-_PGDEVKIT_SQL_CALLEES = frozenset({"fetch_all", "fetch_one", "fetch_scalar", "PostgresJsonResponse"})
+_IMPORT_GATED_BARE_CALLEES = frozenset({"execute"})
+_BARE_NAME_SQL_CALLEES = _PGDEVKIT_SQL_CALLEES - _IMPORT_GATED_BARE_CALLEES
 
 
-def _execute_query_arg(call: ast.Call) -> ast.expr | None:
+def _is_pgdevkit_sink_call(func: ast.expr, trust: _Trust) -> bool:
+    if isinstance(func, ast.Name):
+        return func.id in _BARE_NAME_SQL_CALLEES or func.id in trust.pgdevkit_sinks
+    return isinstance(func, ast.Attribute) and func.attr in _PGDEVKIT_SQL_CALLEES
+
+
+def _execute_query_arg(call: ast.Call, trust: _Trust = _NO_TRUST) -> ast.expr | None:
     func = call.func
     is_execute = isinstance(func, ast.Attribute) and func.attr in ("execute", "executemany")
-    is_fetch_helper = (isinstance(func, ast.Name) and func.id in _PGDEVKIT_SQL_CALLEES) or (
-        isinstance(func, ast.Attribute) and func.attr in _PGDEVKIT_SQL_CALLEES
-    )
-    if not (is_execute or is_fetch_helper):
+    if not (is_execute or _is_pgdevkit_sink_call(func, trust)):
         return None
     if call.args:
         return call.args[0]
@@ -634,7 +700,7 @@ class _ExecuteCallVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         self.findings.extend(_sqlglot_builder_findings(node, self.path, self.trust, self._lookup, self._sqlglot_vars))
-        query_arg = _execute_query_arg(node)
+        query_arg = _execute_query_arg(node, self.trust)
         if query_arg is not None:
             found = _check_query_arg(query_arg, self._lookup, self.path, node.lineno, self.trust, self.review)
             if isinstance(query_arg, ast.Name) and _is_sql_named(query_arg.id) and self._all_bare_strings(query_arg.id):
