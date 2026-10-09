@@ -616,12 +616,20 @@ bdt lint backend/db/a.py b.py  # scan only these files -- e.g. from a prek/pre-c
 bdt lint --no-tooling-check    # skip the tooling-config check for this run
 ```
 
-Every `.execute()`/`.executemany()` call -- and pgdevkit's `fetch_all`/`fetch_one`/`fetch_scalar` and
+Every `.execute()`/`.executemany()` call -- and pgdevkit's `fetch_all`/`fetch_one`/`fetch_scalar`/`execute` and
 `PostgresJsonResponse`, which only accept a literal string, sqlglot expression, `psycopg.sql` or t-string -- whose SQL argument can be resolved to a
 literal or f-string/concatenation/`%`-format expression is checked (an
 unresolvable argument, e.g. a plain function parameter, is silently skipped --
 this can't false-positive on non-psycopg `.execute()` calls, or on dynamic SQL
-it can't see through):
+it can't see through).
+
+pgdevkit's helpers are matched by name (`fetch_all(...)`, `db.fetch_all(...)`, `pgdevkit.db.execute(...)`). The one
+exception is a *bare* `execute(...)`, a far too generic name: it is only checked in a file that imports it from
+`pgdevkit`/`pgdevkit.db` (`from pgdevkit.db import execute`, also aliased: `... import execute as run`), so an unrelated
+`execute()` from another library, or one defined locally, is never flagged. Not covered: a re-export through the
+project's own module (`from app.db import execute`; call it as `db.execute(...)` or import it from `pgdevkit.db`
+instead), a subclass of `PostgresJsonResponse` under another name, and CCMT2's pre-pgdevkit
+`PostgresJsonResponse("postgres", sql)`, whose first argument is a connection source, not SQL.
 
 - **`sql-inline-too-complex`** — more than a trivial (≤4 line) query, or a
   JOIN/CTE/subquery/aggregation, inline instead of `load_sql()`/a `.sql` file.
@@ -821,7 +829,7 @@ Findings have two severities: **error** (a definite unsafe pattern, exit code 1)
 (depends on where a value comes from; listed with an instruction for an AI/human to verify, exit
 code 0 unless `--strict`).
 
-- **SQL** (Python `.execute()` / `fetch_all()` / `fetch_one()` / `fetch_scalar()` / `PostgresJsonResponse()`): f-string / `%` / concatenation / `.format()` SQL is an error.
+- **SQL** (Python `.execute()` / `fetch_all()` / `fetch_one()` / `fetch_scalar()` / `execute()` from pgdevkit / `PostgresJsonResponse()`): f-string / `%` / concatenation / `.format()` SQL is an error.
   SQL from `load_sql()`, `sql.SQL`, sqlglot (`expr.sql()`, `sqlglot.*`), `cast(LiteralString, <sqlglot expr>)` (the cast is only as safe as its argument) or
   a function in the same file annotated `-> LiteralString` is trusted; SQL from any other function
   call is a `sql-unverified-call` review item. (`bdt lint` accepts the same trusted forms but never

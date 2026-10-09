@@ -1,5 +1,5 @@
 """AST rule engine for `bdt lint`'s postgres/psycopg checks (bmsuisse/skills#52):
-every `.execute()`/`.executemany()` call (and pgdevkit's `fetch_all`/`fetch_one`/`fetch_scalar` and
+every `.execute()`/`.executemany()` call (and pgdevkit's `fetch_all`/`fetch_one`/`fetch_scalar`/`execute` and
 `PostgresJsonResponse`) is classified by how its SQL argument was
 built, then checked against the `postgres-best-practices` skill's rules
 (../../skills/postgres-best-practices in a checkout of bmsuisse/skills).
@@ -127,6 +127,7 @@ class _Trust:
     sqlglot_names: frozenset[str] = frozenset()
     literal_funcs: frozenset[str] = frozenset()
     sqlglot_aliases: Mapping[str, str] = field(default_factory=dict)  # local name -> name it was imported as
+    pgdevkit_sinks: frozenset[str] = frozenset()  # local names bound by `from pgdevkit[.x] import <sql-taking helper>`
 
 
 _NO_TRUST = _Trust()
@@ -185,10 +186,15 @@ def _unwrap_str_call(node: ast.Call) -> ast.expr | None:
     return None
 
 
+def _is_pgdevkit_module(module: str | None) -> bool:
+    return module is not None and (module == "pgdevkit" or module.startswith("pgdevkit."))
+
+
 def _file_trust(tree: ast.AST) -> _Trust:
     literal_funcs: set[str] = set()
     sqlglot_names: set[str] = set()
     sqlglot_aliases: dict[str, str] = {}
+    pgdevkit_sinks: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.returns is not None and _is_literal_string_ref(node.returns):
             literal_funcs.add(node.name)
@@ -197,7 +203,9 @@ def _file_trust(tree: ast.AST) -> _Trust:
         elif isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "sqlglot":
             sqlglot_names.update(a.asname or a.name for a in node.names)
             sqlglot_aliases.update({a.asname or a.name: a.name for a in node.names})
-    return _Trust(frozenset(sqlglot_names), frozenset(literal_funcs), sqlglot_aliases)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and _is_pgdevkit_module(node.module):
+            pgdevkit_sinks.update(a.asname or a.name for a in node.names if a.name in _PGDEVKIT_SQL_CALLEES)
+    return _Trust(frozenset(sqlglot_names), frozenset(literal_funcs), sqlglot_aliases, frozenset(pgdevkit_sinks))
 
 
 def _resolve_single(expr: ast.expr, lookup) -> ast.expr:
@@ -455,22 +463,29 @@ def _is_sql_named(name: str) -> bool:
     return lowered == "sql" or lowered.endswith("_sql")
 
 
-# pgdevkit's `fetch_all`/`fetch_one`/`fetch_scalar` and `pgdevkit.fastapi.PostgresJsonResponse` run their first
-# argument as SQL, exactly like `.execute()`, so they get the same rules (plain functions / a class, so matched by
-# bare name too). Matched by name only, so not covered: an alias (`as PJR`), a subclass under another name (the
-# documented `class AppJson(PostgresJsonResponse): expose_errors = ...`), and the pre-pgdevkit
-# `PostgresJsonResponse("postgres", sql, ...)` copy in CCMT2, whose first argument is a connection source -- its SQL
-# only gets checked once that call site moves to pgdevkit.
-_PGDEVKIT_SQL_CALLEES = frozenset({"fetch_all", "fetch_one", "fetch_scalar", "PostgresJsonResponse"})
+# pgdevkit's `fetch_all`/`fetch_one`/`fetch_scalar`/`execute` and `pgdevkit.fastapi.PostgresJsonResponse` run their
+# first argument as SQL, exactly like `.execute()`, so they get the same rules. As an attribute (`db.fetch_all(...)`,
+# `pgdevkit.db.execute(...)`) they are matched by name only, like `.execute()` itself.
+_PGDEVKIT_SQL_CALLEES = frozenset({"fetch_all", "fetch_one", "fetch_scalar", "execute", "PostgresJsonResponse"})
+# Bare names (`fetch_all(...)`) are matched by name alone -- except `execute`, far too generic a name (sqlite helpers,
+# subprocess wrappers, ...): `execute(...)` counts only in a file that imports it from `pgdevkit`/`pgdevkit.db` (also under an
+# alias: `from pgdevkit.db import execute as run`). The sqlglot DML gate still applies on top. Not covered: a re-export
+# through the project's own module (`from app.db import execute`), a subclass of PostgresJsonResponse under another name
+# (the documented `class AppJson(PostgresJsonResponse)`), and the pre-pgdevkit `PostgresJsonResponse("postgres", sql, ...)`
+# copy in CCMT2, whose first argument is a connection source -- its SQL only gets checked once that call site moves to pgdevkit.
+_BARE_NAME_SQL_CALLEES = _PGDEVKIT_SQL_CALLEES - {"execute"}
 
 
-def _execute_query_arg(call: ast.Call) -> ast.expr | None:
+def _is_pgdevkit_sink_call(func: ast.expr, trust: _Trust) -> bool:
+    if isinstance(func, ast.Name):
+        return func.id in _BARE_NAME_SQL_CALLEES or func.id in trust.pgdevkit_sinks
+    return isinstance(func, ast.Attribute) and func.attr in _PGDEVKIT_SQL_CALLEES
+
+
+def _execute_query_arg(call: ast.Call, trust: _Trust = _NO_TRUST) -> ast.expr | None:
     func = call.func
     is_execute = isinstance(func, ast.Attribute) and func.attr in ("execute", "executemany")
-    is_fetch_helper = (isinstance(func, ast.Name) and func.id in _PGDEVKIT_SQL_CALLEES) or (
-        isinstance(func, ast.Attribute) and func.attr in _PGDEVKIT_SQL_CALLEES
-    )
-    if not (is_execute or is_fetch_helper):
+    if not (is_execute or _is_pgdevkit_sink_call(func, trust)):
         return None
     if call.args:
         return call.args[0]
@@ -634,7 +649,7 @@ class _ExecuteCallVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         self.findings.extend(_sqlglot_builder_findings(node, self.path, self.trust, self._lookup, self._sqlglot_vars))
-        query_arg = _execute_query_arg(node)
+        query_arg = _execute_query_arg(node, self.trust)
         if query_arg is not None:
             found = _check_query_arg(query_arg, self._lookup, self.path, node.lineno, self.trust, self.review)
             if isinstance(query_arg, ast.Name) and _is_sql_named(query_arg.id) and self._all_bare_strings(query_arg.id):
