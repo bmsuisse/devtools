@@ -45,7 +45,11 @@ def _call_name(node: ast.Call) -> str | None:
 
 
 def _literal(node: ast.expr | None) -> str | None:
-    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+    return (
+        node.value
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        else None
+    )
 
 
 def _path_needle(literal: str) -> str | None:
@@ -59,11 +63,19 @@ class _References:
     def __init__(self, repo_root: Path, loader_functions: frozenset[str]) -> None:
         self.repo_root = repo_root.resolve()
         self.loader_functions = loader_functions
-        self.exact: set[tuple[str, str]] = set()  # (topic, name) from fully literal loader calls
-        self.dynamic_by_topic: dict[str, set[str]] = {}  # topic -> string literals of files with a dynamic-name call
-        self.dynamic_any_topic: set[str] = set()  # string literals of files with a dynamic-topic call
+        self.exact: set[tuple[str, str]] = (
+            set()
+        )  # (topic, name) from fully literal loader calls
+        self.dynamic_by_topic: dict[
+            str, set[str]
+        ] = {}  # topic -> string literals of files with a dynamic-name call
+        self.dynamic_any_topic: set[str] = (
+            set()
+        )  # string literals of files with a dynamic-topic call
         self.path_needles: set[str] = set()
-        self.bare_by_file: list[tuple[Path, set[str]]] = []  # (python file, string literals ending in .sql)
+        self.bare_by_file: list[
+            tuple[Path, set[str]]
+        ] = []  # (python file, string literals ending in .sql)
         self.unparseable: list[Path] = []
 
     def scan(self, python_files: Iterable[Path]) -> None:
@@ -73,13 +85,21 @@ class _References:
             except SyntaxError, OSError, ValueError, RecursionError, MemoryError:
                 self.unparseable.append(path)
                 continue
-            literals = {n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+            literals = {
+                n.value
+                for n in ast.walk(tree)
+                if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            }
             sql_literals = {s for s in literals if s.endswith(".sql")}
             self.path_needles.update(n for s in sql_literals if (n := _path_needle(s)))
             if sql_literals:
                 self.bare_by_file.append((path.resolve(), sql_literals))
             for node in ast.walk(tree):
-                if isinstance(node, ast.Call) and _call_name(node) in self.loader_functions and (node.args or node.keywords):
+                if (
+                    isinstance(node, ast.Call)
+                    and _call_name(node) in self.loader_functions
+                    and (node.args or node.keywords)
+                ):
                     self._add_loader_call(node, literals)
 
     def _add_loader_call(self, node: ast.Call, literals: set[str]) -> None:
@@ -97,16 +117,26 @@ class _References:
         stem, topic = sql_file.stem, sql_file.parent.name
         if (topic, stem) in self.exact:
             return True
-        if stem in self.dynamic_by_topic.get(topic, ()) or stem in self.dynamic_any_topic:
+        if (
+            stem in self.dynamic_by_topic.get(topic, ())
+            or stem in self.dynamic_any_topic
+        ):
             return True
         resolved = sql_file.resolve()
         rel = resolved.relative_to(self.repo_root).as_posix()
-        if any(rel == needle or rel.endswith("/" + needle) for needle in self.path_needles):
+        if any(
+            rel == needle or rel.endswith("/" + needle) for needle in self.path_needles
+        ):
             return True
         scope = resolved.parent.parent
-        if scope == self.repo_root:  # a top-level SQL folder: "its parent" would be the whole repo, tests included
+        if (
+            scope == self.repo_root
+        ):  # a top-level SQL folder: "its parent" would be the whole repo, tests included
             return False
-        return any(sql_file.name in lits and py.is_relative_to(scope) for py, lits in self.bare_by_file)
+        return any(
+            sql_file.name in lits and py.is_relative_to(scope)
+            for py, lits in self.bare_by_file
+        )
 
 
 def check_unreferenced_sql_files(

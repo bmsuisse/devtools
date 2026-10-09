@@ -27,4 +27,6 @@ class Finding:
 
 
 def render_findings(findings: list[Finding]) -> str:
-    return "\n".join(f.render() for f in sorted(findings, key=lambda f: (f.path, f.line, f.rule)))
+    return "\n".join(
+        f.render() for f in sorted(findings, key=lambda f: (f.path, f.line, f.rule))
+    )

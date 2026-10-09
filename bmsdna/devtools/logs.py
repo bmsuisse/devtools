@@ -37,17 +37,24 @@ def run_az(*args: str) -> tuple[int, str]:
 
 def find_app_insights(resource_group: str) -> str | None:
     code, out = run_az(
-        "resource", "list",
-        "--resource-group", resource_group,
-        "--resource-type", "Microsoft.Insights/components",
-        "--query", "[0].name",
-        "--output", "tsv",
+        "resource",
+        "list",
+        "--resource-group",
+        resource_group,
+        "--resource-type",
+        "Microsoft.Insights/components",
+        "--query",
+        "[0].name",
+        "--output",
+        "tsv",
     )
     name = out.strip()
     return name if code == 0 and name else None
 
 
-def query_roles(app_insights: str, resource_group: str, minutes: int) -> tuple[dict[str, int] | None, str | None]:
+def query_roles(
+    app_insights: str, resource_group: str, minutes: int
+) -> tuple[dict[str, int] | None, str | None]:
     kql = f"""
 union traces, exceptions
 | where timestamp > ago({minutes}m)
@@ -55,11 +62,17 @@ union traces, exceptions
 | order by count_ desc
 """.strip()
     code, out = run_az(
-        "monitor", "app-insights", "query",
-        "--app", app_insights,
-        "--resource-group", resource_group,
-        "--analytics-query", kql,
-        "--output", "json",
+        "monitor",
+        "app-insights",
+        "query",
+        "--app",
+        app_insights,
+        "--resource-group",
+        resource_group,
+        "--analytics-query",
+        kql,
+        "--output",
+        "json",
     )
     if code != 0:
         return None, out
@@ -75,7 +88,9 @@ union traces, exceptions
     counts: dict[str, int] = {}
     for row in table["rows"]:
         role = row[role_col] or "(unknown)"
-        counts[role] = int(row[count_col]) if count_col is not None and row[count_col] else 1
+        counts[role] = (
+            int(row[count_col]) if count_col is not None and row[count_col] else 1
+        )
     return dict(sorted(counts.items(), key=lambda x: x[1], reverse=True)), None
 
 
@@ -92,11 +107,17 @@ union traces, exceptions
 | take 500
 """.strip()
     code, out = run_az(
-        "monitor", "app-insights", "query",
-        "--app", app_insights,
-        "--resource-group", resource_group,
-        "--analytics-query", kql,
-        "--output", "json",
+        "monitor",
+        "app-insights",
+        "query",
+        "--app",
+        app_insights,
+        "--resource-group",
+        resource_group,
+        "--analytics-query",
+        kql,
+        "--output",
+        "json",
     )
     if code != 0:
         return None, out
@@ -114,15 +135,35 @@ union traces, exceptions
 
     results = []
     for row in table["rows"]:
-        sev: int | None = row[col_index["severityLevel"]] if "severityLevel" in col_index else None
+        sev: int | None = (
+            row[col_index["severityLevel"]] if "severityLevel" in col_index else None
+        )
         lvl = (
-            {0: "VERBOSE ", 1: "INFO    ", 2: "WARNING ", 3: "ERROR   ", 4: "CRITICAL"}.get(sev, "UNKNOWN ")
-            if sev is not None else "UNKNOWN "
+            {
+                0: "VERBOSE ",
+                1: "INFO    ",
+                2: "WARNING ",
+                3: "ERROR   ",
+                4: "CRITICAL",
+            }.get(sev, "UNKNOWN ")
+            if sev is not None
+            else "UNKNOWN "
         )
         msg = col(row, "message", "outerMessage", "innermostMessage")
         item_type = col(row, "itemType")
-        exc = f" | {col(row, 'type')}: {col(row, 'outerMessage')}" if item_type == "exception" else ""
-        results.append({"timestamp": row[col_index["timestamp"]], "lvl": lvl, "msg": msg, "exc": exc})
+        exc = (
+            f" | {col(row, 'type')}: {col(row, 'outerMessage')}"
+            if item_type == "exception"
+            else ""
+        )
+        results.append(
+            {
+                "timestamp": row[col_index["timestamp"]],
+                "lvl": lvl,
+                "msg": msg,
+                "exc": exc,
+            }
+        )
     return results, None
 
 
@@ -143,10 +184,17 @@ def print_roles(app_insights: str, resource_group: str, minutes: int) -> None:
 
 
 def print_logs(
-    app_insights: str, resource_group: str, minutes: int, level: str, role: str, no_color: bool
+    app_insights: str,
+    resource_group: str,
+    minutes: int,
+    level: str,
+    role: str,
+    no_color: bool,
 ) -> None:
     min_severity = SEVERITY_MAP[level]
-    print(f"Querying last {minutes} min | role={role} | severity>={level}...", flush=True)
+    print(
+        f"Querying last {minutes} min | role={role} | severity>={level}...", flush=True
+    )
     rows, err = query_logs(app_insights, resource_group, minutes, min_severity, role)
     if rows is None:
         found = find_app_insights(resource_group)
@@ -161,7 +209,11 @@ def print_logs(
 
     print(f"--- {len(rows)} entries ---")
     for row in rows:
-        ts = datetime.fromisoformat(row["timestamp"].rstrip("Z")).replace(tzinfo=timezone.utc).strftime("%H:%M:%S")
+        ts = (
+            datetime.fromisoformat(row["timestamp"].rstrip("Z"))
+            .replace(tzinfo=timezone.utc)
+            .strftime("%H:%M:%S")
+        )
         line = f"{ts} [{row['lvl']}] {row['msg']}{row['exc']}"
         if no_color:
             print(line)

@@ -30,23 +30,33 @@ _HTML_SUFFIXES = (".html", ".htm")
 _MASKABLE_SUFFIXES = (".ts", ".tsx", ".mts", ".js", ".jsx", ".mjs")
 
 _CSP_RE = re.compile(r"content-security-policy", re.IGNORECASE)
-_CSP_WEAK_RE = re.compile(r"'unsafe-(?:inline|eval)'|(?:script|default)-src[^;\n]*\s\*(?=[\s;\"'`]|$)", re.IGNORECASE)
+_CSP_WEAK_RE = re.compile(
+    r"'unsafe-(?:inline|eval)'|(?:script|default)-src[^;\n]*\s\*(?=[\s;\"'`]|$)",
+    re.IGNORECASE,
+)
 
 _INNER_HTML_ASSIGN_RE = re.compile(r"\.\s*(?:inner|outer)HTML\s*\+?=(?!=)")
 _INSERT_HTML_RE = re.compile(r"\.\s*insertAdjacentHTML\s*\(")
 _DOC_WRITE_RE = re.compile(r"(?<![\w$])document\s*\.\s*write(?:ln)?\s*\(")
 _EVAL_RE = re.compile(r"(?<![\w$.])eval\s*\(")
 _NEW_FUNCTION_RE = re.compile(r"(?<![\w$.])new\s+Function\s*\(")
-_TIMER_STRING_RE = re.compile(r"(?<![\w$.])(?:setTimeout|setInterval)\s*\(\s*(?:['\"`]|[\w$.]+\s*\+)")
+_TIMER_STRING_RE = re.compile(
+    r"(?<![\w$.])(?:setTimeout|setInterval)\s*\(\s*(?:['\"`]|[\w$.]+\s*\+)"
+)
 _DANGEROUS_HTML_RE = re.compile(r"\bdangerouslySetInnerHTML\b")
 _V_HTML_RE = re.compile(r"\bv-html\s*=|\{@html\b")
-_JS_URL_ATTR_RE = re.compile(r"""(?:href|src|action|formaction)\s*=\s*\{?\s*[`'"]\s*javascript\s*:""", re.IGNORECASE)
+_JS_URL_ATTR_RE = re.compile(
+    r"""(?:href|src|action|formaction)\s*=\s*\{?\s*[`'"]\s*javascript\s*:""",
+    re.IGNORECASE,
+)
 _POST_MESSAGE_STAR_RE = re.compile(r"""postMessage\s*\([^;]*?,\s*['"]\*['"]\s*[,)]""")
 _IFRAME_RE = re.compile(r"<iframe\b", re.IGNORECASE)
 _SRCDOC_RE = re.compile(r"\bsrc[dD]oc\b\s*=")
 
 
-def _sink(path: Path, text: str, pos: int, rule: str, message: str, severity: str) -> Finding:
+def _sink(
+    path: Path, text: str, pos: int, rule: str, message: str, severity: str
+) -> Finding:
     return Finding(path, _line_of(text, pos), rule, message, severity=severity)
 
 
@@ -130,7 +140,10 @@ def check_frontend_file(path: Path, source: str | None = None) -> list[Finding]:
         text: str | None = None,
     ) -> None:
         haystack = skeleton if text is None else text
-        findings.extend(_sink(path, full_text, m.start(), rule, message, severity) for m in regex.finditer(haystack))
+        findings.extend(
+            _sink(path, full_text, m.start(), rule, message, severity)
+            for m in regex.finditer(haystack)
+        )
 
     if suffix not in _HTML_SUFFIXES:
         scan(
@@ -217,7 +230,11 @@ def find_csp_weakening(path: Path, source: str | None = None) -> list[Finding]:
             source = path.read_text(encoding="utf-8")
         except OSError, UnicodeDecodeError:
             return []
-    if not _CSP_RE.search(source) and "script-src" not in source.lower() and "default-src" not in source.lower():
+    if (
+        not _CSP_RE.search(source)
+        and "script-src" not in source.lower()
+        and "default-src" not in source.lower()
+    ):
         return []
     return [
         _sink(

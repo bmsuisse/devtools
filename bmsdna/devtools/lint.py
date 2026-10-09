@@ -63,11 +63,15 @@ class LintResult:
         return not self.findings
 
 
-def _iter_python_files(paths: list[Path], exclude_dir_names: frozenset[str]) -> tuple[list[Path], list[Path]]:
+def _iter_python_files(
+    paths: list[Path], exclude_dir_names: frozenset[str]
+) -> tuple[list[Path], list[Path]]:
     return _iter_files(paths, exclude_dir_names, (".py",))
 
 
-def _iter_files(paths: list[Path], exclude_dir_names: frozenset[str], suffixes: tuple[str, ...]) -> tuple[list[Path], list[Path]]:
+def _iter_files(
+    paths: list[Path], exclude_dir_names: frozenset[str], suffixes: tuple[str, ...]
+) -> tuple[list[Path], list[Path]]:
     """`paths` with directories expanded to every non-excluded file ending in one of `suffixes` under them
     (sorted, for stable output); a path that's already such a file is used as-is
     regardless of exclude_dir_names -- an explicit file (e.g. from a pre-commit hook's
@@ -95,7 +99,9 @@ def _iter_files(paths: list[Path], exclude_dir_names: frozenset[str], suffixes: 
             found: list[Path] = []
             for dirpath, dirnames, filenames in os.walk(path):
                 dirnames[:] = [d for d in dirnames if d not in exclude_dir_names]
-                found.extend(Path(dirpath, f) for f in filenames if f.endswith(suffixes))
+                found.extend(
+                    Path(dirpath, f) for f in filenames if f.endswith(suffixes)
+                )
             for candidate in sorted(found):
                 add(candidate)
         elif path.is_file():
@@ -107,7 +113,9 @@ def _iter_files(paths: list[Path], exclude_dir_names: frozenset[str], suffixes: 
     return files, missing
 
 
-def run(paths: list[str], *, root: Path | None = None, skip_tooling_check: bool = False) -> LintResult:
+def run(
+    paths: list[str], *, root: Path | None = None, skip_tooling_check: bool = False
+) -> LintResult:
     """Runs every `bdt lint` check.
 
     `paths` -- files and/or directories to scan; empty means "scan `root`, recursively".
@@ -123,25 +131,45 @@ def run(paths: list[str], *, root: Path | None = None, skip_tooling_check: bool 
     target_paths = [Path(p) for p in paths] if paths else [root]
     config = load_bdt_table("lint", root)
 
-    exclude_dir_names = _DEFAULT_EXCLUDE_DIR_NAMES | set(config.get("exclude_dirs", []) or [])
-    field_threshold = int(config.get("pydantic_field_threshold", DEFAULT_FIELD_THRESHOLD))
-    base_class_names = frozenset(config.get("pydantic_base_classes", list(DEFAULT_BASE_CLASS_NAMES)))
-    allowed_subdirs = frozenset(config.get("pydantic_allowed_subdirs", list(DEFAULT_ALLOWED_SUBDIRS)))
-    api_dir_names = frozenset(config.get("pydantic_api_dir_names", list(DEFAULT_API_DIR_NAMES)))
+    exclude_dir_names = _DEFAULT_EXCLUDE_DIR_NAMES | set(
+        config.get("exclude_dirs", []) or []
+    )
+    field_threshold = int(
+        config.get("pydantic_field_threshold", DEFAULT_FIELD_THRESHOLD)
+    )
+    base_class_names = frozenset(
+        config.get("pydantic_base_classes", list(DEFAULT_BASE_CLASS_NAMES))
+    )
+    allowed_subdirs = frozenset(
+        config.get("pydantic_allowed_subdirs", list(DEFAULT_ALLOWED_SUBDIRS))
+    )
+    api_dir_names = frozenset(
+        config.get("pydantic_api_dir_names", list(DEFAULT_API_DIR_NAMES))
+    )
 
     pyproject_path = find_pyproject(root)
     repo_root = pyproject_path.parent if pyproject_path else root
 
     ts_exclude_globs = [str(g) for g in config.get("ts_exclude_globs", []) or []]
-    ts_markers = DEFAULT_NON_JSON_MARKERS + tuple(str(m) for m in config.get("ts_non_json_markers", []) or [])
+    ts_markers = DEFAULT_NON_JSON_MARKERS + tuple(
+        str(m) for m in config.get("ts_non_json_markers", []) or []
+    )
 
     python_files, missing_paths = _iter_python_files(target_paths, exclude_dir_names)
-    ts_files, _ = _iter_files(target_paths, exclude_dir_names | DEFAULT_TS_EXCLUDE_DIR_NAMES, TS_SUFFIXES)
+    ts_files, _ = _iter_files(
+        target_paths, exclude_dir_names | DEFAULT_TS_EXCLUDE_DIR_NAMES, TS_SUFFIXES
+    )
     if python_files:
         require_sqlglot()
 
     findings: list[Finding] = [
-        Finding(path, 0, "lint-path-not-found", f"'{path}' doesn't exist -- nothing was scanned for it.") for path in missing_paths
+        Finding(
+            path,
+            0,
+            "lint-path-not-found",
+            f"'{path}' doesn't exist -- nothing was scanned for it.",
+        )
+        for path in missing_paths
     ]
     for path in python_files:
         findings.extend(check_sql_file(path))
@@ -158,14 +186,22 @@ def run(paths: list[str], *, root: Path | None = None, skip_tooling_check: bool 
 
     generator_cache: dict[Path, str | None] = {}
     for ts_path in ts_files:
-        if is_excluded_ts_file(ts_path, repo_root=repo_root, exclude_globs=ts_exclude_globs):
+        if is_excluded_ts_file(
+            ts_path, repo_root=repo_root, exclude_globs=ts_exclude_globs
+        ):
             continue
         generator = find_generator(ts_path, repo_root=repo_root, cache=generator_cache)
         if generator is None:
             continue  # no generated API client in this package -- nothing to use instead of hand-wiring
-        findings.extend(check_typescript_file(ts_path, generator=generator, non_json_markers=ts_markers))
+        findings.extend(
+            check_typescript_file(
+                ts_path, generator=generator, non_json_markers=ts_markers
+            )
+        )
 
-    tooling_skipped = skip_tooling_check or bool(config.get("skip_tooling_check", False))
+    tooling_skipped = skip_tooling_check or bool(
+        config.get("skip_tooling_check", False)
+    )
     if not tooling_skipped:
         findings.extend(check_tooling(root))
 

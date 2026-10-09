@@ -20,7 +20,9 @@ from .gitrepo import AdoRemote, GitHubRemote
 BUILD_PASSING = "passing"
 BUILD_FAILING = "failing"
 BUILD_PENDING = "pending"
-BUILD_WAITING = "waiting"  # paused on a manual approval; nothing resolves it without a human
+BUILD_WAITING = (
+    "waiting"  # paused on a manual approval; nothing resolves it without a human
+)
 BUILD_NONE = "none"
 BUILD_UNKNOWN = "unknown"
 
@@ -74,7 +76,8 @@ def _is_this_repo(repo: dict, remote: GitHubRemote) -> bool:
     """Is a `closingIssuesReferences[].repository` this repo -- owner and name (an `otherorg/api` issue isn't `myorg/api`'s)?"""
     owner = (repo.get("owner") or {}).get("login", remote.owner)
     return (
-        owner.casefold() == remote.owner.casefold() and repo.get("name", remote.repo).casefold() == remote.repo.casefold()
+        owner.casefold() == remote.owner.casefold()
+        and repo.get("name", remote.repo).casefold() == remote.repo.casefold()
     )
 
 
@@ -119,10 +122,16 @@ def _ado_build(session: requests.Session, remote: AdoRemote, pr: dict) -> str:
     pr_id = pr["pullRequestId"]
     source_branch = pr["sourceRefName"].removeprefix("refs/heads/")
     try:
-        builds = pr_build.latest_per_pipeline(pr_build.get_builds_for_pr(session, remote, source_branch, pr_id))
+        builds = pr_build.latest_per_pipeline(
+            pr_build.get_builds_for_pr(session, remote, source_branch, pr_id)
+        )
         # a timeline lookup per running build -- only worth it when nothing has failed yet
         failed = any(b.get("result") == "failed" for b in builds)
-        approval = not failed and any(b.get("status") != "completed" for b in builds) and bool(pr_build.find_pending_approvals(session, remote, builds))
+        approval = (
+            not failed
+            and any(b.get("status") != "completed" for b in builds)
+            and bool(pr_build.find_pending_approvals(session, remote, builds))
+        )
     except requests.RequestException:
         return BUILD_UNKNOWN
     return ado_build_state(builds, approval)

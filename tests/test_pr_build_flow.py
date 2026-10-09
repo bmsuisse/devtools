@@ -30,7 +30,11 @@ from bmsdna.devtools.pr_build import (
 from tests.test_pr_build import CHECKPOINT_RECORD, PENDING_APPROVAL_RECORD, STAGE_RECORD
 
 REMOTE = AdoRemote(org="myorg", project="MyProj", repo="myrepo")
-PR = {"pullRequestId": 42, "title": "feat: widgets", "description": "existing description"}
+PR = {
+    "pullRequestId": 42,
+    "title": "feat: widgets",
+    "description": "existing description",
+}
 
 
 class FakeResponse:
@@ -51,7 +55,11 @@ def make_session() -> MagicMock:
 
     def fake_post(url, params=None, **kwargs):
         if "/attachments/" in url:
-            return FakeResponse({"url": f"https://dev.azure.com/myorg/_apis/git/repositories/myrepo/pullRequests/42/attachments/{url.rsplit('/', 1)[-1]}"})
+            return FakeResponse(
+                {
+                    "url": f"https://dev.azure.com/myorg/_apis/git/repositories/myrepo/pullRequests/42/attachments/{url.rsplit('/', 1)[-1]}"
+                }
+            )
         if url.endswith("/threads"):
             return FakeResponse({"id": 1})
         raise AssertionError(f"unexpected POST {url}")
@@ -115,7 +123,9 @@ def test_add_attachments_patches_pr_description_once_for_both_kinds(tmp_path) ->
     report = tmp_path / "report.pdf"
     report.write_bytes(b"fake-pdf-bytes")
 
-    add_attachments(session, REMOTE, PR, screenshot_paths=[str(shot)], file_paths=[str(report)])
+    add_attachments(
+        session, REMOTE, PR, screenshot_paths=[str(shot)], file_paths=[str(report)]
+    )
 
     session.patch.assert_called_once()
     description = session.patch.call_args.kwargs["json"]["description"]
@@ -132,7 +142,9 @@ def test_add_attachments_returns_pr_with_updated_description(tmp_path) -> None:
     updated = add_attachments(session, REMOTE, PR, screenshot_paths=[str(shot)])
 
     assert updated["pullRequestId"] == PR["pullRequestId"]
-    assert updated["description"] == session.patch.call_args.kwargs["json"]["description"]
+    assert (
+        updated["description"] == session.patch.call_args.kwargs["json"]["description"]
+    )
     assert "## Screenshots" in updated["description"]
 
 
@@ -161,7 +173,10 @@ def test_ensure_session_note_appends_when_agent_detected(monkeypatch) -> None:
     ensure_session_note(session, REMOTE, PR)
 
     description = session.patch.call_args.kwargs["json"]["description"]
-    assert description == "existing description\n\nClaude Session: https://claude.ai/code/session_abc123"
+    assert (
+        description
+        == "existing description\n\nClaude Session: https://claude.ai/code/session_abc123"
+    )
 
 
 def test_ensure_session_note_is_a_noop_without_agent() -> None:
@@ -195,24 +210,49 @@ def test_retry_failed_build_patches_with_retry_true_query_param() -> None:
     assert call.kwargs["params"] == {"retry": "true", "api-version": "7.1"}
 
 
-FAILED_BUILD = {"id": 100, "status": "completed", "result": "failed", "definition": {"id": 1, "name": "CI"}}
-SUCCEEDED_BUILD = {"id": 101, "status": "completed", "result": "succeeded", "definition": {"id": 2, "name": "Lint"}}
-IN_PROGRESS_BUILD = {"id": 102, "status": "inProgress", "result": None, "definition": {"id": 3, "name": "Deploy"}}
+FAILED_BUILD = {
+    "id": 100,
+    "status": "completed",
+    "result": "failed",
+    "definition": {"id": 1, "name": "CI"},
+}
+SUCCEEDED_BUILD = {
+    "id": 101,
+    "status": "completed",
+    "result": "succeeded",
+    "definition": {"id": 2, "name": "Lint"},
+}
+IN_PROGRESS_BUILD = {
+    "id": 102,
+    "status": "inProgress",
+    "result": None,
+    "definition": {"id": 3, "name": "Deploy"},
+}
 
 
 def _patch_retry_plumbing(monkeypatch, builds: list[dict], retried: list[int]) -> None:
-    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock())
-    monkeypatch.setattr("bmsdna.devtools.pr_build.auth_header", lambda pat: {})
-    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda session, remote, source, target: PR)
-    monkeypatch.setattr("bmsdna.devtools.pr_build.get_builds_for_pr", lambda session, remote, source, pr_id: builds)
     monkeypatch.setattr(
-        "bmsdna.devtools.pr_build.retry_failed_build", lambda session, remote, build_id: retried.append(build_id)
+        "bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock()
+    )
+    monkeypatch.setattr("bmsdna.devtools.pr_build.auth_header", lambda pat: {})
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_pr", lambda session, remote, source, target: PR
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_builds_for_pr",
+        lambda session, remote, source, pr_id: builds,
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.retry_failed_build",
+        lambda session, remote, build_id: retried.append(build_id),
     )
 
 
 def test_retry_only_retries_failed_pipelines(monkeypatch, capsys) -> None:
     retried: list[int] = []
-    _patch_retry_plumbing(monkeypatch, [FAILED_BUILD, SUCCEEDED_BUILD, IN_PROGRESS_BUILD], retried)
+    _patch_retry_plumbing(
+        monkeypatch, [FAILED_BUILD, SUCCEEDED_BUILD, IN_PROGRESS_BUILD], retried
+    )
 
     retry(REMOTE, pat="fake-pat", target_branch="main", source_branch="feature-x")
 
@@ -240,7 +280,12 @@ def test_retry_exits_when_no_builds_found(monkeypatch) -> None:
     assert retried == []
 
 
-FAILED_BUILD_2 = {"id": 200, "status": "completed", "result": "failed", "definition": {"id": 4, "name": "E2E"}}
+FAILED_BUILD_2 = {
+    "id": 200,
+    "status": "completed",
+    "result": "failed",
+    "definition": {"id": 4, "name": "E2E"},
+}
 
 
 def test_retry_with_pr_id_resolves_by_id_instead_of_branch(monkeypatch, capsys) -> None:
@@ -252,20 +297,28 @@ def test_retry_with_pr_id_resolves_by_id_instead_of_branch(monkeypatch, capsys) 
     retried: list[int] = []
     pr_by_id = {**PR, "sourceRefName": "refs/heads/feature-x"}
 
-    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock())
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock()
+    )
     monkeypatch.setattr("bmsdna.devtools.pr_build.auth_header", lambda pat: {})
     monkeypatch.setattr(
-        "bmsdna.devtools.pr_build.get_pr", lambda *a, **k: pytest.fail("must not resolve by branch when --pr-id is given")
+        "bmsdna.devtools.pr_build.get_pr",
+        lambda *a, **k: pytest.fail("must not resolve by branch when --pr-id is given"),
     )
     monkeypatch.setattr(
-        "bmsdna.devtools.pr_build.current_branch", lambda: pytest.fail("must not need a checked-out branch")
-    )
-    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr_by_id", lambda session, remote, pr_id: pr_by_id)
-    monkeypatch.setattr(
-        "bmsdna.devtools.pr_build.get_builds_for_pr", lambda session, remote, source, pr_id: [FAILED_BUILD]
+        "bmsdna.devtools.pr_build.current_branch",
+        lambda: pytest.fail("must not need a checked-out branch"),
     )
     monkeypatch.setattr(
-        "bmsdna.devtools.pr_build.retry_failed_build", lambda session, remote, build_id: retried.append(build_id)
+        "bmsdna.devtools.pr_build.get_pr_by_id", lambda session, remote, pr_id: pr_by_id
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_builds_for_pr",
+        lambda session, remote, source, pr_id: [FAILED_BUILD],
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.retry_failed_build",
+        lambda session, remote, build_id: retried.append(build_id),
     )
 
     retry(REMOTE, pat="fake-pat", target_branch="main", pr_id=42)
@@ -274,7 +327,9 @@ def test_retry_with_pr_id_resolves_by_id_instead_of_branch(monkeypatch, capsys) 
     assert "build #100" in capsys.readouterr().out
 
 
-def test_retry_still_attempts_remaining_builds_after_one_fails(monkeypatch, capsys) -> None:
+def test_retry_still_attempts_remaining_builds_after_one_fails(
+    monkeypatch, capsys
+) -> None:
     """A retry failure on one pipeline's build shouldn't stop bdt from attempting the others."""
     attempted: list[int] = []
 
@@ -283,14 +338,20 @@ def test_retry_still_attempts_remaining_builds_after_one_fails(monkeypatch, caps
         if build_id == 100:
             raise requests.HTTPError("HTTP 409")
 
-    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock())
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock()
+    )
     monkeypatch.setattr("bmsdna.devtools.pr_build.auth_header", lambda pat: {})
-    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda session, remote, source, target: PR)
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_pr", lambda session, remote, source, target: PR
+    )
     monkeypatch.setattr(
         "bmsdna.devtools.pr_build.get_builds_for_pr",
         lambda session, remote, source, pr_id: [FAILED_BUILD, FAILED_BUILD_2],
     )
-    monkeypatch.setattr("bmsdna.devtools.pr_build.retry_failed_build", fake_retry_failed_build)
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.retry_failed_build", fake_retry_failed_build
+    )
 
     with pytest.raises(SystemExit) as exc_info:
         retry(REMOTE, pat="fake-pat", target_branch="main", source_branch="feature-x")
@@ -370,7 +431,9 @@ def test_deploy_build_hint_fails_open_on_request_error() -> None:
     assert deploy_build_hint(session, REMOTE, "main") is None
 
 
-def test_run_watch_deploy_prints_completed_build_and_returns_without_wait(monkeypatch, capsys) -> None:
+def test_run_watch_deploy_prints_completed_build_and_returns_without_wait(
+    monkeypatch, capsys
+) -> None:
     session = make_builds_session([DEPLOY_BUILD])
     monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: session)
 
@@ -381,7 +444,9 @@ def test_run_watch_deploy_prints_completed_build_and_returns_without_wait(monkey
     assert "SUCCEEDED" in out
 
 
-def test_run_watch_deploy_no_builds_prints_message_and_returns(monkeypatch, capsys) -> None:
+def test_run_watch_deploy_no_builds_prints_message_and_returns(
+    monkeypatch, capsys
+) -> None:
     session = make_builds_session([])
     monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: session)
 
@@ -402,7 +467,9 @@ def test_run_watch_deploy_exits_1_on_failed_build(monkeypatch) -> None:
     assert exc_info.value.code == 1
 
 
-def make_builds_session_with_timeline(builds: list[dict], timeline_records: list[dict]) -> MagicMock:
+def make_builds_session_with_timeline(
+    builds: list[dict], timeline_records: list[dict]
+) -> MagicMock:
     session = MagicMock()
 
     def fake_get(url, params=None, **kwargs):
@@ -416,12 +483,16 @@ def make_builds_session_with_timeline(builds: list[dict], timeline_records: list
     return session
 
 
-def test_run_watch_deploy_wait_stops_and_reports_pending_approval(monkeypatch, capsys) -> None:
+def test_run_watch_deploy_wait_stops_and_reports_pending_approval(
+    monkeypatch, capsys
+) -> None:
     """--wait must not poll forever when the only deploy pipeline is paused on a stage
     approval -- it never completes on its own.
     """
     blocked_build = {**DEPLOY_BUILD, "id": 200, "status": "inProgress", "result": None}
-    session = make_builds_session_with_timeline([blocked_build], [STAGE_RECORD, CHECKPOINT_RECORD, PENDING_APPROVAL_RECORD])
+    session = make_builds_session_with_timeline(
+        [blocked_build], [STAGE_RECORD, CHECKPOINT_RECORD, PENDING_APPROVAL_RECORD]
+    )
     monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: session)
 
     with pytest.raises(SystemExit) as exc_info:
@@ -432,15 +503,31 @@ def test_run_watch_deploy_wait_stops_and_reports_pending_approval(monkeypatch, c
     assert "Deploy to Production" in out
 
 
-def test_run_watch_deploy_wait_exits_1_not_2_when_another_pipeline_already_failed(monkeypatch, capsys) -> None:
+def test_run_watch_deploy_wait_exits_1_not_2_when_another_pipeline_already_failed(
+    monkeypatch, capsys
+) -> None:
     """A pipeline stuck on approval must not mask an already-failed pipeline in the same batch.
 
     Unlike `run()`, no `bdt pr retry` hint here -- watch-deploy isn't watching a PR's own
     retryable checks, so that command has nothing to act on.
     """
-    failed_build = {**DEPLOY_BUILD, "id": 100, "definition": {"id": 1, "name": "CI"}, "result": "failed"}
-    blocked_build = {**DEPLOY_BUILD, "id": 200, "definition": {"id": 2, "name": "Deploy"}, "status": "inProgress", "result": None}
-    session = make_builds_session_with_timeline([failed_build, blocked_build], [STAGE_RECORD, CHECKPOINT_RECORD, PENDING_APPROVAL_RECORD])
+    failed_build = {
+        **DEPLOY_BUILD,
+        "id": 100,
+        "definition": {"id": 1, "name": "CI"},
+        "result": "failed",
+    }
+    blocked_build = {
+        **DEPLOY_BUILD,
+        "id": 200,
+        "definition": {"id": 2, "name": "Deploy"},
+        "status": "inProgress",
+        "result": None,
+    }
+    session = make_builds_session_with_timeline(
+        [failed_build, blocked_build],
+        [STAGE_RECORD, CHECKPOINT_RECORD, PENDING_APPROVAL_RECORD],
+    )
     monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: session)
 
     with pytest.raises(SystemExit) as exc_info:
@@ -454,39 +541,65 @@ def test_run_prints_deploy_hint_after_reporting_pr_success(monkeypatch, capsys) 
     pr = {"pullRequestId": 1, "title": "feat: x", "status": "active", "isDraft": False}
     ci_build = {**DEPLOY_BUILD, "id": 5, "definition": {"id": 2, "name": "CI"}}
 
-    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock())
-    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda session, remote, source, target: pr)
-    monkeypatch.setattr("bmsdna.devtools.pr_build.get_builds_for_pr", lambda session, remote, source, pr_id: [ci_build])
-    monkeypatch.setattr("bmsdna.devtools.pr_build.deploy_build_hint", lambda session, remote, target: "HINT: run `bdt pr watch-deploy`")
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock()
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_pr", lambda session, remote, source, target: pr
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_builds_for_pr",
+        lambda session, remote, source, pr_id: [ci_build],
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.deploy_build_hint",
+        lambda session, remote, target: "HINT: run `bdt pr watch-deploy`",
+    )
 
     run(REMOTE, "fake-pat", "main", wait=False, source_branch="feature-x")
 
     assert "HINT: run `bdt pr watch-deploy`" in capsys.readouterr().out
 
 
-def test_run_with_pr_id_resolves_by_id_and_derives_source_branch(monkeypatch, capsys) -> None:
+def test_run_with_pr_id_resolves_by_id_and_derives_source_branch(
+    monkeypatch, capsys
+) -> None:
     """`--pr-id` resolves the PR via `get_pr_by_id` -- not `get_pr`'s branch search, and not
     `current_branch()` -- deriving the source branch `get_builds_for_pr` needs from the
     resolved PR's own `sourceRefName` instead.
     """
-    pr = {"pullRequestId": 7, "title": "feat: y", "status": "active", "isDraft": False, "sourceRefName": "refs/heads/feature-y"}
+    pr = {
+        "pullRequestId": 7,
+        "title": "feat: y",
+        "status": "active",
+        "isDraft": False,
+        "sourceRefName": "refs/heads/feature-y",
+    }
     ci_build = {**DEPLOY_BUILD, "id": 9, "definition": {"id": 3, "name": "CI"}}
 
-    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock())
     monkeypatch.setattr(
-        "bmsdna.devtools.pr_build.get_pr", lambda *a, **k: pytest.fail("must not resolve by branch when --pr-id is given")
+        "bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock()
     )
     monkeypatch.setattr(
-        "bmsdna.devtools.pr_build.current_branch", lambda: pytest.fail("must not need a checked-out branch")
+        "bmsdna.devtools.pr_build.get_pr",
+        lambda *a, **k: pytest.fail("must not resolve by branch when --pr-id is given"),
     )
-    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr_by_id", lambda session, remote, pr_id: pr)
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.current_branch",
+        lambda: pytest.fail("must not need a checked-out branch"),
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_pr_by_id", lambda session, remote, pr_id: pr
+    )
 
     def fake_get_builds_for_pr(session, remote, source, pr_id):
         assert source == "feature-y"
         assert pr_id == 7
         return [ci_build]
 
-    monkeypatch.setattr("bmsdna.devtools.pr_build.get_builds_for_pr", fake_get_builds_for_pr)
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_builds_for_pr", fake_get_builds_for_pr
+    )
 
     run(REMOTE, "fake-pat", "main", wait=False, pr_id=7)
 
@@ -494,17 +607,29 @@ def test_run_with_pr_id_resolves_by_id_and_derives_source_branch(monkeypatch, ca
     assert "PR #7" in out
 
 
-def test_run_prints_deploy_hint_when_pr_has_no_builds_at_all(monkeypatch, capsys) -> None:
+def test_run_prints_deploy_hint_when_pr_has_no_builds_at_all(
+    monkeypatch, capsys
+) -> None:
     """Regression: a PR with no builds tied to it at all (e.g. the only pipeline triggers on
     a push to the target branch, not the PR's own merge/source refs) is itself a settled
     state -- exactly when the hint is most useful -- so it must still be checked, not skipped
     just because `get_builds_for_pr` came back empty."""
     pr = {"pullRequestId": 1, "title": "feat: x", "status": "active", "isDraft": False}
 
-    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock())
-    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda session, remote, source, target: pr)
-    monkeypatch.setattr("bmsdna.devtools.pr_build.get_builds_for_pr", lambda session, remote, source, pr_id: [])
-    monkeypatch.setattr("bmsdna.devtools.pr_build.deploy_build_hint", lambda session, remote, target: "HINT: run `bdt pr watch-deploy`")
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock()
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_pr", lambda session, remote, source, target: pr
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_builds_for_pr",
+        lambda session, remote, source, pr_id: [],
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.deploy_build_hint",
+        lambda session, remote, target: "HINT: run `bdt pr watch-deploy`",
+    )
 
     run(REMOTE, "fake-pat", "main", wait=False, source_branch="feature-x")
 
@@ -513,19 +638,33 @@ def test_run_prints_deploy_hint_when_pr_has_no_builds_at_all(monkeypatch, capsys
     assert "HINT: run `bdt pr watch-deploy`" in out
 
 
-def test_run_skips_deploy_hint_when_pr_build_still_in_progress_without_wait(monkeypatch, capsys) -> None:
+def test_run_skips_deploy_hint_when_pr_build_still_in_progress_without_wait(
+    monkeypatch, capsys
+) -> None:
     """Regression: without --wait, a still-running pipeline must not be mistaken for
     'the build succeeded' -- the hint should only ever follow a genuinely completed build."""
     pr = {"pullRequestId": 1, "title": "feat: x", "status": "active", "isDraft": False}
     # A build still in progress has no "result" yet at all (ADO only sets it once completed),
     # not a null one -- matches what the real API returns.
     ci_build = {k: v for k, v in DEPLOY_BUILD.items() if k != "result"}
-    ci_build = {**ci_build, "id": 5, "definition": {"id": 2, "name": "CI"}, "status": "inProgress"}
+    ci_build = {
+        **ci_build,
+        "id": 5,
+        "definition": {"id": 2, "name": "CI"},
+        "status": "inProgress",
+    }
     hint_calls: list[str] = []
 
-    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: make_builds_session([]))
-    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda session, remote, source, target: pr)
-    monkeypatch.setattr("bmsdna.devtools.pr_build.get_builds_for_pr", lambda session, remote, source, pr_id: [ci_build])
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.requests.Session", lambda: make_builds_session([])
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_pr", lambda session, remote, source, target: pr
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_builds_for_pr",
+        lambda session, remote, source, pr_id: [ci_build],
+    )
 
     def fake_hint(session, remote, target):
         hint_calls.append(target)
@@ -541,12 +680,24 @@ def test_run_skips_deploy_hint_when_pr_build_still_in_progress_without_wait(monk
 
 def test_run_skips_deploy_hint_when_pr_build_failed(monkeypatch, capsys) -> None:
     pr = {"pullRequestId": 1, "title": "feat: x", "status": "active", "isDraft": False}
-    ci_build = {**DEPLOY_BUILD, "id": 5, "definition": {"id": 2, "name": "CI"}, "result": "failed"}
+    ci_build = {
+        **DEPLOY_BUILD,
+        "id": 5,
+        "definition": {"id": 2, "name": "CI"},
+        "result": "failed",
+    }
     hint_calls: list[str] = []
 
-    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: make_builds_session([]))
-    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda session, remote, source, target: pr)
-    monkeypatch.setattr("bmsdna.devtools.pr_build.get_builds_for_pr", lambda session, remote, source, pr_id: [ci_build])
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.requests.Session", lambda: make_builds_session([])
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_pr", lambda session, remote, source, target: pr
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_builds_for_pr",
+        lambda session, remote, source, pr_id: [ci_build],
+    )
 
     def fake_hint(session, remote, target):
         hint_calls.append(target)

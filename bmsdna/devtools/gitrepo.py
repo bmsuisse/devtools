@@ -39,11 +39,17 @@ class GitHubRemote:
 
 def _run_git(args: list[str], cwd: str | None = None) -> str:
     try:
-        return subprocess.check_output(["git", *args], encoding="utf-8", cwd=cwd).strip()
+        return subprocess.check_output(
+            ["git", *args], encoding="utf-8", cwd=cwd
+        ).strip()
     except FileNotFoundError:
         sys.exit("'git' is required for this command but wasn't found on PATH.")
     except subprocess.CalledProcessError as e:
-        sys.exit((e.stderr or e.stdout or str(e)).strip() if isinstance(e.stderr, str) else str(e))
+        sys.exit(
+            (e.stderr or e.stdout or str(e)).strip()
+            if isinstance(e.stderr, str)
+            else str(e)
+        )
 
 
 def current_branch(cwd: str | None = None) -> str:
@@ -94,7 +100,9 @@ def parse_ado_remote(url: str) -> AdoRemote:
             repo = unquote(parts[4])
         return AdoRemote(org, project, repo)
 
-    raise NotAzureDevOpsRemoteError(f"Could not parse Azure DevOps info from remote URL: {url}")
+    raise NotAzureDevOpsRemoteError(
+        f"Could not parse Azure DevOps info from remote URL: {url}"
+    )
 
 
 # Matches git@github.com:owner/repo(.git), ssh://git@github.com/owner/repo(.git),
@@ -105,7 +113,9 @@ _GITHUB_RE = re.compile(r"github\.com[:/]([^/]+)/(.+?)(?:\.git)?/?$")
 def parse_github_remote(url: str) -> GitHubRemote:
     match = _GITHUB_RE.search(url)
     if not match:
-        raise NotGitHubRemoteError(f"Could not parse GitHub owner/repo from remote URL: {url}")
+        raise NotGitHubRemoteError(
+            f"Could not parse GitHub owner/repo from remote URL: {url}"
+        )
     return GitHubRemote(match.group(1), match.group(2))
 
 

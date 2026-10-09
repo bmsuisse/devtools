@@ -47,11 +47,20 @@ SQLGLOT_INSTALL_HINT = "Install it: `uv add sqlglot` (or `uv sync --extra lint` 
 # e.g. duckdb's COPY/ATTACH or postgres's own \-meta-commands) are deliberately excluded.
 _ACCEPTED_STATEMENT_TYPES: tuple[type, ...] = ()
 if exp is not None:
-    _ACCEPTED_STATEMENT_TYPES = (exp.Select, exp.Insert, exp.Update, exp.Delete, exp.Union, exp.Merge)
+    _ACCEPTED_STATEMENT_TYPES = (
+        exp.Select,
+        exp.Insert,
+        exp.Update,
+        exp.Delete,
+        exp.Union,
+        exp.Merge,
+    )
 
 # Same pattern prek's check_files.py forbids in .sql files -- kept in sync deliberately, applied
 # here to inline SQL literals too.
-_FORBIDDEN_JOIN_RE = re.compile(r"(?i)(RIGHT\s+(OUTER\s+)?JOIN|JOIN\s+LATERAL|LATERAL\s+(OUTER\s+)?JOIN|CROSS\s+APPLY)")
+_FORBIDDEN_JOIN_RE = re.compile(
+    r"(?i)(RIGHT\s+(OUTER\s+)?JOIN|JOIN\s+LATERAL|LATERAL\s+(OUTER\s+)?JOIN|CROSS\s+APPLY)"
+)
 
 # A bare `%s` positional placeholder -- but not `%%s` (psycopg's escape for a literal '%s' in
 # the SQL text, e.g. inside a LIKE pattern) and not the `s` in `%(name)s`, which never has `%s`
@@ -72,7 +81,9 @@ def require_sqlglot() -> None:
     """Mirrors `cli_tools.require_tool`'s `sys.exit(message)` convention (a clear message +
     install hint, not a raw traceback) for a missing *package* rather than a missing binary."""
     if sqlglot is None:
-        sys.exit(f"'sqlglot' is required for `bdt lint`'s SQL checks but isn't installed.\n{SQLGLOT_INSTALL_HINT}")
+        sys.exit(
+            f"'sqlglot' is required for `bdt lint`'s SQL checks but isn't installed.\n{SQLGLOT_INSTALL_HINT}"
+        )
 
 
 def parse_sql_text(text: str, dialect: str = "postgres") -> "exp.Expression | None":
@@ -109,7 +120,13 @@ def _is_sql_composed_call(node: ast.AST) -> bool:
     if not isinstance(node, ast.Call):
         return False
     func = node.func
-    name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
+    name = (
+        func.attr
+        if isinstance(func, ast.Attribute)
+        else func.id
+        if isinstance(func, ast.Name)
+        else ""
+    )
     return name in ("SQL", "Identifier", "Composed")
 
 
@@ -136,7 +153,9 @@ def _call_root_name(func: ast.expr) -> str | None:
 
 
 def _is_literal_string_ref(node: ast.expr) -> bool:
-    return (isinstance(node, ast.Name) and node.id == "LiteralString") or (isinstance(node, ast.Attribute) and node.attr == "LiteralString")
+    return (isinstance(node, ast.Name) and node.id == "LiteralString") or (
+        isinstance(node, ast.Attribute) and node.attr == "LiteralString"
+    )
 
 
 def _is_trusted_sql_call(node: ast.AST, trust: _Trust = _NO_TRUST) -> bool:
@@ -165,7 +184,9 @@ def _is_trusted_sql_call(node: ast.AST, trust: _Trust = _NO_TRUST) -> bool:
 def _literal_string_cast_inner(node: ast.Call) -> ast.expr | None:
     """`cast(LiteralString, x)` -> `x`. The cast itself proves nothing: it is only as safe as `x`."""
     func = node.func
-    is_cast = (isinstance(func, ast.Name) and func.id == "cast") or (isinstance(func, ast.Attribute) and func.attr == "cast")
+    is_cast = (isinstance(func, ast.Name) and func.id == "cast") or (
+        isinstance(func, ast.Attribute) and func.attr == "cast"
+    )
     if is_cast and len(node.args) == 2 and _is_literal_string_ref(node.args[0]):
         return node.args[1]
     return None
@@ -174,9 +195,19 @@ def _literal_string_cast_inner(node: ast.Call) -> ast.expr | None:
 def _unwrap_str_call(node: ast.Call) -> ast.expr | None:
     """`textwrap.dedent(x)` / `x.strip()` -> `x`: these don't change whether the text is safe."""
     func = node.func
-    if isinstance(func, ast.Attribute) and func.attr in _UNWRAP_METHODS and not node.args:
+    if (
+        isinstance(func, ast.Attribute)
+        and func.attr in _UNWRAP_METHODS
+        and not node.args
+    ):
         return func.value
-    name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
+    name = (
+        func.id
+        if isinstance(func, ast.Name)
+        else func.attr
+        if isinstance(func, ast.Attribute)
+        else None
+    )
     if name in _UNWRAP_FUNCS and len(node.args) == 1:
         return node.args[0]
     return None
@@ -186,11 +217,22 @@ def _file_trust(tree: ast.AST) -> _Trust:
     literal_funcs: set[str] = set()
     sqlglot_names: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.returns is not None and _is_literal_string_ref(node.returns):
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.returns is not None
+            and _is_literal_string_ref(node.returns)
+        ):
             literal_funcs.add(node.name)
         elif isinstance(node, ast.Import):
-            sqlglot_names.update((a.asname or a.name).split(".")[0] for a in node.names if a.name.split(".")[0] == "sqlglot")
-        elif isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "sqlglot":
+            sqlglot_names.update(
+                (a.asname or a.name).split(".")[0]
+                for a in node.names
+                if a.name.split(".")[0] == "sqlglot"
+            )
+        elif (
+            isinstance(node, ast.ImportFrom)
+            and (node.module or "").split(".")[0] == "sqlglot"
+        ):
             sqlglot_names.update(a.asname or a.name for a in node.names)
     return _Trust(frozenset(sqlglot_names), frozenset(literal_funcs))
 
@@ -273,14 +315,20 @@ _FSTRING_FIX = (
 _GENERIC_FIX = "Use a psycopg t-string (Python 3.14+), psycopg.sql for dynamic SQL, or load_sql()/a .sql file for static SQL."
 
 
-def _injection_finding(text: str, path: Path, lineno: int, rule: str, how: str) -> list[Finding]:
+def _injection_finding(
+    text: str, path: Path, lineno: int, rule: str, how: str
+) -> list[Finding]:
     if parse_sql_text(text) is None:
         return []
     fix = _FSTRING_FIX if rule == "sql-fstring-injection" else _GENERIC_FIX
-    return [Finding(path, lineno, rule, f"SQL built with {how} -- injection risk. {fix}")]
+    return [
+        Finding(path, lineno, rule, f"SQL built with {how} -- injection risk. {fix}")
+    ]
 
 
-def _complexity_findings(parsed: "exp.Expression", text: str, path: Path, lineno: int) -> list[Finding]:
+def _complexity_findings(
+    parsed: "exp.Expression", text: str, path: Path, lineno: int
+) -> list[Finding]:
     findings: list[Finding] = []
     line_count = len([line for line in text.splitlines() if line.strip()])
     has_complex_construct = (
@@ -352,29 +400,57 @@ def _check_resolved_candidate(
     trust: _Trust = _NO_TRUST,
     review: bool = False,
 ) -> list[Finding]:
-    if _is_load_sql_call(resolved) or _is_sql_composed_call(resolved) or _is_trusted_sql_call(resolved, trust):
+    if (
+        _is_load_sql_call(resolved)
+        or _is_sql_composed_call(resolved)
+        or _is_trusted_sql_call(resolved, trust)
+    ):
         return []
     if isinstance(resolved, getattr(ast, "TemplateStr", ())):
         return []  # psycopg t-string: params are always bound, never interpolated
 
     if isinstance(resolved, ast.JoinedStr):
-        return _injection_finding(_fstring_probe_text(resolved), path, lineno, "sql-fstring-injection", "an f-string")
+        return _injection_finding(
+            _fstring_probe_text(resolved),
+            path,
+            lineno,
+            "sql-fstring-injection",
+            "an f-string",
+        )
 
     if isinstance(resolved, ast.BinOp) and isinstance(resolved.op, ast.Mod):
         left = _resolve_single(resolved.left, lookup)
         if isinstance(left, ast.Constant) and isinstance(left.value, str):
-            return _injection_finding(left.value, path, lineno, "sql-percent-format-injection", "the `%` string-formatting operator")
+            return _injection_finding(
+                left.value,
+                path,
+                lineno,
+                "sql-percent-format-injection",
+                "the `%` string-formatting operator",
+            )
         return []
 
     if isinstance(resolved, ast.BinOp) and isinstance(resolved.op, ast.Add):
         text = _concat_probe_text(resolved, lookup)
-        return _injection_finding(text, path, lineno, "sql-concat-injection", "string concatenation") if text is not None else []
+        return (
+            _injection_finding(
+                text, path, lineno, "sql-concat-injection", "string concatenation"
+            )
+            if text is not None
+            else []
+        )
 
-    if isinstance(resolved, ast.Call) and isinstance(resolved.func, ast.Attribute) and resolved.func.attr == "format":
+    if (
+        isinstance(resolved, ast.Call)
+        and isinstance(resolved.func, ast.Attribute)
+        and resolved.func.attr == "format"
+    ):
         template = _resolve_single(resolved.func.value, lookup)
         if isinstance(template, ast.Constant) and isinstance(template.value, str):
             text = _FORMAT_FIELD_RE.sub(_PROBE_PLACEHOLDER, template.value)
-            return _injection_finding(text, path, lineno, "sql-format-injection", "`str.format()`")
+            return _injection_finding(
+                text, path, lineno, "sql-format-injection", "`str.format()`"
+            )
         return []
 
     if isinstance(resolved, ast.Constant) and isinstance(resolved.value, str):
@@ -384,7 +460,14 @@ def _check_resolved_candidate(
         cast_inner = _literal_string_cast_inner(resolved)
         if cast_inner is not None:
             findings = _check_query_arg(cast_inner, lookup, path, lineno, trust, review)
-            if review and not findings and any(isinstance(c, (ast.Name, ast.Attribute, ast.Subscript)) for c in _resolve_candidates(cast_inner, lookup)):
+            if (
+                review
+                and not findings
+                and any(
+                    isinstance(c, (ast.Name, ast.Attribute, ast.Subscript))
+                    for c in _resolve_candidates(cast_inner, lookup)
+                )
+            ):
                 findings = [_unverified_cast_finding(path, lineno)]
             return findings
         inner = _unwrap_str_call(resolved)
@@ -437,7 +520,9 @@ def _check_query_arg(
     findings: list[Finding] = []
     seen_rules: set[str] = set()
     for candidate in _resolve_candidates(expr, lookup):
-        for finding in _check_resolved_candidate(candidate, lookup, path, lineno, trust, review):
+        for finding in _check_resolved_candidate(
+            candidate, lookup, path, lineno, trust, review
+        ):
             if finding.rule not in seen_rules:
                 seen_rules.add(finding.rule)
                 findings.append(finding)
@@ -451,7 +536,10 @@ def _is_sql_named(name: str) -> bool:
 
 
 def _execute_query_arg(call: ast.Call) -> ast.expr | None:
-    if not (isinstance(call.func, ast.Attribute) and call.func.attr in ("execute", "executemany")):
+    if not (
+        isinstance(call.func, ast.Attribute)
+        and call.func.attr in ("execute", "executemany")
+    ):
         return None
     if call.args:
         return call.args[0]
@@ -465,7 +553,9 @@ class _ExecuteCallVisitor(ast.NodeVisitor):
     branch-shadowed unsafe assignment is still seen), then applies the SQL rules to every
     `.execute()`/`.executemany()` call found."""
 
-    def __init__(self, path: Path, trust: _Trust = _NO_TRUST, review: bool = False) -> None:
+    def __init__(
+        self, path: Path, trust: _Trust = _NO_TRUST, review: bool = False
+    ) -> None:
         self.path = path
         self.trust = trust
         self.review = review
@@ -502,29 +592,47 @@ class _ExecuteCallVisitor(ast.NodeVisitor):
     def _check_sql_named_literal(self, name: str, value: ast.expr, lineno: int) -> None:
         """A `*_sql`/`*_SQL` variable bound to a literal is inline SQL even if it never reaches an
         `.execute()` call in this file (e.g. it's passed to a helper) -- apply the complexity rule."""
-        if not (_is_sql_named(name) and isinstance(value, ast.Constant) and isinstance(value.value, str)):
+        if not (
+            _is_sql_named(name)
+            and isinstance(value, ast.Constant)
+            and isinstance(value.value, str)
+        ):
             return
         parsed = parse_sql_text(value.value)
         if parsed is not None:
-            self.findings.extend(_complexity_findings(parsed, value.value, self.path, lineno))
+            self.findings.extend(
+                _complexity_findings(parsed, value.value, self.path, lineno)
+            )
 
     def _all_bare_strings(self, name: str) -> bool:
         """Is every assignment of `name` a bare string literal -- the only kind `_check_sql_named_literal`
         reports `sql-inline-too-complex` for at the assignment?"""
         values = self._lookup(name)
-        return bool(values) and all(isinstance(v, ast.Constant) and isinstance(v.value, str) for v in values)
+        return bool(values) and all(
+            isinstance(v, ast.Constant) and isinstance(v.value, str) for v in values
+        )
 
     def visit_Call(self, node: ast.Call) -> None:
         query_arg = _execute_query_arg(node)
         if query_arg is not None:
-            found = _check_query_arg(query_arg, self._lookup, self.path, node.lineno, self.trust, self.review)
-            if isinstance(query_arg, ast.Name) and _is_sql_named(query_arg.id) and self._all_bare_strings(query_arg.id):
-                found = [f for f in found if f.rule != "sql-inline-too-complex"]  # already reported at the assignment
+            found = _check_query_arg(
+                query_arg, self._lookup, self.path, node.lineno, self.trust, self.review
+            )
+            if (
+                isinstance(query_arg, ast.Name)
+                and _is_sql_named(query_arg.id)
+                and self._all_bare_strings(query_arg.id)
+            ):
+                found = [
+                    f for f in found if f.rule != "sql-inline-too-complex"
+                ]  # already reported at the assignment
             self.findings.extend(found)
         self.generic_visit(node)
 
 
-def check_sql_file(path: Path, source: str | None = None, *, review: bool = False) -> list[Finding]:
+def check_sql_file(
+    path: Path, source: str | None = None, *, review: bool = False
+) -> list[Finding]:
     """Every SQL-rule finding for one Python file. `source` lets callers pass already-read
     content (e.g. from a staged-file snapshot); defaults to reading `path`. `review=True`
     (`bdt find-injection`) additionally reports queries produced by an unverifiable function call."""
@@ -535,7 +643,7 @@ def check_sql_file(path: Path, source: str | None = None, *, review: bool = Fals
     else:
         try:
             text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        except OSError, UnicodeDecodeError:
             return []  # not a readable UTF-8 Python file -- skip it like a syntax error
     try:
         tree = ast.parse(text, filename=str(path))

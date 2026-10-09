@@ -17,7 +17,9 @@ import zipfile
 from .cli_tools import require_az
 
 # Matches common error/warning markers across granian, uvicorn, and python tracebacks.
-ERROR_RE = re.compile(r"\b(ERROR|CRITICAL|WARNING|Traceback|Exception|\b[45]\d\d\b|FAILED|FATAL)\b")
+ERROR_RE = re.compile(
+    r"\b(ERROR|CRITICAL|WARNING|Traceback|Exception|\b[45]\d\d\b|FAILED|FATAL)\b"
+)
 
 
 def run_az(args: list[str]) -> str:
@@ -28,15 +30,24 @@ def run_az(args: list[str]) -> str:
     return proc.stdout
 
 
-def download_logs(webapp: str, resource_group: str, slot: str | None, archive: pathlib.Path) -> None:
+def download_logs(
+    webapp: str, resource_group: str, slot: str | None, archive: pathlib.Path
+) -> None:
     print(f"Downloading logs for {webapp}/{slot or '(production)'}...", flush=True)
-    run_az([
-        "webapp", "log", "download",
-        "--name", webapp,
-        "--resource-group", resource_group,
-        *(["--slot", slot] if slot else []),
-        "--log-file", str(archive),
-    ])
+    run_az(
+        [
+            "webapp",
+            "log",
+            "download",
+            "--name",
+            webapp,
+            "--resource-group",
+            resource_group,
+            *(["--slot", slot] if slot else []),
+            "--log-file",
+            str(archive),
+        ]
+    )
 
 
 def extract_errors(archive: pathlib.Path, error_file: pathlib.Path) -> int:

@@ -39,8 +39,12 @@ def _write(root: Path, rel: str, text: str = "") -> Path:
     return path
 
 
-def _fe(root: Path, rel: str = "fe/src", *, exclude_globs: list[str] | None = None) -> au.Frontend:
-    return au.build_frontend(root / rel, repo_root=root, exclude_globs=exclude_globs or [])
+def _fe(
+    root: Path, rel: str = "fe/src", *, exclude_globs: list[str] | None = None
+) -> au.Frontend:
+    return au.build_frontend(
+        root / rel, repo_root=root, exclude_globs=exclude_globs or []
+    )
 
 
 def _op(method: str, path: str, *tags: str, mount: str = "") -> au.Operation:
@@ -117,11 +121,19 @@ class _FakeApp:
 def test_collect_recurses_into_mounts_only() -> None:
     sub = _FakeApp({"/items": {"get": {}}})
     static = object()  # a StaticFiles-like mount: no openapi()
-    root = _FakeApp({"/health": {"get": {}}}, [_FakeMount("/api/sub/", sub), _FakeMount("/assets", static), object()])
-    assert sorted(f"{o['method']} {o['path']}" for o in _api_dump.collect(root)) == ["GET /api/sub/items", "GET /health"]
+    root = _FakeApp(
+        {"/health": {"get": {}}},
+        [_FakeMount("/api/sub/", sub), _FakeMount("/assets", static), object()],
+    )
+    assert sorted(f"{o['method']} {o['path']}" for o in _api_dump.collect(root)) == [
+        "GET /api/sub/items",
+        "GET /health",
+    ]
 
 
-def test_load_app_operations_runs_in_subprocess_with_cwd_on_path(tmp_path: Path) -> None:
+def test_load_app_operations_runs_in_subprocess_with_cwd_on_path(
+    tmp_path: Path,
+) -> None:
     _write(
         tmp_path,
         "svc/fakeapp.py",
@@ -154,7 +166,9 @@ def test_load_app_operations_survives_repo_local_bmsdna_package(tmp_path: Path) 
         app = A()
         """,
     )
-    assert [o.key for o in au.load_app_operations("linkedapp:app", cwd=tmp_path)] == ["GET /api/linked"]
+    assert [o.key for o in au.load_app_operations("linkedapp:app", cwd=tmp_path)] == [
+        "GET /api/linked"
+    ]
 
 
 def test_load_app_operations_reports_import_errors(tmp_path: Path) -> None:
@@ -183,7 +197,12 @@ def test_load_app_operations_passes_env(tmp_path: Path) -> None:
         app = A()
         """,
     )
-    assert [o.path for o in au.load_app_operations("envapp:app", cwd=tmp_path, env={"ROUTE_NAME": "hello"})] == ["/hello"]
+    assert [
+        o.path
+        for o in au.load_app_operations(
+            "envapp:app", cwd=tmp_path, env={"ROUTE_NAME": "hello"}
+        )
+    ] == ["/hello"]
 
 
 def test_load_openapi_file_rejects_non_object(tmp_path: Path) -> None:
@@ -202,7 +221,11 @@ def test_sdk_function_and_react_query_helper_count_as_calls(tmp_path: Path) -> N
         "fe/src/page.tsx",
         "import { listThingsOptions } from '@/lib/generated/@tanstack/react-query.gen';\nuseQuery(listThingsOptions());\n",
     )
-    _write(tmp_path, "fe/src/other.ts", "import { getThing } from './lib/generated';\ngetThing({ path: { thing_id: 1 } });\n")
+    _write(
+        tmp_path,
+        "fe/src/other.ts",
+        "import { getThing } from './lib/generated';\ngetThing({ path: { thing_id: 1 } });\n",
+    )
     fe = _fe(tmp_path)
     assert set(fe.sdk) == {"getThing", "deleteThing", "listThings", "headThings"}
     assert _evidence(_op("GET", "/api/things"), fe) == "sdk"
@@ -233,7 +256,9 @@ def test_sdk_functions_are_scoped_per_frontend(tmp_path: Path) -> None:
     _write(tmp_path, "apps/b/src/page.ts", "const x = 1;\n")
     a, b = _fe(tmp_path, "apps/a/src"), _fe(tmp_path, "apps/b/src")
     assert _evidence(_op("GET", "/api/a/items"), a, b) == "sdk"
-    assert _evidence(_op("GET", "/api/b/items"), a, b) is None  # app b generates listItems too, but never calls it
+    assert (
+        _evidence(_op("GET", "/api/b/items"), a, b) is None
+    )  # app b generates listItems too, but never calls it
 
 
 @pytest.mark.parametrize(
@@ -256,7 +281,11 @@ def test_sdk_functions_are_scoped_per_frontend(tmp_path: Path) -> None:
     ],
 )
 def test_generated_code_and_tests_are_not_callers(tmp_path: Path, name: str) -> None:
-    _write(tmp_path, f"fe/src/{name}", 'fetch("/api/things/1"); export const x = deleteThing(); const p = "/api/things/{thing_id}";\n')
+    _write(
+        tmp_path,
+        f"fe/src/{name}",
+        'fetch("/api/things/1"); export const x = deleteThing(); const p = "/api/things/{thing_id}";\n',
+    )
     _write(tmp_path, "fe/src/lib/generated/sdk.gen.ts", _SDK)
     fe = _fe(tmp_path)
     assert fe.usage.files == 0
@@ -303,7 +332,11 @@ def test_openapi_fetch_literal_is_method_exact(tmp_path: Path) -> None:
 
 
 def test_handwritten_fetch_is_method_agnostic(tmp_path: Path) -> None:
-    _write(tmp_path, "fe/src/svc.ts", "await fetch(`/api/things/${id}`, { method: 'DELETE' });\n")
+    _write(
+        tmp_path,
+        "fe/src/svc.ts",
+        "await fetch(`/api/things/${id}`, { method: 'DELETE' });\n",
+    )
     fe = _fe(tmp_path)
     for method in ("GET", "DELETE"):
         assert _evidence(_op(method, "/api/things/{thing_id}"), fe) == "url"
@@ -317,7 +350,12 @@ def test_handwritten_fetch_with_nested_template(tmp_path: Path) -> None:
         const url = `/api/offer-parser/mail/${encodeURIComponent(mail.id)}/attachment${mailbox ? `?mailbox=${encodeURIComponent(mailbox)}` : ""}`;
         """,
     )
-    assert _evidence(_op("GET", "/api/offer-parser/mail/{message_id}/attachment"), _fe(tmp_path)) == "url"
+    assert (
+        _evidence(
+            _op("GET", "/api/offer-parser/mail/{message_id}/attachment"), _fe(tmp_path)
+        )
+        == "url"
+    )
 
 
 def test_concatenated_and_multi_expression_urls(tmp_path: Path) -> None:
@@ -332,39 +370,55 @@ def test_concatenated_and_multi_expression_urls(tmp_path: Path) -> None:
     )
     fe = _fe(tmp_path)
     assert _evidence(_op("GET", "/api/items/{item_id}"), fe) == "url"
-    assert _evidence(_op("GET", "/api/viaprefix/{x}"), fe) == "url-sfx"  # leading base-URL expressions are ignored
+    assert (
+        _evidence(_op("GET", "/api/viaprefix/{x}"), fe) == "url-sfx"
+    )  # leading base-URL expressions are ignored
 
 
 def test_suffix_match_for_base_url_relative_clients(tmp_path: Path) -> None:
-    _write(tmp_path, "fe/src/c.ts", "const r = await http.get(`/customers/${id}/sales`);\n")
+    _write(
+        tmp_path, "fe/src/c.ts", "const r = await http.get(`/customers/${id}/sales`);\n"
+    )
     fe = _fe(tmp_path)
     assert _evidence(_op("GET", "/api/customers/{customer_id}/sales"), fe) == "url-sfx"
     assert _evidence(_op("GET", "/api/customers/{customer_id}/other"), fe) is None
 
 
 def test_literal_longer_than_route_is_not_evidence(tmp_path: Path) -> None:
-    _write(tmp_path, "fe/src/c.ts", 'router.push("/admin/items/list");\nconst root = "/";\nsplit("/");\n')
+    _write(
+        tmp_path,
+        "fe/src/c.ts",
+        'router.push("/admin/items/list");\nconst root = "/";\nsplit("/");\n',
+    )
     fe = _fe(tmp_path)
     assert _evidence(_op("GET", "/items/list"), fe) is None
     assert _evidence(_op("GET", "/"), fe) is None
 
 
 def test_mount_prefix_is_stripped_for_sdk_urls(tmp_path: Path) -> None:
-    _write(tmp_path, "fe/src/gen/sdk.gen.ts", _SDK.replace('"/api/things"', '"/things"'))
+    _write(
+        tmp_path, "fe/src/gen/sdk.gen.ts", _SDK.replace('"/api/things"', '"/things"')
+    )
     _write(tmp_path, "fe/src/p.ts", "listThings();\n")
     fe = _fe(tmp_path)
     # a sub-app's generated client uses mount-relative urls ("/things"); the operation carries the mount ("/api/sub/things")
     assert _evidence(_op("GET", "/api/sub/things", mount="/api/sub"), fe) == "sdk"
     assert _evidence(_op("GET", "/things"), fe) == "sdk"
     assert _evidence(_op("GET", "/api/sub/other", mount="/api/sub"), fe) is None
-    assert _evidence(_op("GET", "/api/sub/", mount="/api/sub"), fe) is None  # mount root must not crash on the empty remainder
+    assert (
+        _evidence(_op("GET", "/api/sub/", mount="/api/sub"), fe) is None
+    )  # mount root must not crash on the empty remainder
 
 
 # ------------------------------------------------------------------ excludes
 
 
 def test_is_excluded_applies_prefix_tag_and_glob() -> None:
-    kwargs = {"prefixes": ["/external_api"], "tags": ["agent"], "path_globs": ["/auth/*", "POST /api/svc/*"]}
+    kwargs = {
+        "prefixes": ["/external_api"],
+        "tags": ["agent"],
+        "path_globs": ["/auth/*", "POST /api/svc/*"],
+    }
     assert au.is_excluded(_op("GET", "/external_api/a"), **kwargs)
     assert au.is_excluded(_op("GET", "/api/agent-tool", "agent"), **kwargs)
     assert au.is_excluded(_op("GET", "/auth/callback"), **kwargs)
@@ -382,12 +436,32 @@ def test_parse_config_validation() -> None:
     with pytest.raises(au.ApiUsageError, match="exactly one"):
         au.parse_config({"apps": [{"name": "x", "frontends": ["fe"]}]})
     with pytest.raises(au.ApiUsageError, match="exactly one"):
-        au.parse_config({"apps": [{"name": "x", "app": "a:b", "openapi": "o.json", "frontends": ["fe"]}]})
+        au.parse_config(
+            {
+                "apps": [
+                    {
+                        "name": "x",
+                        "app": "a:b",
+                        "openapi": "o.json",
+                        "frontends": ["fe"],
+                    }
+                ]
+            }
+        )
     with pytest.raises(au.ApiUsageError, match="frontends"):
         au.parse_config({"apps": [{"name": "x", "app": "a:b"}]})
 
 
-@pytest.mark.parametrize("key", ["frontends", "exclude_prefixes", "exclude_tags", "exclude_paths", "exclude_frontend_globs"])
+@pytest.mark.parametrize(
+    "key",
+    [
+        "frontends",
+        "exclude_prefixes",
+        "exclude_tags",
+        "exclude_paths",
+        "exclude_frontend_globs",
+    ],
+)
 def test_parse_config_rejects_strings_where_lists_are_required(key: str) -> None:
     raw = {"name": "x", "app": "a:b", "frontends": ["fe"], key: "/internal"}
     with pytest.raises(au.ApiUsageError, match=f"`{key}` must be a list of strings"):
@@ -398,7 +472,15 @@ def _project(root: Path, *, baseline: bool = False, extra: str = "") -> None:
     _write(
         root,
         "openapi.json",
-        json.dumps({"paths": {"/api/used": {"get": {}}, "/api/dead": {"get": {"tags": ["t"]}}, "/external/x": {"get": {}}}}),
+        json.dumps(
+            {
+                "paths": {
+                    "/api/used": {"get": {}},
+                    "/api/dead": {"get": {"tags": ["t"]}},
+                    "/external/x": {"get": {}},
+                }
+            }
+        ),
     )
     _write(root, "fe/src/a.ts", "fetch('/api/used');\n")
     baseline_line = 'baseline = "api-usage-baseline.txt"\n' if baseline else ""
@@ -426,24 +508,51 @@ def _config(root: Path) -> au.AppConfig:
 def test_check_app_reports_uncalled_routes(tmp_path: Path) -> None:
     _project(tmp_path)
     findings = au.check_app(_config(tmp_path), repo_root=tmp_path)
-    assert [(f.rule, f.message.split(" is never")[0]) for f in findings] == [("api-route-uncalled", "GET /api/dead [t]")]
+    assert [(f.rule, f.message.split(" is never")[0]) for f in findings] == [
+        ("api-route-uncalled", "GET /api/dead [t]")
+    ]
 
 
 def test_frontend_globs_expand_and_exclude_frontend_globs_apply(tmp_path: Path) -> None:
-    _write(tmp_path, "openapi.json", json.dumps({"paths": {"/api/a": {"get": {}}, "/api/b": {"get": {}}, "/api/c": {"get": {}}}}))
+    _write(
+        tmp_path,
+        "openapi.json",
+        json.dumps(
+            {
+                "paths": {
+                    "/api/a": {"get": {}},
+                    "/api/b": {"get": {}},
+                    "/api/c": {"get": {}},
+                }
+            }
+        ),
+    )
     _write(tmp_path, "apps/one/src/x.ts", "fetch('/api/a');\n")
     _write(tmp_path, "apps/two/src/x.ts", "fetch('/api/b');\n")
     _write(tmp_path, "apps/two/src/legacy/old.ts", "fetch('/api/c');\n")
-    config = au.AppConfig(name="m", openapi="openapi.json", frontends=["apps/*/src"], exclude_frontend_globs=["apps/two/src/legacy/*"])
-    assert [f.message.split(" ")[1] for f in au.check_app(config, repo_root=tmp_path)] == ["/api/c"]
+    config = au.AppConfig(
+        name="m",
+        openapi="openapi.json",
+        frontends=["apps/*/src"],
+        exclude_frontend_globs=["apps/two/src/legacy/*"],
+    )
+    assert [
+        f.message.split(" ")[1] for f in au.check_app(config, repo_root=tmp_path)
+    ] == ["/api/c"]
 
 
 def test_frontends_entry_must_match_and_be_relative(tmp_path: Path) -> None:
     _project(tmp_path)
     with pytest.raises(au.ApiUsageError, match="matches no directory"):
-        au.check_app(au.AppConfig(name="m", openapi="openapi.json", frontends=["nope/*/src"]), repo_root=tmp_path)
+        au.check_app(
+            au.AppConfig(name="m", openapi="openapi.json", frontends=["nope/*/src"]),
+            repo_root=tmp_path,
+        )
     with pytest.raises(au.ApiUsageError, match="repo-relative"):
-        au.check_app(au.AppConfig(name="m", openapi="openapi.json", frontends=["/abs"]), repo_root=tmp_path)
+        au.check_app(
+            au.AppConfig(name="m", openapi="openapi.json", frontends=["/abs"]),
+            repo_root=tmp_path,
+        )
 
 
 def test_empty_inventory_is_an_error_not_a_clean_pass(tmp_path: Path) -> None:
@@ -457,19 +566,31 @@ def test_baseline_ratchet(tmp_path: Path) -> None:
     _project(tmp_path, baseline=True)
     config = _config(tmp_path)
 
-    assert [f.rule for f in au.check_app(config, repo_root=tmp_path)] == ["api-route-uncalled"]  # no baseline file yet
+    assert [f.rule for f in au.check_app(config, repo_root=tmp_path)] == [
+        "api-route-uncalled"
+    ]  # no baseline file yet
     assert au.check_app(config, repo_root=tmp_path, update_baseline=True) == []
     assert "GET /api/dead" in (tmp_path / "api-usage-baseline.txt").read_text()
     assert au.check_app(config, repo_root=tmp_path) == []  # tolerated now
 
     # a new dead route is reported; a baseline line whose route vanished is reported as stale
-    _write(tmp_path, "openapi.json", json.dumps({"paths": {"/api/used": {"get": {}}, "/api/newdead": {"get": {}}}}))
+    _write(
+        tmp_path,
+        "openapi.json",
+        json.dumps({"paths": {"/api/used": {"get": {}}, "/api/newdead": {"get": {}}}}),
+    )
     findings = au.check_app(config, repo_root=tmp_path)
-    assert sorted((f.rule, "GET /api/newdead" in f.message, "GET /api/dead" in f.message) for f in findings) == [
+    assert sorted(
+        (f.rule, "GET /api/newdead" in f.message, "GET /api/dead" in f.message)
+        for f in findings
+    ) == [
         ("api-route-baseline-stale", False, True),
         ("api-route-uncalled", True, False),
     ]
-    assert "no longer a backend route" in next(f for f in findings if f.rule == "api-route-baseline-stale").message
+    assert (
+        "no longer a backend route"
+        in next(f for f in findings if f.rule == "api-route-baseline-stale").message
+    )
 
 
 @pytest.mark.parametrize(
@@ -483,7 +604,12 @@ def test_baseline_stale_reason(tmp_path: Path, change: str, reason: str) -> None
     if change == "called":
         _write(tmp_path, "fe/src/b.ts", "fetch('/api/dead');\n")
     else:
-        config = au.AppConfig(**{**{f: getattr(config, f) for f in config.__slots__}, "exclude_tags": ["t"]})
+        config = au.AppConfig(
+            **{
+                **{f: getattr(config, f) for f in config.__slots__},
+                "exclude_tags": ["t"],
+            }
+        )
     findings = au.check_app(config, repo_root=tmp_path)
     assert [f.rule for f in findings] == ["api-route-baseline-stale"]
     assert reason in findings[0].message
@@ -492,20 +618,33 @@ def test_baseline_stale_reason(tmp_path: Path, change: str, reason: str) -> None
 def test_update_baseline_validates_all_apps_before_writing(tmp_path: Path) -> None:
     _project(tmp_path, baseline=True)
     table = load_bdt_table("dead_code", tmp_path)
-    second = {"name": "second", "openapi": "openapi.json", "frontends": ["fe/src"]}  # no baseline
+    second = {
+        "name": "second",
+        "openapi": "openapi.json",
+        "frontends": ["fe/src"],
+    }  # no baseline
     with pytest.raises(au.ApiUsageError, match="missing for: second"):
-        au.run({"apps": [*table["apps"], second]}, repo_root=tmp_path, update_baseline=True)
+        au.run(
+            {"apps": [*table["apps"], second]}, repo_root=tmp_path, update_baseline=True
+        )
     assert not (tmp_path / "api-usage-baseline.txt").exists()
 
     shared = {**second, "baseline": "api-usage-baseline.txt"}
     with pytest.raises(au.ApiUsageError, match="share the same"):
-        au.run({"apps": [*table["apps"], shared]}, repo_root=tmp_path, update_baseline=True)
+        au.run(
+            {"apps": [*table["apps"], shared]}, repo_root=tmp_path, update_baseline=True
+        )
     assert not (tmp_path / "api-usage-baseline.txt").exists()
 
 
 def test_update_baseline_creates_parent_directories(tmp_path: Path) -> None:
     _project(tmp_path)
-    config = au.AppConfig(name="m", openapi="openapi.json", frontends=["fe/src"], baseline="deep/dir/bl.txt")
+    config = au.AppConfig(
+        name="m",
+        openapi="openapi.json",
+        frontends=["fe/src"],
+        baseline="deep/dir/bl.txt",
+    )
     au.check_app(config, repo_root=tmp_path, update_baseline=True)
     assert (tmp_path / "deep/dir/bl.txt").is_file()
 
@@ -513,7 +652,9 @@ def test_update_baseline_creates_parent_directories(tmp_path: Path) -> None:
 # ------------------------------------------------------------------ routes referenced by name (url_for)
 
 
-def _op_id(method: str, path: str, operation_id: str, *, mount: str = "") -> au.Operation:
+def _op_id(
+    method: str, path: str, operation_id: str, *, mount: str = ""
+) -> au.Operation:
     return au.Operation(method, path, (), mount, operation_id)
 
 
@@ -532,12 +673,24 @@ def test_read_referenced_route_names(tmp_path: Path) -> None:
         nope = my_url_for("not_a_call")
         """,
     )
-    _write(tmp_path, "backend/templates/page.html", "<a href=\"{{ url_for('from_template', id=1) }}\">x</a>")
+    _write(
+        tmp_path,
+        "backend/templates/page.html",
+        "<a href=\"{{ url_for('from_template', id=1) }}\">x</a>",
+    )
     _write(tmp_path, "backend/tests/test_auth.py", 'url_for("only_in_tests")\n')
     _write(tmp_path, "backend/test_x.py", 'url_for("only_in_test_file")\n')
     _write(tmp_path, "backend/node_modules/x.py", 'url_for("vendored")\n')
-    assert au.read_referenced_route_names(tmp_path / "backend") == {"auth_callback", "login", "inner", "multi_line", "from_template"}
-    assert au.read_referenced_route_names(tmp_path / "backend", ("my_url_for",)) == {"not_a_call"}
+    assert au.read_referenced_route_names(tmp_path / "backend") == {
+        "auth_callback",
+        "login",
+        "inner",
+        "multi_line",
+        "from_template",
+    }
+    assert au.read_referenced_route_names(tmp_path / "backend", ("my_url_for",)) == {
+        "not_a_call"
+    }
 
 
 @pytest.mark.parametrize(
@@ -546,15 +699,31 @@ def test_read_referenced_route_names(tmp_path: Path) -> None:
         # FastAPI's default operationId: route name + path with non-word characters as `_`, + method
         (_op_id("GET", "/auth/login", "login_auth_login_get"), {"login"}, True),
         (_op_id("GET", "/auth/cb/{x}", "auth_cb_auth_cb__x__get"), {"auth_cb"}, True),
-        (_op_id("GET", "/api/sub/items", "list_items_items_get", mount="/api/sub"), {"list_items"}, True),
+        (
+            _op_id("GET", "/api/sub/items", "list_items_items_get", mount="/api/sub"),
+            {"list_items"},
+            True,
+        ),
         (_op_id("GET", "/auth/login", "login_auth_login_get"), {"logout"}, False),
-        (_op_id("GET", "/auth/login", "login_auth_login_get"), {"log"}, False),  # a prefix of the name is not the name
-        (_op_id("POST", "/auth/login", "login_auth_login_get"), {"login"}, False),  # method is part of the id
+        (
+            _op_id("GET", "/auth/login", "login_auth_login_get"),
+            {"log"},
+            False,
+        ),  # a prefix of the name is not the name
+        (
+            _op_id("POST", "/auth/login", "login_auth_login_get"),
+            {"login"},
+            False,
+        ),  # method is part of the id
         # custom generate_unique_id
         (_op_id("GET", "/auth/login", "login"), {"login"}, True),
         (_op_id("GET", "/auth/login", "auth-login"), {"login"}, True),
         (_op_id("GET", "/auth/login", "auth-relogin"), {"login"}, False),
-        (_op("GET", "/auth/login"), {"login"}, False),  # no operationId (older openapi file): nothing to go on
+        (
+            _op("GET", "/auth/login"),
+            {"login"},
+            False,
+        ),  # no operationId (older openapi file): nothing to go on
     ],
 )
 def test_is_named_by(op: au.Operation, names: set[str], expected: bool) -> None:
@@ -568,14 +737,18 @@ def test_route_referenced_by_url_for_is_not_reported(tmp_path: Path) -> None:
         json.dumps(
             {
                 "paths": {
-                    "/auth/callback": {"get": {"operationId": "auth_callback_auth_callback_get"}},
+                    "/auth/callback": {
+                        "get": {"operationId": "auth_callback_auth_callback_get"}
+                    },
                     "/auth/dead": {"get": {"operationId": "dead_auth_dead_get"}},
                 }
             }
         ),
     )
     _write(tmp_path, "fe/src/a.ts", "export {};\n")
-    _write(tmp_path, "backend/auth.py", 'redirect_uri = request.url_for("auth_callback")\n')
+    _write(
+        tmp_path, "backend/auth.py", 'redirect_uri = request.url_for("auth_callback")\n'
+    )
     _write(
         tmp_path,
         "pyproject.toml",
@@ -592,10 +765,16 @@ def test_route_referenced_by_url_for_is_not_reported(tmp_path: Path) -> None:
 
 def test_url_for_functions_are_configurable(tmp_path: Path) -> None:
     _project(tmp_path, extra='url_for_functions = ["reverse"]')
-    _write(tmp_path, "openapi.json", json.dumps({"paths": {"/api/x": {"get": {"operationId": "x_api_x_get"}}}}))
+    _write(
+        tmp_path,
+        "openapi.json",
+        json.dumps({"paths": {"/api/x": {"get": {"operationId": "x_api_x_get"}}}}),
+    )
     _write(tmp_path, "svc.py", 'reverse("x")\n')
     assert au.check_app(_config(tmp_path), repo_root=tmp_path) == []
-    _write(tmp_path, "svc.py", 'url_for("x")\n')  # not one of the configured functions any more
+    _write(
+        tmp_path, "svc.py", 'url_for("x")\n'
+    )  # not one of the configured functions any more
     assert len(au.check_app(_config(tmp_path), repo_root=tmp_path)) == 1
 
 
@@ -622,10 +801,14 @@ def test_cli_exit_codes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     assert "nothing to check" in broken.output
 
     _write(tmp_path, "pyproject.toml", "[project\n")
-    assert runner.invoke(app, ["dead-code"]).exit_code == 2  # invalid TOML is a setup error, not a traceback
+    assert (
+        runner.invoke(app, ["dead-code"]).exit_code == 2
+    )  # invalid TOML is a setup error, not a traceback
 
 
-def test_cli_runs_sql_and_routes_checks_together(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_runs_sql_and_routes_checks_together(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     runner = CliRunner()
     _project(tmp_path, extra='\n[tool.bdt.dead_code]\nsql_roots = ["sql"]')
     _write(tmp_path, "sql/q/orphan.sql", "select 1")

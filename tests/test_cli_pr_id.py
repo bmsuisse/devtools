@@ -32,7 +32,10 @@ def test_pr_status_with_pr_id_passes_it_to_gh_pr_run(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     captured = {}
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.run", lambda gh, wait, pr_id=None: captured.update(gh=gh, wait=wait, pr_id=pr_id))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.run",
+        lambda gh, wait, pr_id=None: captured.update(gh=gh, wait=wait, pr_id=pr_id),
+    )
 
     result = runner.invoke(app, ["pr", "status", "--pr-id", "99"])
 
@@ -44,7 +47,10 @@ def test_pr_retry_with_pr_id_passes_it_to_gh_pr_retry(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     captured = {}
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.retry", lambda gh, pr_id=None: captured.update(gh=gh, pr_id=pr_id))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.retry",
+        lambda gh, pr_id=None: captured.update(gh=gh, pr_id=pr_id),
+    )
 
     result = runner.invoke(app, ["pr", "retry", "--pr-id", "99"])
 
@@ -56,7 +62,10 @@ def test_pr_publish_with_pr_id_passes_it_to_gh_pr_publish(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     captured = {}
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.publish", lambda gh, pr_id=None: captured.update(gh=gh, pr_id=pr_id))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.publish",
+        lambda gh, pr_id=None: captured.update(gh=gh, pr_id=pr_id),
+    )
 
     result = runner.invoke(app, ["pr", "publish", "--pr-id", "99"])
 
@@ -73,23 +82,28 @@ def test_pr_update_with_pr_id_skips_the_redundant_branch_lookup(monkeypatch) -> 
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     monkeypatch.setattr(
-        "bmsdna.devtools.cli.gh_pr.get_pr", lambda gh, pr_id=None: pytest.fail("must not resolve branch via gh_pr.get_pr")
+        "bmsdna.devtools.cli.gh_pr.get_pr",
+        lambda gh, pr_id=None: pytest.fail("must not resolve branch via gh_pr.get_pr"),
     )
     captured = {}
     monkeypatch.setattr(
         "bmsdna.devtools.cli.gh_pr.update",
-        lambda gh, owner, repo, branch, title, description, screenshot, file, pr_id=None: captured.update(
-            branch=branch, title=title, pr_id=pr_id
+        lambda gh, owner, repo, branch, title, description, screenshot, file, pr_id=None: (
+            captured.update(branch=branch, title=title, pr_id=pr_id)
         ),
     )
 
-    result = runner.invoke(app, ["pr", "update", "--pr-id", "99", "--title", "New title"])
+    result = runner.invoke(
+        app, ["pr", "update", "--pr-id", "99", "--title", "New title"]
+    )
 
     assert result.exit_code == 0, result.output
     assert captured == {"branch": "", "title": "New title", "pr_id": 99}
 
 
-def test_pr_comment_with_pr_id_and_no_attachments_skips_branch_resolution(monkeypatch) -> None:
+def test_pr_comment_with_pr_id_and_no_attachments_skips_branch_resolution(
+    monkeypatch,
+) -> None:
     """A message-only comment never uses `branch` (it only namespaces uploaded
     screenshots/files) -- with `--pr-id`, resolving it would cost an extra `gh pr view`
     round-trip for nothing, so it must be skipped entirely.
@@ -97,13 +111,14 @@ def test_pr_comment_with_pr_id_and_no_attachments_skips_branch_resolution(monkey
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     monkeypatch.setattr(
-        "bmsdna.devtools.cli.gh_pr.get_pr", lambda gh, pr_id=None: pytest.fail("must not resolve branch via gh_pr.get_pr")
+        "bmsdna.devtools.cli.gh_pr.get_pr",
+        lambda gh, pr_id=None: pytest.fail("must not resolve branch via gh_pr.get_pr"),
     )
     captured = {}
     monkeypatch.setattr(
         "bmsdna.devtools.cli.gh_pr.comment_with_screenshots",
-        lambda gh, owner, repo, branch, message, screenshot, file, pr_id=None: captured.update(
-            branch=branch, message=message, pr_id=pr_id
+        lambda gh, owner, repo, branch, message, screenshot, file, pr_id=None: (
+            captured.update(branch=branch, message=message, pr_id=pr_id)
         ),
     )
 
@@ -113,23 +128,32 @@ def test_pr_comment_with_pr_id_and_no_attachments_skips_branch_resolution(monkey
     assert captured == {"branch": "", "message": "hi", "pr_id": 99}
 
 
-def test_pr_comment_with_pr_id_and_a_screenshot_resolves_the_real_head_branch(monkeypatch, tmp_path) -> None:
+def test_pr_comment_with_pr_id_and_a_screenshot_resolves_the_real_head_branch(
+    monkeypatch, tmp_path
+) -> None:
     """With an attachment to namespace, `--pr-id` *does* need the PR's actual head branch --
     resolved via `gh_pr.get_pr`, not whatever's checked out locally (which may not even be
     this PR's branch).
     """
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.get_pr", lambda gh, pr_id=None: {"headRefName": "feature-y"})
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.get_pr",
+        lambda gh, pr_id=None: {"headRefName": "feature-y"},
+    )
     captured = {}
     monkeypatch.setattr(
         "bmsdna.devtools.cli.gh_pr.comment_with_screenshots",
-        lambda gh, owner, repo, branch, message, screenshot, file, pr_id=None: captured.update(branch=branch, pr_id=pr_id),
+        lambda gh, owner, repo, branch, message, screenshot, file, pr_id=None: (
+            captured.update(branch=branch, pr_id=pr_id)
+        ),
     )
     shot = tmp_path / "shot.png"
     shot.write_bytes(b"fake-png-bytes")
 
-    result = runner.invoke(app, ["pr", "comment", "--pr-id", "99", "--screenshot", str(shot)])
+    result = runner.invoke(
+        app, ["pr", "comment", "--pr-id", "99", "--screenshot", str(shot)]
+    )
 
     assert result.exit_code == 0, result.output
     assert captured == {"branch": "feature-y", "pr_id": 99}
@@ -144,7 +168,9 @@ def test_pr_status_with_pr_id_skips_branch_resolution_for_ado(monkeypatch) -> No
     captured = {}
     monkeypatch.setattr(
         "bmsdna.devtools.cli.pr_build.run",
-        lambda remote, pat, target_branch, wait, pr_id=None: captured.update(remote=remote, pr_id=pr_id),
+        lambda remote, pat, target_branch, wait, pr_id=None: captured.update(
+            remote=remote, pr_id=pr_id
+        ),
     )
 
     result = runner.invoke(app, ["pr", "status", "--pr-id", "99"])
@@ -159,7 +185,9 @@ def test_pr_retry_with_pr_id_skips_branch_resolution_for_ado(monkeypatch) -> Non
     captured = {}
     monkeypatch.setattr(
         "bmsdna.devtools.cli.pr_build.retry",
-        lambda remote, pat, target_branch, pr_id=None: captured.update(remote=remote, pr_id=pr_id),
+        lambda remote, pat, target_branch, pr_id=None: captured.update(
+            remote=remote, pr_id=pr_id
+        ),
     )
 
     result = runner.invoke(app, ["pr", "retry", "--pr-id", "99"])
@@ -168,19 +196,25 @@ def test_pr_retry_with_pr_id_skips_branch_resolution_for_ado(monkeypatch) -> Non
     assert captured == {"remote": ADO_REMOTE, "pr_id": 99}
 
 
-def test_pr_publish_with_pr_id_resolves_by_id_and_skips_branch_for_ado(monkeypatch) -> None:
+def test_pr_publish_with_pr_id_resolves_by_id_and_skips_branch_for_ado(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.current_branch", _fail_current_branch)
     monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
     monkeypatch.setattr(
-        "bmsdna.devtools.cli.pr_build.get_pr_by_id", lambda session, remote, pr_id: {"pullRequestId": pr_id}
+        "bmsdna.devtools.cli.pr_build.get_pr_by_id",
+        lambda session, remote, pr_id: {"pullRequestId": pr_id},
     )
     monkeypatch.setattr(
         "bmsdna.devtools.cli.pr_build.get_pr",
         lambda *a, **k: pytest.fail("must not resolve by branch when --pr-id is given"),
     )
     captured = {}
-    monkeypatch.setattr("bmsdna.devtools.cli.pr_build.publish", lambda session, remote, pr: captured.update(pr=pr))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.pr_build.publish",
+        lambda session, remote, pr: captured.update(pr=pr),
+    )
 
     result = runner.invoke(app, ["pr", "publish", "--pr-id", "99"])
 
@@ -188,12 +222,15 @@ def test_pr_publish_with_pr_id_resolves_by_id_and_skips_branch_for_ado(monkeypat
     assert captured == {"pr": {"pullRequestId": 99}}
 
 
-def test_pr_update_with_pr_id_resolves_by_id_and_skips_branch_for_ado(monkeypatch) -> None:
+def test_pr_update_with_pr_id_resolves_by_id_and_skips_branch_for_ado(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.current_branch", _fail_current_branch)
     monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
     monkeypatch.setattr(
-        "bmsdna.devtools.cli.pr_build.get_pr_by_id", lambda session, remote, pr_id: {"pullRequestId": pr_id}
+        "bmsdna.devtools.cli.pr_build.get_pr_by_id",
+        lambda session, remote, pr_id: {"pullRequestId": pr_id},
     )
     monkeypatch.setattr(
         "bmsdna.devtools.cli.pr_build.get_pr",
@@ -202,21 +239,28 @@ def test_pr_update_with_pr_id_resolves_by_id_and_skips_branch_for_ado(monkeypatc
     captured = {}
     monkeypatch.setattr(
         "bmsdna.devtools.cli.pr_build.update",
-        lambda session, remote, pr, title, description, screenshot, file: captured.update(pr=pr, title=title),
+        lambda session, remote, pr, title, description, screenshot, file: (
+            captured.update(pr=pr, title=title)
+        ),
     )
 
-    result = runner.invoke(app, ["pr", "update", "--pr-id", "99", "--title", "New title"])
+    result = runner.invoke(
+        app, ["pr", "update", "--pr-id", "99", "--title", "New title"]
+    )
 
     assert result.exit_code == 0, result.output
     assert captured == {"pr": {"pullRequestId": 99}, "title": "New title"}
 
 
-def test_pr_comment_with_pr_id_resolves_by_id_and_skips_branch_for_ado(monkeypatch) -> None:
+def test_pr_comment_with_pr_id_resolves_by_id_and_skips_branch_for_ado(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.current_branch", _fail_current_branch)
     monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
     monkeypatch.setattr(
-        "bmsdna.devtools.cli.pr_build.get_pr_by_id", lambda session, remote, pr_id: {"pullRequestId": pr_id}
+        "bmsdna.devtools.cli.pr_build.get_pr_by_id",
+        lambda session, remote, pr_id: {"pullRequestId": pr_id},
     )
     monkeypatch.setattr(
         "bmsdna.devtools.cli.pr_build.get_pr",
@@ -225,7 +269,9 @@ def test_pr_comment_with_pr_id_resolves_by_id_and_skips_branch_for_ado(monkeypat
     captured = {}
     monkeypatch.setattr(
         "bmsdna.devtools.cli.pr_build.comment_with_screenshots",
-        lambda session, remote, pr_id, message, screenshot, file: captured.update(pr_id=pr_id, message=message),
+        lambda session, remote, pr_id, message, screenshot, file: captured.update(
+            pr_id=pr_id, message=message
+        ),
     )
 
     result = runner.invoke(app, ["pr", "comment", "--pr-id", "99", "--message", "hi"])

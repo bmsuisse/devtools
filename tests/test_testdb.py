@@ -50,7 +50,9 @@ def test_has_pgdevkit_project_false_when_no_pgdevkit_section(tmp_path) -> None:
 
 
 def test_has_pgdevkit_project_false_for_non_postgres_engine(tmp_path) -> None:
-    write_pyproject(tmp_path, "[tool.pgdevkit]\nname = 'distributionplan'\nengine = 'mssql'\n")
+    write_pyproject(
+        tmp_path, "[tool.pgdevkit]\nname = 'distributionplan'\nengine = 'mssql'\n"
+    )
     assert has_pgdevkit_project(tmp_path) is False
 
 
@@ -76,7 +78,9 @@ def test_db_nested_projects_empty_when_not_configured(tmp_path) -> None:
 
 
 def test_db_nested_projects_reads_configured_list(tmp_path) -> None:
-    write_pyproject(tmp_path, '[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n')
+    write_pyproject(
+        tmp_path, '[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n'
+    )
     assert db_nested_projects(tmp_path) == ["akeneo_editor"]
 
 
@@ -87,13 +91,20 @@ def test_project_roots_empty_when_not_a_pgdevkit_project(tmp_path) -> None:
     assert project_roots(tmp_path) == []
 
 
-def test_project_roots_is_just_the_repo_with_no_nested_projects_configured(tmp_path) -> None:
+def test_project_roots_is_just_the_repo_with_no_nested_projects_configured(
+    tmp_path,
+) -> None:
     write_pyproject(tmp_path, "[tool.pgdevkit]\nname = 'ccmt'\n")
     assert project_roots(tmp_path) == [tmp_path]
 
 
-def test_project_roots_includes_a_configured_nested_project_that_has_its_own_pgdevkit_section(tmp_path) -> None:
-    write_pyproject(tmp_path, '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n')
+def test_project_roots_includes_a_configured_nested_project_that_has_its_own_pgdevkit_section(
+    tmp_path,
+) -> None:
+    write_pyproject(
+        tmp_path,
+        '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n',
+    )
     nested = tmp_path / "akeneo_editor"
     nested.mkdir()
     write_pyproject(nested, "[tool.pgdevkit]\n")
@@ -101,12 +112,17 @@ def test_project_roots_includes_a_configured_nested_project_that_has_its_own_pgd
     assert project_roots(tmp_path) == [tmp_path, nested]
 
 
-def test_project_roots_includes_a_configured_nested_project_with_no_pgdevkit_section_at_all(tmp_path) -> None:
+def test_project_roots_includes_a_configured_nested_project_with_no_pgdevkit_section_at_all(
+    tmp_path,
+) -> None:
     # Mirrors MDMApp's real akeneo_editor/: a pyproject.toml with no
     # [tool.pgdevkit] section of its own at all. Being named in
     # db_nested_projects is itself the opt-in -- pgdevkit's own
     # load_config() falls back to the directory name for the rest.
-    write_pyproject(tmp_path, '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n')
+    write_pyproject(
+        tmp_path,
+        '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n',
+    )
     nested = tmp_path / "akeneo_editor"
     nested.mkdir()
     write_pyproject(nested, '[project]\nname = "akeneo-editor"\n')
@@ -114,8 +130,13 @@ def test_project_roots_includes_a_configured_nested_project_with_no_pgdevkit_sec
     assert project_roots(tmp_path) == [tmp_path, nested]
 
 
-def test_project_roots_excludes_a_configured_nested_project_directory_that_does_not_exist(tmp_path) -> None:
-    write_pyproject(tmp_path, '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n')
+def test_project_roots_excludes_a_configured_nested_project_directory_that_does_not_exist(
+    tmp_path,
+) -> None:
+    write_pyproject(
+        tmp_path,
+        '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n',
+    )
 
     assert project_roots(tmp_path) == [tmp_path]
 
@@ -151,16 +172,23 @@ def test_workspace_db_names_is_just_the_main_db_with_no_extra_config(tmp_path) -
 
 def test_workspace_db_names_includes_pgdevkits_own_extra_db_suffixes(tmp_path) -> None:
     repo = init_git_repo(tmp_path / "repo")
-    write_pyproject(repo, '[tool.pgdevkit]\nname = "ccmt"\nextra_db_suffixes = ["_onetrade"]\n')
+    write_pyproject(
+        repo, '[tool.pgdevkit]\nname = "ccmt"\nextra_db_suffixes = ["_onetrade"]\n'
+    )
     assert workspace_db_names(repo) == {"ccmt_main", "ccmt_main_onetrade"}
 
 
-def test_workspace_db_names_includes_a_configured_nested_project_on_the_same_branch(tmp_path) -> None:
+def test_workspace_db_names_includes_a_configured_nested_project_on_the_same_branch(
+    tmp_path,
+) -> None:
     # Mirrors MDMApp: akeneo_editor/ is a real subdirectory sharing the
     # parent worktree's git checkout (and so its branch), with its own
     # pyproject.toml/[tool.pgdevkit] section.
     repo = init_git_repo(tmp_path / "repo", branch="my-feature")
-    write_pyproject(repo, '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n')
+    write_pyproject(
+        repo,
+        '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n',
+    )
     nested = repo / "akeneo_editor"
     nested.mkdir()
     write_pyproject(nested, "[tool.pgdevkit]\n")
@@ -168,12 +196,17 @@ def test_workspace_db_names_includes_a_configured_nested_project_on_the_same_bra
     assert workspace_db_names(repo) == {"mdm_my_feature", "akeneo_editor_my_feature"}
 
 
-def test_workspace_db_names_includes_a_nested_project_with_no_pgdevkit_section_at_all(tmp_path) -> None:
+def test_workspace_db_names_includes_a_nested_project_with_no_pgdevkit_section_at_all(
+    tmp_path,
+) -> None:
     # Mirrors the real MDMApp/akeneo_editor case exactly (see project_roots'
     # docstring): the nested project's pyproject.toml has no
     # [tool.pgdevkit] section, only a bare [project] table.
     repo = init_git_repo(tmp_path / "repo", branch="my-feature")
-    write_pyproject(repo, '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n')
+    write_pyproject(
+        repo,
+        '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n',
+    )
     nested = repo / "akeneo_editor"
     nested.mkdir()
     write_pyproject(nested, '[project]\nname = "akeneo-editor"\n')
@@ -189,7 +222,9 @@ def test_workspace_db_names_empty_when_not_a_pgdevkit_project(tmp_path) -> None:
 # --- find_orphaned -----------------------------------------------------------
 
 
-def test_find_orphaned_delegates_to_pgdevkit_per_project_root(tmp_path, monkeypatch) -> None:
+def test_find_orphaned_delegates_to_pgdevkit_per_project_root(
+    tmp_path, monkeypatch
+) -> None:
     repo = init_git_repo(tmp_path / "repo")
     write_pyproject(repo, "[tool.pgdevkit]\nname = 'ccmt'\n")
 
@@ -204,9 +239,14 @@ def test_find_orphaned_delegates_to_pgdevkit_per_project_root(tmp_path, monkeypa
     ]
 
 
-def test_find_orphaned_covers_a_configured_nested_project_too(tmp_path, monkeypatch) -> None:
+def test_find_orphaned_covers_a_configured_nested_project_too(
+    tmp_path, monkeypatch
+) -> None:
     repo = init_git_repo(tmp_path / "repo")
-    write_pyproject(repo, '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n')
+    write_pyproject(
+        repo,
+        '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n',
+    )
     nested = repo / "akeneo_editor"
     nested.mkdir()
     write_pyproject(nested, "[tool.pgdevkit]\n")
@@ -214,7 +254,10 @@ def test_find_orphaned_covers_a_configured_nested_project_too(tmp_path, monkeypa
     def fake_find_orphaned_dbs(project_root):
         return ["mdm_ghost"] if project_root == repo else ["akeneo_editor_ghost"]
 
-    monkeypatch.setattr("bmsdna.devtools.testdb.pgdevkit_testdb.find_orphaned_dbs", fake_find_orphaned_dbs)
+    monkeypatch.setattr(
+        "bmsdna.devtools.testdb.pgdevkit_testdb.find_orphaned_dbs",
+        fake_find_orphaned_dbs,
+    )
 
     assert find_orphaned(repo) == [
         ("mdm_ghost", "mdm", False),
@@ -226,7 +269,9 @@ def test_find_orphaned_empty_when_not_a_pgdevkit_project(tmp_path, monkeypatch) 
     repo = init_git_repo(tmp_path / "repo")
     monkeypatch.setattr(
         "bmsdna.devtools.testdb.pgdevkit_testdb.find_orphaned_dbs",
-        lambda project_root: pytest.fail("should not be called for a non-pgdevkit repo"),
+        lambda project_root: pytest.fail(
+            "should not be called for a non-pgdevkit repo"
+        ),
     )
     assert find_orphaned(repo) == []
 
@@ -273,16 +318,23 @@ def test_drop_database_issues_drop_database_if_exists(monkeypatch) -> None:
 
     monkeypatch.setattr("bmsdna.devtools.testdb.subprocess.run", fake_run)
 
-    drop_database("ccmt_my_feature", pg_host="localhost", pg_port=54322, pg_user="tester")
+    drop_database(
+        "ccmt_my_feature", pg_host="localhost", pg_port=54322, pg_user="tester"
+    )
 
     assert captured_cmd[0] == "/usr/bin/psql"
     assert "-h" in captured_cmd
     assert captured_cmd[captured_cmd.index("-h") + 1] == "localhost"
     assert "-c" in captured_cmd
-    assert captured_cmd[captured_cmd.index("-c") + 1] == 'DROP DATABASE IF EXISTS "ccmt_my_feature"'
+    assert (
+        captured_cmd[captured_cmd.index("-c") + 1]
+        == 'DROP DATABASE IF EXISTS "ccmt_my_feature"'
+    )
 
 
-def test_drop_database_authenticates_with_pgdevkits_own_password_over_tcp(monkeypatch) -> None:
+def test_drop_database_authenticates_with_pgdevkits_own_password_over_tcp(
+    monkeypatch,
+) -> None:
     # No -h means psql defaults to the unix socket (peer auth), which
     # doesn't match how pgdevkit's own find_orphaned_dbs()/
     # workspace_db_names() connect (TCP + password) -- so the listing half
@@ -298,7 +350,9 @@ def test_drop_database_authenticates_with_pgdevkits_own_password_over_tcp(monkey
 
     monkeypatch.setattr("bmsdna.devtools.testdb.subprocess.run", fake_run)
 
-    drop_database("ccmt_my_feature", pg_host="localhost", pg_port=54322, pg_user="tester")
+    drop_database(
+        "ccmt_my_feature", pg_host="localhost", pg_port=54322, pg_user="tester"
+    )
 
     assert captured_env["PGPASSWORD"] == pgdevkit_constants.PASSWORD
 
@@ -317,20 +371,31 @@ def test_drop_database_escapes_embedded_double_quotes_in_db_name(monkeypatch) ->
 
     monkeypatch.setattr("bmsdna.devtools.testdb.subprocess.run", fake_run)
 
-    drop_database('evil"; drop database postgres; --', pg_host="localhost", pg_port=54322, pg_user="tester")
+    drop_database(
+        'evil"; drop database postgres; --',
+        pg_host="localhost",
+        pg_port=54322,
+        pg_user="tester",
+    )
 
     dropped_sql = captured_cmd[captured_cmd.index("-c") + 1]
     assert dropped_sql == 'DROP DATABASE IF EXISTS "evil""; drop database postgres; --"'
 
 
-def test_drop_database_exits_with_a_friendly_message_when_psql_is_missing(monkeypatch) -> None:
+def test_drop_database_exits_with_a_friendly_message_when_psql_is_missing(
+    monkeypatch,
+) -> None:
     def fake_require_psql():
-        raise SystemExit("'psql' is required for this command but wasn't found on PATH.\nsome hint")
+        raise SystemExit(
+            "'psql' is required for this command but wasn't found on PATH.\nsome hint"
+        )
 
     monkeypatch.setattr("bmsdna.devtools.testdb.require_psql", fake_require_psql)
 
     with pytest.raises(SystemExit, match="'psql' is required"):
-        drop_database("ccmt_my_feature", pg_host="localhost", pg_port=54322, pg_user="tester")
+        drop_database(
+            "ccmt_my_feature", pg_host="localhost", pg_port=54322, pg_user="tester"
+        )
 
 
 # --- is_local_host / confirm_remote_host -------------------------------------
@@ -347,7 +412,12 @@ def test_is_local_host_false_for_non_local_addresses(host: str) -> None:
 
 
 def test_confirm_remote_host_skips_prompt_for_local_host(monkeypatch) -> None:
-    monkeypatch.setattr("builtins.input", lambda *_: (_ for _ in ()).throw(AssertionError("should not prompt for a local host")))
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda *_: (_ for _ in ()).throw(
+            AssertionError("should not prompt for a local host")
+        ),
+    )
 
     assert confirm_remote_host("localhost", 54322) is True
 
@@ -364,7 +434,9 @@ def test_confirm_remote_host_rejects_anything_other_than_yes(monkeypatch) -> Non
     assert confirm_remote_host("db.example.com", 5432) is False
 
 
-def test_confirm_remote_host_fails_closed_when_input_is_not_interactive(monkeypatch) -> None:
+def test_confirm_remote_host_fails_closed_when_input_is_not_interactive(
+    monkeypatch,
+) -> None:
     def raise_eof(*_):
         raise EOFError
 

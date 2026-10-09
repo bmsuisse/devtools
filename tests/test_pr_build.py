@@ -29,22 +29,42 @@ BUILD_POLICY_ON_MAIN = {
     "isDeleted": False,
     "type": {"id": "0609b952-1397-4640-95ec-e00a01b2c241", "displayName": "Build"},
     "settings": {
-        "scope": [{"refName": "refs/heads/main", "matchKind": "Exact", "repositoryId": REPO_ID}],
+        "scope": [
+            {
+                "refName": "refs/heads/main",
+                "matchKind": "Exact",
+                "repositoryId": REPO_ID,
+            }
+        ],
     },
 }
 REVIEWER_POLICY_ON_EMERGENCY_RELEASE = {
     "isEnabled": True,
     "isDeleted": False,
-    "type": {"id": "fd2167ab-b0be-447a-8ec8-39368250530e", "displayName": "Minimum number of reviewers"},
+    "type": {
+        "id": "fd2167ab-b0be-447a-8ec8-39368250530e",
+        "displayName": "Minimum number of reviewers",
+    },
     "settings": {
-        "scope": [{"refName": "refs/heads/emergency-release", "matchKind": "Exact", "repositoryId": REPO_ID}],
+        "scope": [
+            {
+                "refName": "refs/heads/emergency-release",
+                "matchKind": "Exact",
+                "repositoryId": REPO_ID,
+            }
+        ],
     },
 }
 
 
 @pytest.mark.parametrize("merge_status", ["notSet", "queued", "succeeded"])
 def test_merge_conflict_message_none_when_mergeable(merge_status: str) -> None:
-    assert merge_conflict_message({"pullRequestId": 1, "title": "x", "mergeStatus": merge_status}) is None
+    assert (
+        merge_conflict_message(
+            {"pullRequestId": 1, "title": "x", "mergeStatus": merge_status}
+        )
+        is None
+    )
 
 
 def test_merge_conflict_message_missing_field_is_fine() -> None:
@@ -117,30 +137,55 @@ def test_retry_hint_tells_claude_code_to_run_it(monkeypatch) -> None:
 
 def test_policy_configs_include_branch_matches_build_policy_on_scoped_branch() -> None:
     configs = [BUILD_POLICY_ON_MAIN, REVIEWER_POLICY_ON_EMERGENCY_RELEASE]
-    assert policy_configs_include_branch(configs, REPO_ID, "main", "refs/heads/main") is True
+    assert (
+        policy_configs_include_branch(configs, REPO_ID, "main", "refs/heads/main")
+        is True
+    )
 
 
 def test_policy_configs_include_branch_false_for_unscoped_branch() -> None:
     configs = [BUILD_POLICY_ON_MAIN, REVIEWER_POLICY_ON_EMERGENCY_RELEASE]
-    assert policy_configs_include_branch(configs, REPO_ID, "test", "refs/heads/main") is False
+    assert (
+        policy_configs_include_branch(configs, REPO_ID, "test", "refs/heads/main")
+        is False
+    )
 
 
 def test_policy_configs_include_branch_ignores_non_build_policy_types() -> None:
-    assert policy_configs_include_branch([REVIEWER_POLICY_ON_EMERGENCY_RELEASE], REPO_ID, "emergency-release", "refs/heads/main") is False
+    assert (
+        policy_configs_include_branch(
+            [REVIEWER_POLICY_ON_EMERGENCY_RELEASE],
+            REPO_ID,
+            "emergency-release",
+            "refs/heads/main",
+        )
+        is False
+    )
 
 
 def test_policy_configs_include_branch_ignores_disabled_policy() -> None:
     disabled = {**BUILD_POLICY_ON_MAIN, "isEnabled": False}
-    assert policy_configs_include_branch([disabled], REPO_ID, "main", "refs/heads/main") is False
+    assert (
+        policy_configs_include_branch([disabled], REPO_ID, "main", "refs/heads/main")
+        is False
+    )
 
 
 def test_policy_configs_include_branch_ignores_deleted_policy() -> None:
     deleted = {**BUILD_POLICY_ON_MAIN, "isDeleted": True}
-    assert policy_configs_include_branch([deleted], REPO_ID, "main", "refs/heads/main") is False
+    assert (
+        policy_configs_include_branch([deleted], REPO_ID, "main", "refs/heads/main")
+        is False
+    )
 
 
 def test_policy_configs_include_branch_ignores_other_repo() -> None:
-    assert policy_configs_include_branch([BUILD_POLICY_ON_MAIN], "some-other-repo-id", "main", "refs/heads/main") is False
+    assert (
+        policy_configs_include_branch(
+            [BUILD_POLICY_ON_MAIN], "some-other-repo-id", "main", "refs/heads/main"
+        )
+        is False
+    )
 
 
 def test_policy_configs_include_branch_matches_default_branch_scope() -> None:
@@ -148,15 +193,30 @@ def test_policy_configs_include_branch_matches_default_branch_scope() -> None:
         "isEnabled": True,
         "isDeleted": False,
         "type": {"id": "0609b952-1397-4640-95ec-e00a01b2c241"},
-        "settings": {"scope": [{"matchKind": "DefaultBranch", "repositoryId": REPO_ID}]},
+        "settings": {
+            "scope": [{"matchKind": "DefaultBranch", "repositoryId": REPO_ID}]
+        },
     }
-    assert policy_configs_include_branch([default_branch_policy], REPO_ID, "main", "refs/heads/main") is True
-    assert policy_configs_include_branch([default_branch_policy], REPO_ID, "test", "refs/heads/main") is False
+    assert (
+        policy_configs_include_branch(
+            [default_branch_policy], REPO_ID, "main", "refs/heads/main"
+        )
+        is True
+    )
+    assert (
+        policy_configs_include_branch(
+            [default_branch_policy], REPO_ID, "test", "refs/heads/main"
+        )
+        is False
+    )
 
 
 def test_pr_web_url_is_the_browsable_page_not_the_rest_api_url() -> None:
     remote = AdoRemote("bmeurope", "BMS - CCMT2", "BMS - CCMT2")
-    assert pr_web_url(remote, 123) == "https://dev.azure.com/bmeurope/BMS%20-%20CCMT2/_git/BMS%20-%20CCMT2/pullrequest/123"
+    assert (
+        pr_web_url(remote, 123)
+        == "https://dev.azure.com/bmeurope/BMS%20-%20CCMT2/_git/BMS%20-%20CCMT2/pullrequest/123"
+    )
 
 
 class FakeTimelineResponse:
@@ -172,13 +232,26 @@ class FakeTimelineResponse:
 
 def test_build_web_url_is_the_browsable_results_page() -> None:
     remote = AdoRemote("bmeurope", "BMS - CCMT2", "BMS - CCMT2")
-    assert build_web_url(remote, 456) == "https://dev.azure.com/bmeurope/BMS%20-%20CCMT2/_build/results?buildId=456&view=results"
+    assert (
+        build_web_url(remote, 456)
+        == "https://dev.azure.com/bmeurope/BMS%20-%20CCMT2/_build/results?buildId=456&view=results"
+    )
 
 
 # Shape captured from a real `.../_apis/build/builds/{id}/timeline` response for a YAML
 # pipeline paused on a stage's manual approval check.
-STAGE_RECORD = {"id": "stage-1", "type": "Stage", "name": "Deploy to Production", "state": "inProgress"}
-CHECKPOINT_RECORD = {"id": "checkpoint-1", "type": "Checkpoint", "parentId": "stage-1", "state": "inProgress"}
+STAGE_RECORD = {
+    "id": "stage-1",
+    "type": "Stage",
+    "name": "Deploy to Production",
+    "state": "inProgress",
+}
+CHECKPOINT_RECORD = {
+    "id": "checkpoint-1",
+    "type": "Checkpoint",
+    "parentId": "stage-1",
+    "state": "inProgress",
+}
 PENDING_APPROVAL_RECORD = {
     "id": "approval-1",
     "type": "Checkpoint.Approval",
@@ -186,8 +259,17 @@ PENDING_APPROVAL_RECORD = {
     "parentId": "checkpoint-1",
     "state": "inProgress",
 }
-APPROVED_APPROVAL_RECORD = {**PENDING_APPROVAL_RECORD, "id": "approval-2", "state": "completed"}
-TASK_RECORD = {"id": "task-1", "type": "Task", "name": "npm install", "state": "inProgress"}
+APPROVED_APPROVAL_RECORD = {
+    **PENDING_APPROVAL_RECORD,
+    "id": "approval-2",
+    "state": "completed",
+}
+TASK_RECORD = {
+    "id": "task-1",
+    "type": "Task",
+    "name": "npm install",
+    "state": "inProgress",
+}
 
 
 def test_pending_approval_records_finds_open_checkpoint_approval() -> None:
@@ -206,11 +288,18 @@ def test_pending_approval_records_ignores_ordinary_in_progress_steps() -> None:
 
 def test_approval_stage_name_walks_parent_chain() -> None:
     records = [STAGE_RECORD, CHECKPOINT_RECORD, PENDING_APPROVAL_RECORD]
-    assert approval_stage_name(records, PENDING_APPROVAL_RECORD) == "Deploy to Production"
+    assert (
+        approval_stage_name(records, PENDING_APPROVAL_RECORD) == "Deploy to Production"
+    )
 
 
 def test_approval_stage_name_falls_back_when_chain_is_missing() -> None:
-    orphan = {"id": "approval-1", "name": "Checkpoint.Approval", "parentId": "missing", "state": "inProgress"}
+    orphan = {
+        "id": "approval-1",
+        "name": "Checkpoint.Approval",
+        "parentId": "missing",
+        "state": "inProgress",
+    }
     assert approval_stage_name([orphan], orphan) == "Checkpoint.Approval"
 
 
@@ -241,7 +330,9 @@ def test_find_pending_approvals_skips_builds_with_no_timeline_yet(status: str) -
 def test_find_pending_approvals_reports_blocked_build() -> None:
     remote = AdoRemote("myorg", "MyProj", "myrepo")
     session = MagicMock()
-    session.get.return_value = FakeTimelineResponse([STAGE_RECORD, CHECKPOINT_RECORD, PENDING_APPROVAL_RECORD])
+    session.get.return_value = FakeTimelineResponse(
+        [STAGE_RECORD, CHECKPOINT_RECORD, PENDING_APPROVAL_RECORD]
+    )
 
     build = {"id": 1, "status": "inProgress", "definition": {"name": "deploy"}}
     result = find_pending_approvals(session, remote, [build])
@@ -283,7 +374,9 @@ class _BuildsSequence:
         return self._baseline if self._calls == 1 else self._polled
 
 
-def test_run_wait_detects_approval_when_build_was_already_in_progress_at_invocation(monkeypatch) -> None:
+def test_run_wait_detects_approval_when_build_was_already_in_progress_at_invocation(
+    monkeypatch,
+) -> None:
     """Regression: if the pipeline was already inProgress (and blocked on approval) *before*
     `--wait` was invoked -- not just-started -- the baseline snapshot sees that same build,
     still inProgress, and must not treat it as "stale, waiting for a new build to start": a
@@ -291,19 +384,36 @@ def test_run_wait_detects_approval_when_build_was_already_in_progress_at_invocat
     block forever, never reaching the approval check at all.
     """
     remote = AdoRemote("myorg", "MyProj", "myrepo")
-    pr = {"pullRequestId": 42, "title": "feat: widgets", "status": "active", "isDraft": False}
-    blocked_build = {"id": 200, "status": "inProgress", "result": None, "definition": {"id": 2, "name": "deploy"}}
+    pr = {
+        "pullRequestId": 42,
+        "title": "feat: widgets",
+        "status": "active",
+        "isDraft": False,
+    }
+    blocked_build = {
+        "id": 200,
+        "status": "inProgress",
+        "result": None,
+        "definition": {"id": 2, "name": "deploy"},
+    }
 
     monkeypatch.setattr("bmsdna.devtools.pr_build.current_branch", lambda: "feature-x")
     monkeypatch.setattr("bmsdna.devtools.pr_build.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda *a, **k: pr)
     # Same build, same id, on every call -- baseline capture and every poll iteration alike.
-    monkeypatch.setattr("bmsdna.devtools.pr_build.get_builds_for_pr", lambda *a, **k: [blocked_build])
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_builds_for_pr", lambda *a, **k: [blocked_build]
+    )
     monkeypatch.setattr(
         "bmsdna.devtools.pr_build.find_pending_approvals",
-        lambda session, remote, builds: [(blocked_build, [PENDING_APPROVAL_RECORD], [PENDING_APPROVAL_RECORD])],
+        lambda session, remote, builds: [
+            (blocked_build, [PENDING_APPROVAL_RECORD], [PENDING_APPROVAL_RECORD])
+        ],
     )
-    monkeypatch.setattr("bmsdna.devtools.pr_build.time.sleep", lambda s: pytest.fail("must not poll — would hang --wait forever"))
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.time.sleep",
+        lambda s: pytest.fail("must not poll — would hang --wait forever"),
+    )
 
     with pytest.raises(SystemExit) as exc_info:
         run(remote, pat=None, target_branch="main", wait=True)
@@ -311,29 +421,53 @@ def test_run_wait_detects_approval_when_build_was_already_in_progress_at_invocat
     assert exc_info.value.code == EXIT_NEEDS_APPROVAL
 
 
-def test_run_wait_exits_1_not_2_when_a_pipeline_already_failed_and_another_needs_approval(monkeypatch, capsys) -> None:
+def test_run_wait_exits_1_not_2_when_a_pipeline_already_failed_and_another_needs_approval(
+    monkeypatch, capsys
+) -> None:
     """Regression: an already-failed pipeline elsewhere in the PR must still end --wait even
     when another pipeline is separately blocked on approval — and must report the failure
     (exit 1), not silently prioritize the approval prompt (exit 2) or hang waiting for the
     blocked pipeline to complete on its own (which it never will without a human).
     """
     remote = AdoRemote("myorg", "MyProj", "myrepo")
-    pr = {"pullRequestId": 42, "title": "feat: widgets", "status": "active", "isDraft": False}
-    failed_build = {"id": 100, "status": "completed", "result": "failed", "definition": {"id": 1, "name": "build"}}
-    blocked_build = {"id": 200, "status": "inProgress", "result": None, "definition": {"id": 2, "name": "deploy"}}
+    pr = {
+        "pullRequestId": 42,
+        "title": "feat: widgets",
+        "status": "active",
+        "isDraft": False,
+    }
+    failed_build = {
+        "id": 100,
+        "status": "completed",
+        "result": "failed",
+        "definition": {"id": 1, "name": "build"},
+    }
+    blocked_build = {
+        "id": 200,
+        "status": "inProgress",
+        "result": None,
+        "definition": {"id": 2, "name": "deploy"},
+    }
 
     monkeypatch.setattr("bmsdna.devtools.pr_build.current_branch", lambda: "feature-x")
     monkeypatch.setattr("bmsdna.devtools.pr_build.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda *a, **k: pr)
     monkeypatch.setattr(
         "bmsdna.devtools.pr_build.get_builds_for_pr",
-        _BuildsSequence(baseline=[{**failed_build, "id": 99}, {**blocked_build, "id": 199}], polled=[failed_build, blocked_build]),
+        _BuildsSequence(
+            baseline=[{**failed_build, "id": 99}, {**blocked_build, "id": 199}],
+            polled=[failed_build, blocked_build],
+        ),
     )
     monkeypatch.setattr(
         "bmsdna.devtools.pr_build.find_pending_approvals",
-        lambda session, remote, builds: [(blocked_build, [PENDING_APPROVAL_RECORD], [PENDING_APPROVAL_RECORD])],
+        lambda session, remote, builds: [
+            (blocked_build, [PENDING_APPROVAL_RECORD], [PENDING_APPROVAL_RECORD])
+        ],
     )
-    monkeypatch.setattr("bmsdna.devtools.pr_build.print_build", lambda session, remote, build: None)
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.print_build", lambda session, remote, build: None
+    )
 
     with pytest.raises(SystemExit) as exc_info:
         run(remote, pat=None, target_branch="main", wait=True)
@@ -392,14 +526,21 @@ def test_get_pr_by_id_queries_the_pr_endpoint_directly_by_id() -> None:
     """
     remote = AdoRemote("myorg", "MyProj", "myrepo")
     session = MagicMock()
-    pr = {"pullRequestId": 456, "title": "feat: widgets", "sourceRefName": "refs/heads/feature-x"}
+    pr = {
+        "pullRequestId": 456,
+        "title": "feat: widgets",
+        "sourceRefName": "refs/heads/feature-x",
+    }
     session.get.return_value = MagicMock(status_code=200, **{"json.return_value": pr})
 
     result = get_pr_by_id(session, remote, 456)
 
     assert result == pr
     url = session.get.call_args.args[0]
-    assert url == "https://dev.azure.com/myorg/MyProj/_apis/git/repositories/myrepo/pullrequests/456"
+    assert (
+        url
+        == "https://dev.azure.com/myorg/MyProj/_apis/git/repositories/myrepo/pullrequests/456"
+    )
     session.get.return_value.raise_for_status.assert_called_once()
 
 
@@ -426,7 +567,10 @@ def test_link_work_item_posts_to_the_pr_work_items_endpoint() -> None:
     link_work_item(session, remote, pr_id=456, work_item_id=99)
 
     url = session.post.call_args.args[0]
-    assert url == "https://dev.azure.com/myorg/MyProj/_apis/git/repositories/myrepo/pullRequests/456/workitems/99"
+    assert (
+        url
+        == "https://dev.azure.com/myorg/MyProj/_apis/git/repositories/myrepo/pullRequests/456/workitems/99"
+    )
     session.post.return_value.raise_for_status.assert_called_once()
 
 

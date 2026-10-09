@@ -42,7 +42,11 @@ def collect(app, mount=""):
     ops = ops_from_doc(openapi(), mount)
     for route in getattr(app, "routes", None) or []:
         sub = getattr(route, "app", None)
-        if sub is not None and callable(getattr(sub, "openapi", None)) and isinstance(getattr(route, "path", None), str):
+        if (
+            sub is not None
+            and callable(getattr(sub, "openapi", None))
+            and isinstance(getattr(route, "path", None), str)
+        ):
             ops.extend(collect(sub, mount + route.path.rstrip("/")))
     return ops
 

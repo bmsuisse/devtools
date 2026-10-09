@@ -28,7 +28,13 @@ slot = "production"
 """,
     )
     envs = load_envs(tmp_path)
-    assert envs == {"prod": {"webapp": "my-app", "resource_group": "my-app-rg", "slot": "production"}}
+    assert envs == {
+        "prod": {
+            "webapp": "my-app",
+            "resource_group": "my-app-rg",
+            "slot": "production",
+        }
+    }
 
 
 def test_load_envs_searches_parent_directories(tmp_path):
@@ -104,4 +110,7 @@ webapp = "my-app"
 resource_group = "my-app-rg"
 """,
     )
-    assert resolve_env("prod", tmp_path) == {"webapp": "my-app", "resource_group": "my-app-rg"}
+    assert resolve_env("prod", tmp_path) == {
+        "webapp": "my-app",
+        "resource_group": "my-app-rg",
+    }

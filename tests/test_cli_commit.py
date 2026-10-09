@@ -14,25 +14,42 @@ runner = CliRunner()
 
 def feat_result() -> CommitResult:
     return CommitResult(
-        success=True, committed=True, pushed=True, message="feat(x): add widget",
-        files=["a.txt"], commit_sha="abc1234", extra={"commit_type": "feat"},
+        success=True,
+        committed=True,
+        pushed=True,
+        message="feat(x): add widget",
+        files=["a.txt"],
+        commit_sha="abc1234",
+        extra={"commit_type": "feat"},
     )
 
 
 def fix_result() -> CommitResult:
     return CommitResult(
-        success=True, committed=True, pushed=True, message="fix: correct bug",
-        files=["a.txt"], commit_sha="abc1234", extra={"commit_type": "fix"},
+        success=True,
+        committed=True,
+        pushed=True,
+        message="fix: correct bug",
+        files=["a.txt"],
+        commit_sha="abc1234",
+        extra={"commit_type": "fix"},
     )
 
 
 def test_commit_converts_github_pr_to_draft_on_feat_commit(monkeypatch) -> None:
-    monkeypatch.setattr("bmsdna.devtools.cli.commit_mod.commit_and_push", lambda *a, **k: feat_result())
-    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GitHubRemote("owner", "repo"))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.commit_mod.commit_and_push", lambda *a, **k: feat_result()
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.current_remote", lambda: GitHubRemote("owner", "repo")
+    )
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
 
     set_draft_calls: list[str] = []
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.set_draft", lambda gh: (set_draft_calls.append(gh), True)[1])
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.set_draft",
+        lambda gh: (set_draft_calls.append(gh), True)[1],
+    )
 
     result = runner.invoke(app, ["commit", "feat(x): add widget", "a.txt"])
 
@@ -42,11 +59,17 @@ def test_commit_converts_github_pr_to_draft_on_feat_commit(monkeypatch) -> None:
 
 
 def test_commit_does_not_touch_pr_on_non_feat_commit(monkeypatch) -> None:
-    monkeypatch.setattr("bmsdna.devtools.cli.commit_mod.commit_and_push", lambda *a, **k: fix_result())
-    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GitHubRemote("owner", "repo"))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.commit_mod.commit_and_push", lambda *a, **k: fix_result()
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.current_remote", lambda: GitHubRemote("owner", "repo")
+    )
 
     called = []
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.set_draft", lambda gh: called.append(gh))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.set_draft", lambda gh: called.append(gh)
+    )
 
     result = runner.invoke(app, ["commit", "fix: correct bug", "a.txt"])
 
@@ -56,8 +79,12 @@ def test_commit_does_not_touch_pr_on_non_feat_commit(monkeypatch) -> None:
 
 
 def test_commit_swallows_failure_when_no_pr_exists_yet(monkeypatch) -> None:
-    monkeypatch.setattr("bmsdna.devtools.cli.commit_mod.commit_and_push", lambda *a, **k: feat_result())
-    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GitHubRemote("owner", "repo"))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.commit_mod.commit_and_push", lambda *a, **k: feat_result()
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.current_remote", lambda: GitHubRemote("owner", "repo")
+    )
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
 
     def raise_no_pr(gh):
@@ -73,16 +100,22 @@ def test_commit_swallows_failure_when_no_pr_exists_yet(monkeypatch) -> None:
 
 def test_commit_converts_ado_pr_to_draft_on_feat_commit(monkeypatch) -> None:
     remote = AdoRemote("myorg", "MyProj", "myrepo")
-    monkeypatch.setattr("bmsdna.devtools.cli.commit_mod.commit_and_push", lambda *a, **k: feat_result())
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.commit_mod.commit_and_push", lambda *a, **k: feat_result()
+    )
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
     monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feature-x")
     monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
 
     pr = {"pullRequestId": 42, "isDraft": False}
-    monkeypatch.setattr("bmsdna.devtools.cli.pr_build.get_pr", lambda session, remote, source, target: pr)
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.pr_build.get_pr",
+        lambda session, remote, source, target: pr,
+    )
     set_draft_calls: list[dict] = []
     monkeypatch.setattr(
-        "bmsdna.devtools.cli.pr_build.set_draft", lambda session, remote, pr: (set_draft_calls.append(pr), True)[1]
+        "bmsdna.devtools.cli.pr_build.set_draft",
+        lambda session, remote, pr: (set_draft_calls.append(pr), True)[1],
     )
 
     result = runner.invoke(app, ["commit", "feat(x): add widget", "a.txt"])

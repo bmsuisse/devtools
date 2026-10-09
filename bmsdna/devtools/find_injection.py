@@ -73,7 +73,16 @@ _CONFIG_NAMES = frozenset(
     }
 )
 _EXCLUDE_TEST_DIR_NAMES = DEFAULT_TS_EXCLUDE_DIR_NAMES - {"generated", "__generated__"}
-_SKIP_NAMES = frozenset({"package-lock.json", "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock", "npm-shrinkwrap.json"})
+_SKIP_NAMES = frozenset(
+    {
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "uv.lock",
+        "poetry.lock",
+        "npm-shrinkwrap.json",
+    }
+)
 _MAX_CSP_FILE_BYTES = 1_000_000
 _TS_LIKE = (".ts", ".tsx", ".mts", ".js", ".jsx", ".mjs")
 
@@ -99,7 +108,9 @@ class InjectionResult:
 
 def _git(args: list[str], cwd: Path) -> str:
     try:
-        return subprocess.check_output(["git", *args], encoding="utf-8", cwd=cwd, stderr=subprocess.PIPE)
+        return subprocess.check_output(
+            ["git", *args], encoding="utf-8", cwd=cwd, stderr=subprocess.PIPE
+        )
     except FileNotFoundError:
         sys.exit("'git' is required for --diff but wasn't found on PATH.")
     except subprocess.CalledProcessError as e:
@@ -118,18 +129,45 @@ def diff_files(root: Path, base: str | None = None) -> list[Path]:
             capture_output=True,
             encoding="utf-8",
         )
-        candidates += [head.stdout.strip()] if head.returncode == 0 and head.stdout.strip() else []
+        candidates += (
+            [head.stdout.strip()]
+            if head.returncode == 0 and head.stdout.strip()
+            else []
+        )
         candidates += ["origin/main", "main", "origin/master", "master"]
     chosen = next(
-        (c for c in candidates if c and subprocess.run(["git", "rev-parse", "--verify", "-q", c], cwd=root, capture_output=True).returncode == 0),
+        (
+            c
+            for c in candidates
+            if c
+            and subprocess.run(
+                ["git", "rev-parse", "--verify", "-q", c], cwd=root, capture_output=True
+            ).returncode
+            == 0
+        ),
         None,
     )
     if chosen is None:
-        sys.exit(f"Couldn't find a base branch to diff against (tried {', '.join(c for c in candidates if c)}); pass --base.")
+        sys.exit(
+            f"Couldn't find a base branch to diff against (tried {', '.join(c for c in candidates if c)}); pass --base."
+        )
     names: set[str] = set()
-    names.update(_git(["diff", "--name-only", "-z", "--diff-filter=ACMR", f"{chosen}...HEAD"], root).split("\0"))
-    names.update(_git(["diff", "--name-only", "-z", "--diff-filter=ACMR", "HEAD"], root).split("\0"))
-    names.update(_git(["ls-files", "--others", "--exclude-standard", "--full-name", "-z"], root).split("\0"))
+    names.update(
+        _git(
+            ["diff", "--name-only", "-z", "--diff-filter=ACMR", f"{chosen}...HEAD"],
+            root,
+        ).split("\0")
+    )
+    names.update(
+        _git(["diff", "--name-only", "-z", "--diff-filter=ACMR", "HEAD"], root).split(
+            "\0"
+        )
+    )
+    names.update(
+        _git(
+            ["ls-files", "--others", "--exclude-standard", "--full-name", "-z"], root
+        ).split("\0")
+    )
     return sorted(p for p in (repo / n for n in names if n) if p.is_file())
 
 
@@ -140,7 +178,9 @@ def _pragma_ignored(lines: list[str], finding: Finding) -> bool:
         if not 1 <= number <= len(lines):
             continue
         text = lines[number - 1]
-        if number != finding.line and not text.lstrip().startswith(("#", "//", "/*", "*", "<!--")):
+        if number != finding.line and not text.lstrip().startswith(
+            ("#", "//", "/*", "*", "<!--")
+        ):
             continue
         match = _IGNORE_RE.search(text)
         if match and finding.rule in {r.strip() for r in match.group(1).split(",")}:
@@ -154,7 +194,9 @@ def _filter_ignored(findings: list[Finding]) -> list[Finding]:
     for finding in findings:
         if finding.path not in cache:
             try:
-                cache[finding.path] = finding.path.read_text(encoding="utf-8").splitlines()
+                cache[finding.path] = finding.path.read_text(
+                    encoding="utf-8"
+                ).splitlines()
             except OSError, UnicodeDecodeError:
                 cache[finding.path] = []
         if not _pragma_ignored(cache[finding.path], finding):
@@ -163,7 +205,12 @@ def _filter_ignored(findings: list[Finding]) -> list[Finding]:
 
 
 def _scan_python(path: Path) -> list[Finding]:
-    sql = [f for f in check_sql_file(path, review=True) if f.rule in SQL_INJECTION_RULES or f.rule in ("sql-unverified-call", "sql-unverified-cast")]
+    sql = [
+        f
+        for f in check_sql_file(path, review=True)
+        if f.rule in SQL_INJECTION_RULES
+        or f.rule in ("sql-unverified-call", "sql-unverified-cast")
+    ]
     return sql + check_python_sinks(path)
 
 
@@ -177,7 +224,11 @@ class _ScanFilter:
 
     def __init__(self, root: Path, exclude: list[str], respect_gitignore: bool) -> None:
         self.root = root
-        self.dir_names = _DEFAULT_EXCLUDE_DIR_NAMES | {".next", "coverage", "storybook-static"}
+        self.dir_names = _DEFAULT_EXCLUDE_DIR_NAMES | {
+            ".next",
+            "coverage",
+            "storybook-static",
+        }
         self._patterns: list[str] = []
         for entry in exclude:
             entry = entry.replace("\\", "/").strip().strip("/")
@@ -200,7 +251,9 @@ class _ScanFilter:
         if any(part in self.dir_names for part in rel.parts[:-1]):
             return False
         posix = rel.as_posix()
-        if any(fnmatch(posix, pat) or fnmatch(posix, pat + "/*") for pat in self._patterns):
+        if any(
+            fnmatch(posix, pat) or fnmatch(posix, pat + "/*") for pat in self._patterns
+        ):
             return False
         return self._visible is None or resolved in self._visible
 
@@ -229,17 +282,25 @@ def _walk_repo_text_files(root: Path, scope: _ScanFilter):
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in scope.dir_names]
         for name in filenames:
-            if name in _SKIP_NAMES or name.endswith(".min.js") or not (name in _CONFIG_NAMES or name.endswith(_CONFIG_SUFFIXES)):
+            if (
+                name in _SKIP_NAMES
+                or name.endswith(".min.js")
+                or not (name in _CONFIG_NAMES or name.endswith(_CONFIG_SUFFIXES))
+            ):
                 continue
             candidate = Path(dirpath, name)
             try:
-                if candidate.stat().st_size <= _MAX_CSP_FILE_BYTES and scope.allows(candidate):
+                if candidate.stat().st_size <= _MAX_CSP_FILE_BYTES and scope.allows(
+                    candidate
+                ):
                     yield candidate
             except OSError:
                 continue
 
 
-def check_csp(root: Path, scanned: list[Path], scope: _ScanFilter, only: set[Path] | None = None) -> list[Finding]:
+def check_csp(
+    root: Path, scanned: list[Path], scope: _ScanFilter, only: set[Path] | None = None
+) -> list[Finding]:
     """Warns when the project serves a web UI/API (frontend files scanned, or a Python web framework
     imported) but no file anywhere under `root` mentions a Content-Security-Policy. Always searches the
     whole repo -- a diff that doesn't touch the header config mustn't look like "no CSP configured".
@@ -294,7 +355,9 @@ def run(
     """`exclude`: directory names or root-relative paths/globs to skip, on top of `[tool.bdt.lint] exclude_dirs`
     in pyproject.toml and the built-in list (node_modules, .venv, dist, ...)."""
     root = (root or Path.cwd()).resolve()
-    configured = [str(d) for d in load_bdt_table("lint", root).get("exclude_dirs", []) or []]
+    configured = [
+        str(d) for d in load_bdt_table("lint", root).get("exclude_dirs", []) or []
+    ]
     scope = _ScanFilter(root, configured + list(exclude or []), respect_gitignore)
     findings: list[Finding] = []
     changed: list[Path] = []
@@ -309,10 +372,20 @@ def run(
         fe_files, _ = _iter_files(targets, scope.dir_names, FRONTEND_SUFFIXES)
         py_files = [p for p in py_files if scope.allows(p)]
         fe_files = [p for p in fe_files if scope.allows(p)]
-        findings.extend(Finding(p, 0, "path-not-found", f"'{p}' doesn't exist -- nothing was scanned for it.") for p in missing)
+        findings.extend(
+            Finding(
+                p,
+                0,
+                "path-not-found",
+                f"'{p}' doesn't exist -- nothing was scanned for it.",
+            )
+            for p in missing
+        )
 
     py_files = [p for p in py_files if not _is_test_file(p, root)]
-    fe_files = [p for p in fe_files if not _is_test_file(p, root) and not _is_minified(p)]
+    fe_files = [
+        p for p in fe_files if not _is_test_file(p, root) and not _is_minified(p)
+    ]
 
     if py_files:
         require_sqlglot()
@@ -321,7 +394,14 @@ def run(
     for path in fe_files:
         findings.extend(check_frontend_file(path))
 
-    findings.extend(check_csp(root, py_files + fe_files, scope, {p.resolve() for p in changed} if diff else None))
+    findings.extend(
+        check_csp(
+            root,
+            py_files + fe_files,
+            scope,
+            {p.resolve() for p in changed} if diff else None,
+        )
+    )
     return InjectionResult(findings=_dedupe(_filter_ignored(findings)))
 
 

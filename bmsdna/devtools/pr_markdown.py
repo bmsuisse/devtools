@@ -5,7 +5,9 @@ from __future__ import annotations
 from html import escape
 
 
-def build_screenshots_section(existing_text: str | None, images: list[tuple[str, str]]) -> str:
+def build_screenshots_section(
+    existing_text: str | None, images: list[tuple[str, str]]
+) -> str:
     """Append a '## Screenshots' markdown section of `images` (name, url) to `existing_text`.
 
     For resources that are reliably Markdown-rendered (GitHub issues/PRs; Azure DevOps Git PR
@@ -15,7 +17,9 @@ def build_screenshots_section(existing_text: str | None, images: list[tuple[str,
     return f"{existing_text or ''}\n\n## Screenshots\n\n{section}\n"
 
 
-def build_screenshots_section_html(existing_text: str | None, images: list[tuple[str, str]]) -> str:
+def build_screenshots_section_html(
+    existing_text: str | None, images: list[tuple[str, str]]
+) -> str:
     """Append a 'Screenshots' section of `images` (name, url) to `existing_text`, using raw HTML
     `<img>` tags rather than Markdown `![]()` syntax.
 
@@ -28,11 +32,16 @@ def build_screenshots_section_html(existing_text: str | None, images: list[tuple
     tag renders either way: a plain-HTML comment/field renders it natively, and a Markdown one
     still renders it since Markdown renderers pass inline HTML through untouched.
     """
-    section = "\n".join(f'<img src="{escape(url)}" alt="{escape(name)}" style="max-width:100%;">' for name, url in images)
+    section = "\n".join(
+        f'<img src="{escape(url)}" alt="{escape(name)}" style="max-width:100%;">'
+        for name, url in images
+    )
     return f"{existing_text or ''}\n\n<h2>Screenshots</h2>\n\n{section}\n"
 
 
-def build_attachments_section(existing_text: str | None, files: list[tuple[str, str]]) -> str:
+def build_attachments_section(
+    existing_text: str | None, files: list[tuple[str, str]]
+) -> str:
     """Append an '## Attachments' markdown section of `files` (name, url) as links to `existing_text`.
 
     Unlike `build_screenshots_section`, this links rather than embeds -- for arbitrary files
@@ -42,15 +51,21 @@ def build_attachments_section(existing_text: str | None, files: list[tuple[str, 
     return f"{existing_text or ''}\n\n## Attachments\n\n{section}\n"
 
 
-def build_attachments_section_html(existing_text: str | None, files: list[tuple[str, str]]) -> str:
+def build_attachments_section_html(
+    existing_text: str | None, files: list[tuple[str, str]]
+) -> str:
     """HTML-link equivalent of `build_attachments_section`, for the same HTML-only surfaces
     `build_screenshots_section_html` targets (Azure DevOps work item comments).
     """
-    section = "\n".join(f'<a href="{escape(url)}">{escape(name)}</a><br>' for name, url in files)
+    section = "\n".join(
+        f'<a href="{escape(url)}">{escape(name)}</a><br>' for name, url in files
+    )
     return f"{existing_text or ''}\n\n<h2>Attachments</h2>\n\n{section}\n"
 
 
-def build_comment_content(message: str | None, images: list[tuple[str, str]], files: list[tuple[str, str]]) -> str:
+def build_comment_content(
+    message: str | None, images: list[tuple[str, str]], files: list[tuple[str, str]]
+) -> str:
     """A comment/description body: `message` with an optional Markdown Screenshots section (embedded)
     and/or Attachments section (linked) appended, trimmed only when at least one was added.
 
@@ -65,7 +80,9 @@ def build_comment_content(message: str | None, images: list[tuple[str, str]], fi
     return content.strip() if (images or files) else content
 
 
-def build_comment_content_html(message: str | None, images: list[tuple[str, str]], files: list[tuple[str, str]]) -> str:
+def build_comment_content_html(
+    message: str | None, images: list[tuple[str, str]], files: list[tuple[str, str]]
+) -> str:
     """HTML equivalent of `build_comment_content`, for the same HTML-only surfaces
     `build_screenshots_section_html` targets (Azure DevOps work item comments)."""
     content = message or ""

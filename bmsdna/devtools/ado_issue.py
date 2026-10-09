@@ -75,7 +75,9 @@ def get_team_area_path(session: requests.Session, remote: AdoRemote, team: str) 
         params={"api-version": "7.1"},
     )
     if r.status_code == 404:
-        sys.exit(f"Board/team '{team}' not found in project '{remote.project}'. Check --board / [tool.bdt.ado].board in pyproject.toml.")
+        sys.exit(
+            f"Board/team '{team}' not found in project '{remote.project}'. Check --board / [tool.bdt.ado].board in pyproject.toml."
+        )
     r.raise_for_status()
     return r.json()["defaultValue"]
 
@@ -97,19 +99,31 @@ def build_create_ops(
     """The JSON Patch document body for creating a work item with these fields."""
     ops = [{"op": "add", "path": "/fields/System.Title", "value": title}]
     if description:
-        ops.append({"op": "add", "path": "/fields/System.Description", "value": description})
+        ops.append(
+            {"op": "add", "path": "/fields/System.Description", "value": description}
+        )
         ops.append(_markdown_format_op("System.Description"))
     if area_path:
         ops.append({"op": "add", "path": "/fields/System.AreaPath", "value": area_path})
     if tags:
-        ops.append({"op": "add", "path": "/fields/System.Tags", "value": "; ".join(tags)})
+        ops.append(
+            {"op": "add", "path": "/fields/System.Tags", "value": "; ".join(tags)}
+        )
     return ops
 
 
 def build_attach_ops(images: list[tuple[str, str]]) -> list[dict]:
     """The JSON Patch document body for linking already-uploaded attachments via 'AttachedFile' relations."""
     return [
-        {"op": "add", "path": "/relations/-", "value": {"rel": "AttachedFile", "url": url, "attributes": {"comment": name}}}
+        {
+            "op": "add",
+            "path": "/relations/-",
+            "value": {
+                "rel": "AttachedFile",
+                "url": url,
+                "attributes": {"comment": name},
+            },
+        }
         for name, url in images
     ]
 
@@ -126,12 +140,16 @@ def build_update_ops(
     if title is not None:
         ops.append({"op": "add", "path": "/fields/System.Title", "value": title})
     if description is not None:
-        ops.append({"op": "add", "path": "/fields/System.Description", "value": description})
+        ops.append(
+            {"op": "add", "path": "/fields/System.Description", "value": description}
+        )
         ops.append(_markdown_format_op("System.Description"))
     if area_path is not None:
         ops.append({"op": "add", "path": "/fields/System.AreaPath", "value": area_path})
     if tags is not None:
-        ops.append({"op": "add", "path": "/fields/System.Tags", "value": "; ".join(tags)})
+        ops.append(
+            {"op": "add", "path": "/fields/System.Tags", "value": "; ".join(tags)}
+        )
     if state is not None:
         ops.append({"op": "add", "path": "/fields/System.State", "value": state})
     return ops
@@ -155,7 +173,9 @@ def create_work_item(
         headers={"Content-Type": "application/json-patch+json"},
     )
     if r.status_code == 404:
-        sys.exit(f"Work item type '{work_item_type}' not found in project '{remote.project}'. Check --type.")
+        sys.exit(
+            f"Work item type '{work_item_type}' not found in project '{remote.project}'. Check --type."
+        )
     r.raise_for_status()
     return r.json()
 
@@ -172,7 +192,9 @@ def update_work_item(
 ) -> dict:
     ops = build_update_ops(title, description, area_path, tags, state)
     if not ops:
-        sys.exit("Nothing to update — provide at least one of --title, --description, --board, --tag, --state.")
+        sys.exit(
+            "Nothing to update — provide at least one of --title, --description, --board, --tag, --state."
+        )
 
     r = session.patch(
         f"{_base_url(remote)}/_apis/wit/workitems/{work_item_id}",
@@ -186,7 +208,9 @@ def update_work_item(
     return r.json()
 
 
-def get_work_item_type(session: requests.Session, remote: AdoRemote, work_item_id: int) -> str:
+def get_work_item_type(
+    session: requests.Session, remote: AdoRemote, work_item_id: int
+) -> str:
     r = session.get(
         f"{_base_url(remote)}/_apis/wit/workitems/{work_item_id}",
         params={"fields": "System.WorkItemType", "api-version": "7.1"},
@@ -197,7 +221,9 @@ def get_work_item_type(session: requests.Session, remote: AdoRemote, work_item_i
     return r.json()["fields"]["System.WorkItemType"]
 
 
-def get_valid_states(session: requests.Session, remote: AdoRemote, work_item_type: str) -> list[str]:
+def get_valid_states(
+    session: requests.Session, remote: AdoRemote, work_item_type: str
+) -> list[str]:
     """The state names defined for `work_item_type` by this project's process template —
     state names (and which ones are terminal) are per-type, per-template, not a fixed set.
     """
@@ -209,7 +235,9 @@ def get_valid_states(session: requests.Session, remote: AdoRemote, work_item_typ
     return [s["name"] for s in r.json()["value"]]
 
 
-def get_work_item_tags(session: requests.Session, remote: AdoRemote, work_item_id: int) -> list[str]:
+def get_work_item_tags(
+    session: requests.Session, remote: AdoRemote, work_item_id: int
+) -> list[str]:
     r = session.get(
         f"{_base_url(remote)}/_apis/wit/workitems/{work_item_id}",
         params={"fields": "System.Tags", "api-version": "7.1"},
@@ -221,7 +249,9 @@ def get_work_item_tags(session: requests.Session, remote: AdoRemote, work_item_i
     return [t.strip() for t in raw.split(";") if t.strip()]
 
 
-def add_tag(session: requests.Session, remote: AdoRemote, work_item_id: int, tag: str) -> None:
+def add_tag(
+    session: requests.Session, remote: AdoRemote, work_item_id: int, tag: str
+) -> None:
     """Add `tag` to work item `work_item_id`'s tags, alongside whatever's already there.
 
     `update_work_item`'s tags op replaces the whole `System.Tags` field (there's no
@@ -235,27 +265,36 @@ def add_tag(session: requests.Session, remote: AdoRemote, work_item_id: int, tag
     update_work_item(session, remote, work_item_id, tags=[*tags, tag])
 
 
-def add_pr_available_tag(session: requests.Session, remote: AdoRemote, work_item_id: int) -> None:
+def add_pr_available_tag(
+    session: requests.Session, remote: AdoRemote, work_item_id: int
+) -> None:
     """Tag work item `work_item_id` `pr-available` -- the Azure DevOps equivalent of the
     GitHub `pr-available` label (Azure DevOps work items have no label concept; tags are the
     closest equivalent, same as `ado_issue.py`'s own `--tag` create/update flag)."""
     add_tag(session, remote, work_item_id, PR_AVAILABLE_LABEL)
 
 
-def delete_work_item(session: requests.Session, remote: AdoRemote, work_item_id: int) -> None:
+def delete_work_item(
+    session: requests.Session, remote: AdoRemote, work_item_id: int
+) -> None:
     """Soft-delete: moves the work item to the project's Recycle Bin, where it can be restored.
 
     Deliberately doesn't expose the REST API's `destroy=true` option — that's
     a permanent, unrecoverable delete, and there's no confirmation step that
     makes that safe to offer from a CLI flag.
     """
-    r = session.delete(f"{_base_url(remote)}/_apis/wit/workitems/{work_item_id}", params={"api-version": "7.1"})
+    r = session.delete(
+        f"{_base_url(remote)}/_apis/wit/workitems/{work_item_id}",
+        params={"api-version": "7.1"},
+    )
     if r.status_code == 404:
         sys.exit(f"Work item #{work_item_id} not found in project '{remote.project}'.")
     r.raise_for_status()
 
 
-def upload_attachment(session: requests.Session, remote: AdoRemote, attachment_name: str, file_path: str) -> tuple[str, str]:
+def upload_attachment(
+    session: requests.Session, remote: AdoRemote, attachment_name: str, file_path: str
+) -> tuple[str, str]:
     """Upload `file_path` as a work item attachment named `attachment_name`; returns (id, download url).
 
     Azure DevOps' WIT attachment-download endpoint only infers Content-Type/Content-Disposition
@@ -280,19 +319,29 @@ def upload_attachment(session: requests.Session, remote: AdoRemote, attachment_n
     return body["id"], url
 
 
-def _upload_attachments(session: requests.Session, remote: AdoRemote, paths: list[str]) -> list[tuple[str, str]]:
+def _upload_attachments(
+    session: requests.Session, remote: AdoRemote, paths: list[str]
+) -> list[tuple[str, str]]:
     """Upload each path as an attachment (screenshot or arbitrary file); returns (display name, download url) pairs.
 
     Attachment names are index-prefixed so two paths sharing a basename (e.g. two 'before.png'
     from different folders) don't overwrite each other.
     """
     return [
-        (Path(path).name, upload_attachment(session, remote, f"{i:02d}-{Path(path).name}", path)[1])
+        (
+            Path(path).name,
+            upload_attachment(session, remote, f"{i:02d}-{Path(path).name}", path)[1],
+        )
         for i, path in enumerate(paths)
     ]
 
 
-def link_attachments(session: requests.Session, remote: AdoRemote, work_item_id: int, images: list[tuple[str, str]]) -> None:
+def link_attachments(
+    session: requests.Session,
+    remote: AdoRemote,
+    work_item_id: int,
+    images: list[tuple[str, str]],
+) -> None:
     """Link already-uploaded attachments to a work item so they show up in its Attachments tab."""
     ops = build_attach_ops(images)
     r = session.patch(
@@ -304,7 +353,9 @@ def link_attachments(session: requests.Session, remote: AdoRemote, work_item_id:
     r.raise_for_status()
 
 
-def add_comment(session: requests.Session, remote: AdoRemote, work_item_id: int, text: str) -> dict:
+def add_comment(
+    session: requests.Session, remote: AdoRemote, work_item_id: int, text: str
+) -> dict:
     r = session.post(
         f"{_base_url(remote)}/_apis/wit/workItems/{work_item_id}/comments",
         params={"api-version": COMMENTS_API_VERSION},
@@ -314,7 +365,9 @@ def add_comment(session: requests.Session, remote: AdoRemote, work_item_id: int,
     return r.json()
 
 
-def last_comment(session: requests.Session, remote: AdoRemote, work_item_id: int) -> str | None:
+def last_comment(
+    session: requests.Session, remote: AdoRemote, work_item_id: int
+) -> str | None:
     """Text (HTML, as stored) of the work item's newest comment, or None if it has none."""
     r = session.get(
         f"{_base_url(remote)}/_apis/wit/workItems/{work_item_id}/comments",
@@ -325,7 +378,13 @@ def last_comment(session: requests.Session, remote: AdoRemote, work_item_id: int
     return comments[0].get("text") if comments else None
 
 
-def update_comment(session: requests.Session, remote: AdoRemote, work_item_id: int, comment_id: int, text: str) -> dict:
+def update_comment(
+    session: requests.Session,
+    remote: AdoRemote,
+    work_item_id: int,
+    comment_id: int,
+    text: str,
+) -> dict:
     r = session.patch(
         f"{_base_url(remote)}/_apis/wit/workItems/{work_item_id}/comments/{comment_id}",
         params={"api-version": COMMENTS_API_VERSION},
@@ -338,7 +397,9 @@ def update_comment(session: requests.Session, remote: AdoRemote, work_item_id: i
     return r.json()
 
 
-def delete_comment(session: requests.Session, remote: AdoRemote, work_item_id: int, comment_id: int) -> None:
+def delete_comment(
+    session: requests.Session, remote: AdoRemote, work_item_id: int, comment_id: int
+) -> None:
     r = session.delete(
         f"{_base_url(remote)}/_apis/wit/workItems/{work_item_id}/comments/{comment_id}",
         params={"api-version": COMMENTS_API_VERSION},
@@ -361,11 +422,17 @@ def add_attachments(
     """
     screenshot_paths = screenshot_paths or []
     file_paths = file_paths or []
-    images = _upload_attachments(session, remote, screenshot_paths) if screenshot_paths else []
+    images = (
+        _upload_attachments(session, remote, screenshot_paths)
+        if screenshot_paths
+        else []
+    )
     files = _upload_attachments(session, remote, file_paths) if file_paths else []
     if images or files:
         link_attachments(session, remote, work_item_id, images + files)
-    content = ensure_agent_session_note(build_comment_content_html(None, images, files)) or ""
+    content = (
+        ensure_agent_session_note(build_comment_content_html(None, images, files)) or ""
+    )
     comment = add_comment(session, remote, work_item_id, content)
     print(
         f"Attached {len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s) to work item "
@@ -373,12 +440,22 @@ def add_attachments(
     )
 
 
-def add_screenshots(session: requests.Session, remote: AdoRemote, work_item_id: int, screenshot_paths: list[str]) -> None:
+def add_screenshots(
+    session: requests.Session,
+    remote: AdoRemote,
+    work_item_id: int,
+    screenshot_paths: list[str],
+) -> None:
     """Upload+link screenshots as attachments, then post a comment embedding them as HTML `<img>` tags."""
     add_attachments(session, remote, work_item_id, screenshot_paths=screenshot_paths)
 
 
-def add_files(session: requests.Session, remote: AdoRemote, work_item_id: int, file_paths: list[str]) -> None:
+def add_files(
+    session: requests.Session,
+    remote: AdoRemote,
+    work_item_id: int,
+    file_paths: list[str],
+) -> None:
     """Upload+link arbitrary files as attachments, then post a comment linking them as HTML `<a>` tags."""
     add_attachments(session, remote, work_item_id, file_paths=file_paths)
 
@@ -397,7 +474,11 @@ def comment_with_screenshots(
     `agent_note=False` leaves out the detected agent-session note (see `gh_issue.comment`).
     """
     file_paths = file_paths or []
-    images = _upload_attachments(session, remote, screenshot_paths) if screenshot_paths else []
+    images = (
+        _upload_attachments(session, remote, screenshot_paths)
+        if screenshot_paths
+        else []
+    )
     files = _upload_attachments(session, remote, file_paths) if file_paths else []
     if images or files:
         link_attachments(session, remote, work_item_id, images + files)
@@ -476,9 +557,13 @@ def build_search_wiql(
     if area_path:
         clauses.append(f"[System.AreaPath] UNDER '{_escape_wiql_string(area_path)}'")
     if state == "open":
-        clauses.append(" AND ".join(f"[System.State] <> '{s}'" for s in _TERMINAL_STATES))
+        clauses.append(
+            " AND ".join(f"[System.State] <> '{s}'" for s in _TERMINAL_STATES)
+        )
     elif state == "closed":
-        clauses.append("(" + " OR ".join(f"[System.State] = '{s}'" for s in _TERMINAL_STATES) + ")")
+        clauses.append(
+            "(" + " OR ".join(f"[System.State] = '{s}'" for s in _TERMINAL_STATES) + ")"
+        )
     if not org_wide:
         clauses.insert(0, "[System.TeamProject] = @project")
     query = "SELECT [System.Id] FROM WorkItems"
@@ -487,7 +572,13 @@ def build_search_wiql(
     return f"{query} ORDER BY [System.ChangedDate] DESC"
 
 
-def run_wiql(session: requests.Session, remote: AdoRemote, wiql: str, top: int, org_wide: bool = False) -> list[int]:
+def run_wiql(
+    session: requests.Session,
+    remote: AdoRemote,
+    wiql: str,
+    top: int,
+    org_wide: bool = False,
+) -> list[int]:
     """`org_wide` runs the query against the org-level WIQL endpoint (no `/{project}` segment),
     which Azure DevOps resolves across every project in the org instead of just `remote.project`.
     """
@@ -501,7 +592,9 @@ def run_wiql(session: requests.Session, remote: AdoRemote, wiql: str, top: int, 
     return [wi["id"] for wi in r.json()["workItems"]]
 
 
-def get_work_items(session: requests.Session, remote: AdoRemote, ids: list[int], org_wide: bool = False) -> list[dict]:
+def get_work_items(
+    session: requests.Session, remote: AdoRemote, ids: list[int], org_wide: bool = False
+) -> list[dict]:
     """Batch-fetch Title/State (plus TeamProject when `org_wide`) for a set of work item ids, in
     the given `ids` order — WIQL only returns ids (not field values), and this batch endpoint
     doesn't guarantee it echoes them back in the order they were requested, so the caller's WIQL
@@ -514,7 +607,11 @@ def get_work_items(session: requests.Session, remote: AdoRemote, ids: list[int],
     if not ids:
         return []
     base = _org_url(remote) if org_wide else _base_url(remote)
-    fields = "System.Title,System.State,System.TeamProject" if org_wide else "System.Title,System.State"
+    fields = (
+        "System.Title,System.State,System.TeamProject"
+        if org_wide
+        else "System.Title,System.State"
+    )
     r = session.get(
         f"{base}/_apis/wit/workitems",
         params={"ids": ",".join(map(str, ids)), "fields": fields, "api-version": "7.1"},
@@ -546,16 +643,22 @@ def search(
     single project.
     """
     if org_wide and board:
-        sys.exit("--board can't be combined with --org-wide (a board's Area Path is scoped to a single project).")
+        sys.exit(
+            "--board can't be combined with --org-wide (a board's Area Path is scoped to a single project)."
+        )
     area_path = get_team_area_path(session, remote, board) if board else None
-    wiql = build_search_wiql(keywords, since, area_path, state, org_wide=org_wide, tags=tags)
+    wiql = build_search_wiql(
+        keywords, since, area_path, state, org_wide=org_wide, tags=tags
+    )
     ids = run_wiql(session, remote, wiql, top, org_wide=org_wide)
     items = get_work_items(session, remote, ids, org_wide=org_wide)
     for item in items:
         fields = item["fields"]
         project = fields.get("System.TeamProject")
         prefix = f"[{project}] " if org_wide else ""
-        print(f"{prefix}#{item['id']} [{fields['System.State']}] {fields['System.Title']}")
+        print(
+            f"{prefix}#{item['id']} [{fields['System.State']}] {fields['System.Title']}"
+        )
         print(edit_url(remote, item["id"], project if org_wide else None))
     if not items:
         print("No matching work items found.")
@@ -575,7 +678,9 @@ def create(
 ) -> dict:
     area_path = get_team_area_path(session, remote, board) if board else None
     description = ensure_agent_session_note(description, also_check=title)
-    work_item = create_work_item(session, remote, work_item_type, title, description, area_path, tags)
+    work_item = create_work_item(
+        session, remote, work_item_type, title, description, area_path, tags
+    )
     work_item_id = work_item["id"]
 
     print(f"Created {work_item_type} #{work_item_id}: {title}")
@@ -625,7 +730,9 @@ def update(
         # a project whose actual state is 'Closed') must still PATCH the canonical casing, not the
         # caller's — otherwise the update fails (or silently sets a technically-invalid value)
         # despite the validation above having found a match.
-        canonical_state = next((s for s in valid_states if state.lower() == s.lower()), None)
+        canonical_state = next(
+            (s for s in valid_states if state.lower() == s.lower()), None
+        )
         if canonical_state is not None:
             applied_state = canonical_state
         else:
@@ -639,11 +746,21 @@ def update(
             applied_state = None
 
     has_tag_change = tags is not None or bool(remove_tags)
-    if title is None and description is None and area_path is None and not has_tag_change and applied_state is None:
+    if (
+        title is None
+        and description is None
+        and area_path is None
+        and not has_tag_change
+        and applied_state is None
+    ):
         if state is not None:
-            print(f"Work item #{work_item_id}: '{state}' isn't a valid state here — noted in a comment.")
+            print(
+                f"Work item #{work_item_id}: '{state}' isn't a valid state here — noted in a comment."
+            )
             return None
-        sys.exit("Nothing to update — provide at least one of --title, --description, --board, --tag, --remove-tag, --state.")
+        sys.exit(
+            "Nothing to update — provide at least one of --title, --description, --board, --tag, --remove-tag, --state."
+        )
 
     if remove_tags:
         removal_set = {t.casefold() for t in remove_tags}
@@ -656,11 +773,18 @@ def update(
             filtered_tags = [t for t in current_tags if t.casefold() not in removal_set]
             if filtered_tags != current_tags:
                 tags = filtered_tags
-            elif title is None and description is None and area_path is None and applied_state is None:
+            elif (
+                title is None
+                and description is None
+                and area_path is None
+                and applied_state is None
+            ):
                 # None of `remove_tags` were actually present, and nothing else was given either --
                 # mirrors `add_tag`'s own idempotency check (same file) so this doesn't needlessly
                 # bump the work item's revision/history with a same-value System.Tags PATCH.
-                print(f"Work item #{work_item_id}: none of the given --remove-tag value(s) were present — nothing to do.")
+                print(
+                    f"Work item #{work_item_id}: none of the given --remove-tag value(s) were present — nothing to do."
+                )
                 return None
             # else: leave `tags` as None -- other given fields still get their own ops below,
             # without forcing a redundant, unchanged System.Tags op alongside them.
@@ -668,7 +792,16 @@ def update(
     if description is not None:
         description = ensure_agent_session_note(description, also_check=title)
 
-    work_item = update_work_item(session, remote, work_item_id, title, description, area_path, tags, applied_state)
+    work_item = update_work_item(
+        session,
+        remote,
+        work_item_id,
+        title,
+        description,
+        area_path,
+        tags,
+        applied_state,
+    )
     print(f"Updated work item #{work_item_id}")
     return work_item
 

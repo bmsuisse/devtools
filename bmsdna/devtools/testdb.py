@@ -74,7 +74,7 @@ def has_pgdevkit_project(repo: Path) -> bool:
         return False
     try:
         data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
+    except OSError, tomllib.TOMLDecodeError:
         return False
     section = data.get("tool", {}).get("pgdevkit")
     # `is None` on purpose, not `not section` -- an empty `[tool.pgdevkit]`
@@ -108,7 +108,11 @@ def project_roots(repo: Path) -> list[Path]:
     project name "akeneo_editor" via the directory-name fallback. Requiring
     an explicit section here too would silently exclude it."""
     roots = [repo] if has_pgdevkit_project(repo) else []
-    roots += [nested_root for nested in db_nested_projects(repo) if (nested_root := repo / nested).is_dir()]
+    roots += [
+        nested_root
+        for nested in db_nested_projects(repo)
+        if (nested_root := repo / nested).is_dir()
+    ]
     return roots
 
 
@@ -144,7 +148,9 @@ def find_orphaned(repo: Path) -> list[tuple[str, str, bool]]:
         config = load_config(root)
         suffixes = list(config.extra_db_suffixes)
         for name in pgdevkit_testdb.find_orphaned_dbs(project_root=root):
-            results.append((name, config.name, is_caution_db(name, config.name, suffixes)))
+            results.append(
+                (name, config.name, is_caution_db(name, config.name, suffixes))
+            )
     return results
 
 
@@ -168,7 +174,9 @@ def is_caution_db(db_name: str, project_name: str, sibling_suffixes: list[str]) 
     return tail in CAUTION_BRANCH_NAMES
 
 
-def _run_psql(args: list[str], pg_host: str, pg_port: int, pg_user: str) -> subprocess.CompletedProcess:
+def _run_psql(
+    args: list[str], pg_host: str, pg_port: int, pg_user: str
+) -> subprocess.CompletedProcess:
     """Run psql against the given host/port/user, authenticating with
     pgdevkit's own test-container password over TCP -- matching exactly how
     pgdevkit's own find_orphaned_dbs()/workspace_db_names() connect, so the
@@ -178,7 +186,18 @@ def _run_psql(args: list[str], pg_host: str, pg_port: int, pg_user: str) -> subp
     psql = require_psql()
     env = {**os.environ, "PGPASSWORD": pgdevkit_constants.PASSWORD}
     return subprocess.run(
-        [psql, "-h", pg_host, "-p", str(pg_port), "-U", pg_user, "-d", "postgres", *args],
+        [
+            psql,
+            "-h",
+            pg_host,
+            "-p",
+            str(pg_port),
+            "-U",
+            pg_user,
+            "-d",
+            "postgres",
+            *args,
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -210,7 +229,9 @@ def confirm_remote_host(pg_host: str, pg_port: int) -> bool:
     """
     if is_local_host(pg_host):
         return True
-    print(f"\npg-host '{pg_host}:{pg_port}' is not localhost -- this may be a shared/remote database.")
+    print(
+        f"\npg-host '{pg_host}:{pg_port}' is not localhost -- this may be a shared/remote database."
+    )
     try:
         answer = input("Type 'yes' to confirm dropping database(s) on this host: ")
     except EOFError:
@@ -218,10 +239,14 @@ def confirm_remote_host(pg_host: str, pg_port: int) -> bool:
     return answer.strip().lower() == "yes"
 
 
-def drop_database(name: str, pg_host: str, pg_port: int, pg_user: str) -> subprocess.CompletedProcess:
+def drop_database(
+    name: str, pg_host: str, pg_port: int, pg_user: str
+) -> subprocess.CompletedProcess:
     # Escape embedded `"` by doubling it, per Postgres quoted-identifier
     # rules -- `name` comes from a live `pg_database` listing (via
     # pgdevkit), not a bdt-validated slug, so it isn't guaranteed to already
     # be injection-safe.
     escaped = name.replace('"', '""')
-    return _run_psql(["-c", f'DROP DATABASE IF EXISTS "{escaped}"'], pg_host, pg_port, pg_user)
+    return _run_psql(
+        ["-c", f'DROP DATABASE IF EXISTS "{escaped}"'], pg_host, pg_port, pg_user
+    )

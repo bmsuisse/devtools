@@ -20,21 +20,27 @@ PR_AVAILABLE_LABEL = "pr-available"
 
 # GitHub's own PR-body/commit-message closing keywords -- see
 # https://docs.github.com/en/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue
-_GITHUB_KEYWORD_RE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*#(\d+)", re.IGNORECASE)
+_GITHUB_KEYWORD_RE = re.compile(
+    r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*#(\d+)", re.IGNORECASE
+)
 
 # Matches a GitHub issue URL, e.g. https://github.com/owner/repo/issues/42. The `(?<![\w-])`
 # lookbehind anchors "github.com" to an actual host boundary (start of string, `//`, or a `.`
 # subdomain separator) -- without it, a URL on an unrelated domain that merely *contains* the
 # substring "github.com" (e.g. https://notgithub.com/owner/repo/issues/42, or any host ending in
 # "-github.com") would be misidentified as pointing at github.com itself.
-_GITHUB_ISSUE_URL_RE = re.compile(r"(?<![\w-])github\.com/([^/\s]+)/([^/\s]+)/issues/(\d+)")
+_GITHUB_ISSUE_URL_RE = re.compile(
+    r"(?<![\w-])github\.com/([^/\s]+)/([^/\s]+)/issues/(\d+)"
+)
 
 # Matches an Azure DevOps work item URL, e.g. https://dev.azure.com/org/project/_workitems/edit/42
 # (also the older org.visualstudio.com host form). Same host-boundary reasoning as
 # `_GITHUB_ISSUE_URL_RE` for the "dev.azure.com" branch; the "*.visualstudio.com" branch's
 # `[^./\s]+` group already only captures a single dot-delimited label, so it can't be fooled the
 # same way.
-_ADO_WORK_ITEM_URL_RE = re.compile(r"(?:(?<![\w-])dev\.azure\.com/([^/\s]+)|([^./\s]+)\.visualstudio\.com)/\S*_workitems/edit/(\d+)")
+_ADO_WORK_ITEM_URL_RE = re.compile(
+    r"(?:(?<![\w-])dev\.azure\.com/([^/\s]+)|([^./\s]+)\.visualstudio\.com)/\S*_workitems/edit/(\d+)"
+)
 
 
 def parse_issue_ref(ref: str, remote: AdoRemote | GitHubRemote) -> int:
@@ -49,16 +55,24 @@ def parse_issue_ref(ref: str, remote: AdoRemote | GitHubRemote) -> int:
 
     if isinstance(remote, GitHubRemote):
         match = _GITHUB_ISSUE_URL_RE.search(ref)
-        if match and match.group(1).casefold() == remote.owner.casefold() and match.group(2).casefold() == remote.repo.casefold():
+        if (
+            match
+            and match.group(1).casefold() == remote.owner.casefold()
+            and match.group(2).casefold() == remote.repo.casefold()
+        ):
             return int(match.group(3))
-        raise ValueError(f"'{ref}' isn't a bare issue number or a github.com/{remote.owner}/{remote.repo}/issues/<N> URL")
+        raise ValueError(
+            f"'{ref}' isn't a bare issue number or a github.com/{remote.owner}/{remote.repo}/issues/<N> URL"
+        )
 
     match = _ADO_WORK_ITEM_URL_RE.search(ref)
     if match:
         org = match.group(1) or match.group(2)
         if org and org.casefold() == remote.org.casefold():
             return int(match.group(3))
-    raise ValueError(f"'{ref}' isn't a bare work item number or a dev.azure.com/{remote.org}/.../_workitems/edit/<N> URL")
+    raise ValueError(
+        f"'{ref}' isn't a bare work item number or a dev.azure.com/{remote.org}/.../_workitems/edit/<N> URL"
+    )
 
 
 def github_body_already_closes(body: str, issue_number: int) -> bool:
@@ -73,7 +87,9 @@ def github_body_already_closes(body: str, issue_number: int) -> bool:
     return any(int(m) == issue_number for m in _GITHUB_KEYWORD_RE.findall(body))
 
 
-def find_issue_refs_in_body(body: str | None, remote: AdoRemote | GitHubRemote) -> list[int]:
+def find_issue_refs_in_body(
+    body: str | None, remote: AdoRemote | GitHubRemote
+) -> list[int]:
     """Issue/work-item numbers mentioned in `body` that belong to *this* repo's own tracker, in
     first-seen order.
 
@@ -97,7 +113,10 @@ def find_issue_refs_in_body(body: str | None, remote: AdoRemote | GitHubRemote) 
         for match in _GITHUB_KEYWORD_RE.finditer(body):
             _add(int(match.group(1)))
         for match in _GITHUB_ISSUE_URL_RE.finditer(body):
-            if match.group(1).casefold() == remote.owner.casefold() and match.group(2).casefold() == remote.repo.casefold():
+            if (
+                match.group(1).casefold() == remote.owner.casefold()
+                and match.group(2).casefold() == remote.repo.casefold()
+            ):
                 _add(int(match.group(3)))
     else:
         for match in _ADO_WORK_ITEM_URL_RE.finditer(body):

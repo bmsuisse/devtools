@@ -39,7 +39,9 @@ SKIP_DIRS = {
     "generated",
     "__pycache__",
 }
-REGEX_T = re.compile(r"(?:(?<![.\w$])t|\$t|\bi18n\.t)\([\"']([a-zA-Z0-9\-._]+)[\"']\s*[,)]")
+REGEX_T = re.compile(
+    r"(?:(?<![.\w$])t|\$t|\bi18n\.t)\([\"']([a-zA-Z0-9\-._]+)[\"']\s*[,)]"
+)
 REGEX_JINJA = re.compile(r"[\"']([a-zA-Z0-9\-._]+)[\"']\s*\|\s*tr\b")
 
 Translations = dict[str, dict[str, str]]
@@ -95,7 +97,9 @@ def _flatten_toml(data: dict, prefix: str = "") -> Translations:
         scalars = {lk: lv for lk, lv in v.items() if not isinstance(lv, dict)}
         if scalars:
             add(key, scalars)
-        for sub_key, sub_entry in _flatten_toml({lk: lv for lk, lv in v.items() if isinstance(lv, dict)}, key).items():
+        for sub_key, sub_entry in _flatten_toml(
+            {lk: lv for lk, lv in v.items() if isinstance(lv, dict)}, key
+        ).items():
             add(sub_key, sub_entry)
     return out
 
@@ -214,7 +218,9 @@ class Result:
     imported: int = 0
     written: list[Path] = field(default_factory=list)
     toml_changed: bool = False
-    stale: list[Path] = field(default_factory=list)  # --check: generated files that differ from toml
+    stale: list[Path] = field(
+        default_factory=list
+    )  # --check: generated files that differ from toml
 
     @property
     def ok(self) -> bool:
@@ -243,11 +249,16 @@ def run(cfg: Config, *, check: bool = False, import_json: bool = False) -> Resul
     res.toml_changed = transls != original
     if check:
         if not res.new_keys:
-            expected = {lng: build_language(transls, lng, cfg.nested) for lng in cfg.languages}
+            expected = {
+                lng: build_language(transls, lng, cfg.nested) for lng in cfg.languages
+            }
             for out_dir in cfg.output:
                 for lng, content in expected.items():
                     p = out_dir / f"{lng}.json"
-                    if not p.is_file() or json.loads(p.read_text(encoding="utf-8-sig")) != content:
+                    if (
+                        not p.is_file()
+                        or json.loads(p.read_text(encoding="utf-8-sig")) != content
+                    ):
                         res.stale.append(p)
         return res
     if res.toml_changed:
@@ -271,19 +282,27 @@ def run(cfg: Config, *, check: bool = False, import_json: bool = False) -> Resul
     return res
 
 
-def add_key(cfg: Config, key: str, values: dict[str, str], *, force: bool = False) -> Result:
+def add_key(
+    cfg: Config, key: str, values: dict[str, str], *, force: bool = False
+) -> Result:
     """Add `key` with `values` (language -> text) to translations.toml, then regenerate all JSON files."""
     if not key.strip():
         raise ValueError("Key must not be empty")
     unknown = sorted(set(values) - set(cfg.languages))
     if unknown:
-        raise ValueError(f"Unknown language(s) {', '.join(unknown)}; configured: {', '.join(cfg.languages)}")
+        raise ValueError(
+            f"Unknown language(s) {', '.join(unknown)}; configured: {', '.join(cfg.languages)}"
+        )
     missing = [lng for lng in cfg.required_languages if not values.get(lng, "").strip()]
     if missing:
-        raise ValueError(f"Missing required translation(s): {', '.join(missing)} (e.g. en=Add de=Hinzufügen)")
+        raise ValueError(
+            f"Missing required translation(s): {', '.join(missing)} (e.g. en=Add de=Hinzufügen)"
+        )
     transls = load_translations(cfg.file)
     if key in transls and not force:
-        raise ValueError(f"Key {key!r} already exists in {cfg.file.name} (use --force to overwrite)")
+        raise ValueError(
+            f"Key {key!r} already exists in {cfg.file.name} (use --force to overwrite)"
+        )
     transls[key] = dict(values)
     save_translations(cfg.file, transls)
     return run(cfg)

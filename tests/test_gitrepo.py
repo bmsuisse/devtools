@@ -18,10 +18,22 @@ from bmsdna.devtools.gitrepo import (
 @pytest.mark.parametrize(
     "url,expected",
     [
-        ("git@ssh.dev.azure.com:v3/bmeurope/BMS%20-%20Data/MDMApp", AdoRemote("bmeurope", "BMS - Data", "MDMApp")),
-        ("https://dev.azure.com/bmeurope/BMS%20-%20CCMT2/_git/ccmt2", AdoRemote("bmeurope", "BMS - CCMT2", "ccmt2")),
-        ("https://user@dev.azure.com/bmeurope/BMS%20%E2%80%93%20MyPage/_git/onesales", AdoRemote("bmeurope", "BMS – MyPage", "onesales")),
-        ("https://bmeurope.visualstudio.com/BMS%20-%20Data/_git/MDMApp", AdoRemote("bmeurope", "BMS - Data", "MDMApp")),
+        (
+            "git@ssh.dev.azure.com:v3/bmeurope/BMS%20-%20Data/MDMApp",
+            AdoRemote("bmeurope", "BMS - Data", "MDMApp"),
+        ),
+        (
+            "https://dev.azure.com/bmeurope/BMS%20-%20CCMT2/_git/ccmt2",
+            AdoRemote("bmeurope", "BMS - CCMT2", "ccmt2"),
+        ),
+        (
+            "https://user@dev.azure.com/bmeurope/BMS%20%E2%80%93%20MyPage/_git/onesales",
+            AdoRemote("bmeurope", "BMS – MyPage", "onesales"),
+        ),
+        (
+            "https://bmeurope.visualstudio.com/BMS%20-%20Data/_git/MDMApp",
+            AdoRemote("bmeurope", "BMS - Data", "MDMApp"),
+        ),
     ],
 )
 def test_parse_ado_remote(url: str, expected: AdoRemote) -> None:
@@ -38,9 +50,15 @@ def test_parse_ado_remote_rejects_non_ado_url() -> None:
     [
         ("git@github.com:bmsuisse/devtools.git", GitHubRemote("bmsuisse", "devtools")),
         ("git@github.com:bmsuisse/devtools", GitHubRemote("bmsuisse", "devtools")),
-        ("https://github.com/bmsuisse/devtools.git", GitHubRemote("bmsuisse", "devtools")),
+        (
+            "https://github.com/bmsuisse/devtools.git",
+            GitHubRemote("bmsuisse", "devtools"),
+        ),
         ("https://github.com/bmsuisse/devtools", GitHubRemote("bmsuisse", "devtools")),
-        ("ssh://git@github.com/bmsuisse/devtools.git", GitHubRemote("bmsuisse", "devtools")),
+        (
+            "ssh://git@github.com/bmsuisse/devtools.git",
+            GitHubRemote("bmsuisse", "devtools"),
+        ),
     ],
 )
 def test_parse_github_remote(url: str, expected: GitHubRemote) -> None:
@@ -53,13 +71,15 @@ def test_parse_github_remote_rejects_non_github_url() -> None:
 
 
 def test_parse_remote_dispatches_to_github() -> None:
-    assert parse_remote("git@github.com:bmsuisse/devtools.git") == GitHubRemote("bmsuisse", "devtools")
+    assert parse_remote("git@github.com:bmsuisse/devtools.git") == GitHubRemote(
+        "bmsuisse", "devtools"
+    )
 
 
 def test_parse_remote_dispatches_to_ado() -> None:
-    assert parse_remote("git@ssh.dev.azure.com:v3/bmeurope/BMS%20-%20Data/MDMApp") == AdoRemote(
-        "bmeurope", "BMS - Data", "MDMApp"
-    )
+    assert parse_remote(
+        "git@ssh.dev.azure.com:v3/bmeurope/BMS%20-%20Data/MDMApp"
+    ) == AdoRemote("bmeurope", "BMS - Data", "MDMApp")
 
 
 def test_parse_remote_rejects_unknown_host() -> None:
@@ -69,10 +89,22 @@ def test_parse_remote_rejects_unknown_host() -> None:
 
 def test_head_commit_subject_returns_latest_commit_subject(tmp_path) -> None:
     subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=tmp_path,
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=tmp_path,
+        capture_output=True,
+        check=True,
+    )
     (tmp_path / "a.txt").write_text("x")
-    subprocess.run(["git", "add", "a.txt"], cwd=tmp_path, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "add", "a.txt"], cwd=tmp_path, capture_output=True, check=True
+    )
     subprocess.run(
         ["git", "commit", "-m", "feat(customers): add widget support"],
         cwd=tmp_path,
@@ -80,4 +112,6 @@ def test_head_commit_subject_returns_latest_commit_subject(tmp_path) -> None:
         check=True,
     )
 
-    assert head_commit_subject(cwd=str(tmp_path)) == "feat(customers): add widget support"
+    assert (
+        head_commit_subject(cwd=str(tmp_path)) == "feat(customers): add widget support"
+    )

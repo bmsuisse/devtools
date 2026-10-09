@@ -16,7 +16,17 @@ def get_az_devops_token() -> str:
     az = require_az()
     try:
         result = subprocess.run(
-            [az, "account", "get-access-token", "--resource", ADO_RESOURCE_ID, "--query", "accessToken", "-o", "tsv"],
+            [
+                az,
+                "account",
+                "get-access-token",
+                "--resource",
+                ADO_RESOURCE_ID,
+                "--query",
+                "accessToken",
+                "-o",
+                "tsv",
+            ],
             capture_output=True,
             encoding="utf-8",
             timeout=CLI_TIMEOUT_SECS,
@@ -25,7 +35,9 @@ def get_az_devops_token() -> str:
         # `az` blocks on an interactive re-auth prompt when its cached login has expired
         # instead of failing outright -- without this timeout that would hang the caller
         # forever with no indication why.
-        sys.exit(f"`az account get-access-token` timed out after {CLI_TIMEOUT_SECS:.0f}s -- try `az login`?")
+        sys.exit(
+            f"`az account get-access-token` timed out after {CLI_TIMEOUT_SECS:.0f}s -- try `az login`?"
+        )
     if result.returncode != 0:
         sys.exit(f"az login required and no PAT provided.\n{result.stderr.strip()}")
     return result.stdout.strip()

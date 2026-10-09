@@ -19,12 +19,27 @@ import time
 from pathlib import Path
 
 from . import pr_issue_link
-from .cli_tools import CLI_TIMEOUT_SECS, EXIT_NEEDS_APPROVAL, PollHeartbeat, detect_agent_session, ensure_agent_session_note, is_claude_code
-from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
+from .cli_tools import (
+    CLI_TIMEOUT_SECS,
+    EXIT_NEEDS_APPROVAL,
+    PollHeartbeat,
+    detect_agent_session,
+    ensure_agent_session_note,
+    is_claude_code,
+)
+from .pr_markdown import (
+    build_attachments_section,
+    build_comment_content,
+    build_screenshots_section,
+)
 
-PR_VIEW_FIELDS = "number,title,baseRefName,headRefName,mergeable,statusCheckRollup,isDraft"
+PR_VIEW_FIELDS = (
+    "number,title,baseRefName,headRefName,mergeable,statusCheckRollup,isDraft"
+)
 # What `bdt pr info` needs on top of the check rollup: where to link to, and the issues GitHub says it closes.
-PR_INFO_FIELDS = "number,title,url,state,isDraft,closingIssuesReferences,statusCheckRollup"
+PR_INFO_FIELDS = (
+    "number,title,url,state,isDraft,closingIssuesReferences,statusCheckRollup"
+)
 
 # GitHub has no API for uploading images to a PR description (only the web
 # UI's drag-and-drop, which needs a browser session). The standard
@@ -70,7 +85,9 @@ _STATUS_CONTEXT_BUCKET = {
 _RUN_ID_RE = re.compile(r"/actions/runs/(\d+)")
 
 
-def _run(args: list[str], *, timeout: float = CLI_TIMEOUT_SECS, **kwargs) -> subprocess.CompletedProcess:
+def _run(
+    args: list[str], *, timeout: float = CLI_TIMEOUT_SECS, **kwargs
+) -> subprocess.CompletedProcess:
     """`subprocess.run` bounded by `timeout` (defaults to `CLI_TIMEOUT_SECS`) -- every
     `gh`/`git` call in this module goes through this instead of calling `subprocess.run`
     directly, so a stalled network call or `gh`/`git` blocking on an interactive prompt
@@ -84,7 +101,9 @@ def _run(args: list[str], *, timeout: float = CLI_TIMEOUT_SECS, **kwargs) -> sub
     try:
         return subprocess.run(args, timeout=timeout, **kwargs)
     except subprocess.TimeoutExpired:
-        sys.exit(f"`{' '.join(args)}` timed out after {timeout:.0f}s -- stalled network, or needs an interactive login?")
+        sys.exit(
+            f"`{' '.join(args)}` timed out after {timeout:.0f}s -- stalled network, or needs an interactive login?"
+        )
 
 
 def _run_gh_json(gh: str, args: list[str]) -> dict:
@@ -198,7 +217,11 @@ def retry(gh: str, pr_id: int | None = None) -> None:
     # the others, and the failure summary at the end still surfaces it.
     errors: list[str] = []
     for run_id in run_ids:
-        r = _run([gh, "run", "rerun", str(run_id), "--failed"], capture_output=True, encoding="utf-8")
+        r = _run(
+            [gh, "run", "rerun", str(run_id), "--failed"],
+            capture_output=True,
+            encoding="utf-8",
+        )
         if r.returncode != 0:
             errors.append(f"run {run_id}: {(r.stderr or r.stdout).strip() or 'failed'}")
             continue
@@ -218,11 +241,17 @@ def get_workflow_runs_for_branch(gh: str, branch: str, limit: int = 5) -> list[d
     """
     r = _run(
         [
-            gh, "run", "list",
-            "--branch", branch,
-            "--event", "push",
-            "--limit", str(limit),
-            "--json", "databaseId,name,workflowName,status,conclusion,url,headBranch",
+            gh,
+            "run",
+            "list",
+            "--branch",
+            branch,
+            "--event",
+            "push",
+            "--limit",
+            str(limit),
+            "--json",
+            "databaseId,name,workflowName,status,conclusion,url,headBranch",
         ],
         capture_output=True,
         encoding="utf-8",
@@ -254,7 +283,7 @@ def deploy_run_hint(gh: str, target_branch: str) -> str | None:
     """
     try:
         runs = get_workflow_runs_for_branch(gh, target_branch, limit=1)
-    except (SystemExit, json.JSONDecodeError):
+    except SystemExit, json.JSONDecodeError:
         return None
     if not runs:
         return None
@@ -268,7 +297,9 @@ def deploy_run_hint(gh: str, target_branch: str) -> str | None:
 
 def print_check(check: dict) -> None:
     bucket = check_bucket(check)
-    icon = {"pass": "✓", "fail": "✗", "cancel": "⊘", "waiting_approval": "⏸"}.get(bucket, "…")
+    icon = {"pass": "✓", "fail": "✗", "cancel": "⊘", "waiting_approval": "⏸"}.get(
+        bucket, "…"
+    )
     print(f"  [{icon} {bucket.upper()}] {check_label(check)}")
 
 
@@ -328,7 +359,9 @@ def run(gh: str, wait: bool, pr_id: int | None = None) -> None:
         buckets = [check_bucket(c) for c in checks]
         msg += " | " + ", ".join(f"{check_label(c)}: {check_bucket(c)}" for c in checks)
 
-        waiting_approval = [c for c, b in zip(checks, buckets) if b == "waiting_approval"]
+        waiting_approval = [
+            c for c, b in zip(checks, buckets) if b == "waiting_approval"
+        ]
         # A failed check anywhere in the PR is reported as such even when another check is
         # separately waiting on approval — a human shouldn't be sent to go approve a
         # deployment gate while staying unaware that CI has already failed elsewhere.
@@ -337,7 +370,9 @@ def run(gh: str, wait: bool, pr_id: int | None = None) -> None:
             for c in waiting_approval:
                 details_url = c.get("detailsUrl")
                 suffix = f" — {details_url}" if details_url else ""
-                item_lines.append(f"{check_label(c)} needs a reviewer to approve the deployment{suffix}")
+                item_lines.append(
+                    f"{check_label(c)} needs a reviewer to approve the deployment{suffix}"
+                )
             exit_needs_approval(msg, item_lines, "bdt pr status --wait")
 
         # A check waiting on approval never resolves on its own -- if some other still-pending
@@ -368,7 +403,11 @@ def run(gh: str, wait: bool, pr_id: int | None = None) -> None:
 
 
 def print_failed_step_logs(gh: str, run_id: int) -> None:
-    r = _run([gh, "run", "view", str(run_id), "--log-failed"], capture_output=True, encoding="utf-8")
+    r = _run(
+        [gh, "run", "view", str(run_id), "--log-failed"],
+        capture_output=True,
+        encoding="utf-8",
+    )
     output = (r.stdout or "").strip()
     if r.returncode != 0 or not output:
         print("  (no failed steps with logs)")
@@ -435,7 +474,9 @@ def run_watch_deploy(gh: str, target_branch: str, wait: bool) -> None:
         # A run stuck on approval must not be treated as "still in progress" once something
         # else has already failed -- otherwise --wait would poll forever for a run that can
         # never resolve on its own instead of reporting the failure.
-        all_done = already_failed or all(r.get("status") == "completed" for r in latest_runs)
+        all_done = already_failed or all(
+            r.get("status") == "completed" for r in latest_runs
+        )
         if all_done or not wait:
             print(msg)
             print("\nDetails:")
@@ -453,7 +494,13 @@ def run_watch_deploy(gh: str, target_branch: str, wait: bool) -> None:
         time.sleep(30)
 
 
-def create(gh: str, target: str, extra_args: list[str], draft: bool = False, labels: list[str] | None = None) -> tuple[int, str | None]:
+def create(
+    gh: str,
+    target: str,
+    extra_args: list[str],
+    draft: bool = False,
+    labels: list[str] | None = None,
+) -> tuple[int, str | None]:
     """Create a GitHub PR from the current branch into `target`.
 
     --fill autofills title/body from commit info so this never blocks on an
@@ -469,7 +516,15 @@ def create(gh: str, target: str, extra_args: list[str], draft: bool = False, lab
     open it; on failure the url is `None` and the CLI's stderr is
     surfaced to ours.
     """
-    cmd = [gh, "pr", "create", "--base", target, "--fill", *(["--draft"] if draft else [])]
+    cmd = [
+        gh,
+        "pr",
+        "create",
+        "--base",
+        target,
+        "--fill",
+        *(["--draft"] if draft else []),
+    ]
     for label in labels or []:
         cmd += ["--label", label]
     cmd += extra_args
@@ -500,9 +555,13 @@ def ensure_session_note(gh: str) -> None:
         body = pr.get("body") or ""
         noted = ensure_agent_session_note(body, also_check=pr.get("title"))
         if noted != body:
-            r = _run([gh, "pr", "edit", str(pr["number"]), "--body", noted or ""], capture_output=True, encoding="utf-8")
+            r = _run(
+                [gh, "pr", "edit", str(pr["number"]), "--body", noted or ""],
+                capture_output=True,
+                encoding="utf-8",
+            )
             r.check_returncode()
-    except (subprocess.SubprocessError, SystemExit, json.JSONDecodeError, OSError):
+    except subprocess.SubprocessError, SystemExit, json.JSONDecodeError, OSError:
         pass
 
 
@@ -531,7 +590,11 @@ def link_issue_to_pr(gh: str, pr_number: int, body: str, issue_number: int) -> s
     if pr_issue_link.github_body_already_closes(body, issue_number):
         return body
     new_body = f"{body.rstrip()}\n\nFixes #{issue_number}\n".lstrip("\n")
-    r = _run([gh, "pr", "edit", str(pr_number), "--body", new_body], capture_output=True, encoding="utf-8")
+    r = _run(
+        [gh, "pr", "edit", str(pr_number), "--body", new_body],
+        capture_output=True,
+        encoding="utf-8",
+    )
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or "`gh pr edit` failed")
     return new_body
@@ -565,14 +628,23 @@ def set_draft(gh: str, pr_id: int | None = None) -> bool:
     return True
 
 
-def _git(args: list[str], env: dict[str, str] | None = None, *, timeout: float = CLI_TIMEOUT_SECS) -> str:
-    r = _run(["git", *args], capture_output=True, encoding="utf-8", env=env, timeout=timeout)
+def _git(
+    args: list[str],
+    env: dict[str, str] | None = None,
+    *,
+    timeout: float = CLI_TIMEOUT_SECS,
+) -> str:
+    r = _run(
+        ["git", *args], capture_output=True, encoding="utf-8", env=env, timeout=timeout
+    )
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or f"`git {' '.join(args)}` failed")
     return r.stdout.strip()
 
 
-def push_assets(owner: str, repo: str, branch: str, paths: list[str], max_attempts: int = 5) -> list[str]:
+def push_assets(
+    owner: str, repo: str, branch: str, paths: list[str], max_attempts: int = 5
+) -> list[str]:
     """Push `paths` (screenshots or arbitrary files) to a `<branch>/` folder on the `pr-assets`
     branch and return their raw blob URLs.
 
@@ -587,22 +659,38 @@ def push_assets(owner: str, repo: str, branch: str, paths: list[str], max_attemp
     """
     for attempt in range(1, max_attempts + 1):
         remote_ref = _run(
-            ["git", "ls-remote", "origin", f"refs/heads/{SCREENSHOTS_BRANCH}"], capture_output=True, encoding="utf-8"
+            ["git", "ls-remote", "origin", f"refs/heads/{SCREENSHOTS_BRANCH}"],
+            capture_output=True,
+            encoding="utf-8",
         ).stdout.split()
         parent = remote_ref[0] if remote_ref else None
 
         with tempfile.TemporaryDirectory() as tmp:
             env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
             if parent:
-                _git(["fetch", "origin", SCREENSHOTS_BRANCH], env=env, timeout=CLI_UPLOAD_TIMEOUT_SECS)
+                _git(
+                    ["fetch", "origin", SCREENSHOTS_BRANCH],
+                    env=env,
+                    timeout=CLI_UPLOAD_TIMEOUT_SECS,
+                )
                 _git(["read-tree", parent], env=env)
 
             urls = []
             for i, path in enumerate(paths):
                 blob_sha = _git(["hash-object", "-w", path])
                 tree_path = f"{branch}/{i:02d}-{Path(path).name}"
-                _git(["update-index", "--add", "--cacheinfo", f"100644,{blob_sha},{tree_path}"], env=env)
-                urls.append(f"https://github.com/{owner}/{repo}/blob/{SCREENSHOTS_BRANCH}/{tree_path}?raw=true")
+                _git(
+                    [
+                        "update-index",
+                        "--add",
+                        "--cacheinfo",
+                        f"100644,{blob_sha},{tree_path}",
+                    ],
+                    env=env,
+                )
+                urls.append(
+                    f"https://github.com/{owner}/{repo}/blob/{SCREENSHOTS_BRANCH}/{tree_path}?raw=true"
+                )
 
             tree_sha = _git(["write-tree"], env=env)
 
@@ -625,12 +713,16 @@ def push_assets(owner: str, repo: str, branch: str, paths: list[str], max_attemp
     return []  # unreachable; loop always returns or exits
 
 
-def _screenshot_images(owner: str, repo: str, branch: str, screenshot_paths: list[str]) -> list[tuple[str, str]]:
+def _screenshot_images(
+    owner: str, repo: str, branch: str, screenshot_paths: list[str]
+) -> list[tuple[str, str]]:
     urls = push_assets(owner, repo, branch, screenshot_paths)
     return list(zip((Path(p).name for p in screenshot_paths), urls))
 
 
-def _file_links(owner: str, repo: str, branch: str, file_paths: list[str]) -> list[tuple[str, str]]:
+def _file_links(
+    owner: str, repo: str, branch: str, file_paths: list[str]
+) -> list[tuple[str, str]]:
     urls = push_assets(owner, repo, branch, file_paths)
     return list(zip((Path(p).name for p in file_paths), urls))
 
@@ -651,21 +743,35 @@ def add_attachments(
     pr = _run_gh_json(gh, ["pr", "view", "--json", "number,body"])
     body: str = pr.get("body") or ""
     if screenshot_paths:
-        body = build_screenshots_section(body, _screenshot_images(owner, repo, branch, screenshot_paths))
+        body = build_screenshots_section(
+            body, _screenshot_images(owner, repo, branch, screenshot_paths)
+        )
     if file_paths:
-        body = build_attachments_section(body, _file_links(owner, repo, branch, file_paths))
-    r = _run([gh, "pr", "edit", str(pr["number"]), "--body", body], capture_output=True, encoding="utf-8")
+        body = build_attachments_section(
+            body, _file_links(owner, repo, branch, file_paths)
+        )
+    r = _run(
+        [gh, "pr", "edit", str(pr["number"]), "--body", body],
+        capture_output=True,
+        encoding="utf-8",
+    )
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or "`gh pr edit` failed")
-    print(f"Attached {len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s) to PR #{pr['number']}")
+    print(
+        f"Attached {len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s) to PR #{pr['number']}"
+    )
 
 
-def add_screenshots(gh: str, owner: str, repo: str, branch: str, screenshot_paths: list[str]) -> None:
+def add_screenshots(
+    gh: str, owner: str, repo: str, branch: str, screenshot_paths: list[str]
+) -> None:
     """Push screenshots to the `pr-assets` branch and append them to the current branch's PR body."""
     add_attachments(gh, owner, repo, branch, screenshot_paths=screenshot_paths)
 
 
-def add_files(gh: str, owner: str, repo: str, branch: str, file_paths: list[str]) -> None:
+def add_files(
+    gh: str, owner: str, repo: str, branch: str, file_paths: list[str]
+) -> None:
     """Push files to the `pr-assets` branch and append them as linked attachments to the current branch's PR body."""
     add_attachments(gh, owner, repo, branch, file_paths=file_paths)
 
@@ -688,7 +794,13 @@ def update(
     overridden with the PR's actual head branch rather than trusting the caller's guess,
     since there may be no matching branch checked out locally at all.
     """
-    view_args = ["pr", "view", *_pr_id_args(pr_id), "--json", "number,title,body,headRefName"]
+    view_args = [
+        "pr",
+        "view",
+        *_pr_id_args(pr_id),
+        "--json",
+        "number,title,body,headRefName",
+    ]
     pr = _run_gh_json(gh, view_args)
     if pr_id is not None:
         branch = pr.get("headRefName") or branch
@@ -696,12 +808,21 @@ def update(
     if title:
         args += ["--title", title]
     if description is not None or screenshot_paths or file_paths:
-        new_body: str = description if description is not None else (pr.get("body") or "")
+        new_body: str = (
+            description if description is not None else (pr.get("body") or "")
+        )
         if screenshot_paths:
-            new_body = build_screenshots_section(new_body, _screenshot_images(owner, repo, branch, screenshot_paths))
+            new_body = build_screenshots_section(
+                new_body, _screenshot_images(owner, repo, branch, screenshot_paths)
+            )
         if file_paths:
-            new_body = build_attachments_section(new_body, _file_links(owner, repo, branch, file_paths))
-        new_body = ensure_agent_session_note(new_body, also_check=title or pr.get("title")) or ""
+            new_body = build_attachments_section(
+                new_body, _file_links(owner, repo, branch, file_paths)
+            )
+        new_body = (
+            ensure_agent_session_note(new_body, also_check=title or pr.get("title"))
+            or ""
+        )
         args += ["--body", new_body]
     if len(args) == 3:
         return
@@ -725,15 +846,23 @@ def comment_with_screenshots(
     or on `pr_id` directly, if given.
     """
     file_paths = file_paths or []
-    images = _screenshot_images(owner, repo, branch, screenshot_paths) if screenshot_paths else []
+    images = (
+        _screenshot_images(owner, repo, branch, screenshot_paths)
+        if screenshot_paths
+        else []
+    )
     files = _file_links(owner, repo, branch, file_paths) if file_paths else []
-    content = ensure_agent_session_note(build_comment_content(message, images, files)) or ""
+    content = (
+        ensure_agent_session_note(build_comment_content(message, images, files)) or ""
+    )
     args = [gh, "pr", "comment", *_pr_id_args(pr_id), "--body", content]
     r = _run(args, capture_output=True, encoding="utf-8")
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or "`gh pr comment` failed")
     target = f"PR #{pr_id}" if pr_id is not None else "the current PR"
-    print(f"Added comment ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) to {target}")
+    print(
+        f"Added comment ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) to {target}"
+    )
 
 
 def protection_requires_status_checks(protection: dict) -> bool:

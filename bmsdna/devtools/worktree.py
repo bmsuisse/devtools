@@ -55,7 +55,9 @@ def _run(cmd: list[str], cwd: Path) -> None:
         sys.exit(f"'{cmd[0]}' is required for this command but wasn't found on PATH.")
 
 
-def _run_capture(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
+def _run_capture(
+    cmd: list[str], cwd: Path | None = None
+) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
 
 
@@ -103,13 +105,19 @@ def create(
     # hint, not the point of the command.
     if base in ("main", "master"):
         remote_default = pull_mod.default_branch("origin", cwd=path, timeout=5.0)
-        originated_from_default = base == remote_default if remote_default is not None else True
+        originated_from_default = (
+            base == remote_default if remote_default is not None else True
+        )
     else:
         originated_from_default = False
     if originated_from_default:
-        print(f"Hint: run `bdt pull --no-default` in it to pull the latest {base} (it's also the default branch, so pulling that again would be redundant).")
+        print(
+            f"Hint: run `bdt pull --no-default` in it to pull the latest {base} (it's also the default branch, so pulling that again would be redundant)."
+        )
     else:
-        print("Hint: run `bdt pull` in it to pull the latest main/master and default branch.")
+        print(
+            "Hint: run `bdt pull` in it to pull the latest main/master and default branch."
+        )
     return path
 
 
@@ -142,9 +150,11 @@ def find_repos(root: Path) -> list[Path]:
                 subdirs = [
                     entry.path
                     for entry in it
-                    if entry.is_dir(follow_symlinks=False) and not entry.name.startswith(".") and entry.name not in _SKIP_DIRS
+                    if entry.is_dir(follow_symlinks=False)
+                    and not entry.name.startswith(".")
+                    and entry.name not in _SKIP_DIRS
                 ]
-        except (PermissionError, NotADirectoryError, FileNotFoundError):
+        except PermissionError, NotADirectoryError, FileNotFoundError:
             continue
         stack.extend(subdirs)
     return repos
@@ -158,7 +168,16 @@ def _main_repo_root(worktree_path: Path) -> Path | None:
     inside *some* still-existing worktree of the repo; using the main
     checkout rather than `worktree_path` itself keeps that true even after
     `worktree_path` is deleted mid-call."""
-    result = _run_capture(["git", "-C", str(worktree_path), "rev-parse", "--path-format=absolute", "--git-common-dir"])
+    result = _run_capture(
+        [
+            "git",
+            "-C",
+            str(worktree_path),
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+        ]
+    )
     if result.returncode != 0:
         return None
     return Path(result.stdout.strip()).parent
@@ -195,12 +214,16 @@ def _parse_worktree_list(repo: Path) -> list[dict]:
 
 
 def _ref_exists(repo: Path, ref: str) -> bool:
-    result = _run_capture(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", ref])
+    result = _run_capture(
+        ["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", ref]
+    )
     return result.returncode == 0
 
 
 def _is_ancestor(repo: Path, commit: str, ref: str) -> bool:
-    result = _run_capture(["git", "-C", str(repo), "merge-base", "--is-ancestor", commit, ref])
+    result = _run_capture(
+        ["git", "-C", str(repo), "merge-base", "--is-ancestor", commit, ref]
+    )
     return result.returncode == 0
 
 
@@ -282,7 +305,9 @@ def collect_worktrees(repo: Path, remote: str) -> list[Worktree]:
 # --- `bdt cleanup worktrees` ---------------------------------------------
 
 
-def remove_worktree(wt: Worktree, *, drop_dbs: bool, pg_host: str, pg_port: int, pg_user: str) -> tuple[subprocess.CompletedProcess, list[tuple[str, bool]]]:
+def remove_worktree(
+    wt: Worktree, *, drop_dbs: bool, pg_host: str, pg_port: int, pg_user: str
+) -> tuple[subprocess.CompletedProcess, list[tuple[str, bool]]]:
     """Remove a worktree, retrying with --force if git blocks it solely
     because the worktree contains submodules.
 
@@ -296,9 +321,16 @@ def remove_worktree(wt: Worktree, *, drop_dbs: bool, pg_host: str, pg_port: int,
     Returns the git result plus a (db_name, dropped_ok) list for any
     associated Postgres test DBs dropped along with it.
     """
-    result = _run_capture(["git", "-C", str(wt.repo), "worktree", "remove", str(wt.path)])
-    if result.returncode != 0 and "submodules cannot be moved or removed" in result.stderr:
-        result = _run_capture(["git", "-C", str(wt.repo), "worktree", "remove", "--force", str(wt.path)])
+    result = _run_capture(
+        ["git", "-C", str(wt.repo), "worktree", "remove", str(wt.path)]
+    )
+    if (
+        result.returncode != 0
+        and "submodules cannot be moved or removed" in result.stderr
+    ):
+        result = _run_capture(
+            ["git", "-C", str(wt.repo), "worktree", "remove", "--force", str(wt.path)]
+        )
     db_results: list[tuple[str, bool]] = []
     if drop_dbs and result.returncode == 0:
         for db in sorted(wt.db_names):
@@ -307,7 +339,16 @@ def remove_worktree(wt: Worktree, *, drop_dbs: bool, pg_host: str, pg_port: int,
     return result, db_results
 
 
-def clean_worktrees(root: Path, *, remote: str, keep_dbs: bool, yes: bool, pg_host: str, pg_port: int, pg_user: str) -> None:
+def clean_worktrees(
+    root: Path,
+    *,
+    remote: str,
+    keep_dbs: bool,
+    yes: bool,
+    pg_host: str,
+    pg_port: int,
+    pg_user: str,
+) -> None:
     """Find every worktree merged into `<remote>/main`/`<remote>/test` (or
     local main/test) across every repo found under `root`, and remove them
     (and, unless `keep_dbs`, their pgdevkit test DB(s)) -- but only when
@@ -352,7 +393,11 @@ def clean_worktrees(root: Path, *, remote: str, keep_dbs: bool, yes: bool, pg_ho
 
     print(f"Worktrees merged into {remote}/main or {remote}/test (removable):")
     for wt in candidates:
-        db_note = f", dbs: {', '.join(sorted(wt.db_names))}" if wt.db_names and not keep_dbs else ""
+        db_note = (
+            f", dbs: {', '.join(sorted(wt.db_names))}"
+            if wt.db_names and not keep_dbs
+            else ""
+        )
         print(f"  {wt.path}  (repo: {wt.repo}, branch: {wt.branch}{db_note})")
 
     if not yes:
@@ -366,7 +411,9 @@ def clean_worktrees(root: Path, *, remote: str, keep_dbs: bool, yes: bool, pg_ho
 
     touched_repos: set[Path] = set()
     for wt in candidates:
-        result, db_results = remove_worktree(wt, drop_dbs=not keep_dbs, pg_host=pg_host, pg_port=pg_port, pg_user=pg_user)
+        result, db_results = remove_worktree(
+            wt, drop_dbs=not keep_dbs, pg_host=pg_host, pg_port=pg_port, pg_user=pg_user
+        )
         if result.returncode == 0:
             print(f"removed {wt.path}")
         else:
@@ -398,11 +445,22 @@ def find_orphaned_dbs(root: Path) -> list[OrphanedDb]:
     heuristic on top (see `testdb.py`'s module docstring)."""
     orphaned: list[OrphanedDb] = []
     for repo in sorted(find_repos(root)):
-        orphaned.extend(OrphanedDb(name, project, caution) for name, project, caution in testdb.find_orphaned(repo))
+        orphaned.extend(
+            OrphanedDb(name, project, caution)
+            for name, project, caution in testdb.find_orphaned(repo)
+        )
     return orphaned
 
 
-def clean_orphaned_dbs(root: Path, *, include_caution: bool, yes: bool, pg_host: str, pg_port: int, pg_user: str) -> None:
+def clean_orphaned_dbs(
+    root: Path,
+    *,
+    include_caution: bool,
+    yes: bool,
+    pg_host: str,
+    pg_port: int,
+    pg_user: str,
+) -> None:
     """Sweep for pgdevkit test DBs whose worktree no longer exists (e.g.
     removed by hand, or before this tool existed) across every repo found
     under `root`, and drop them -- but only when `yes` is set. DBs whose
@@ -427,7 +485,11 @@ def clean_orphaned_dbs(root: Path, *, include_caution: bool, yes: bool, pg_host:
 
     print("Orphaned pgdevkit test DBs (no matching live worktree):")
     for o in sorted(orphaned, key=lambda o: o.name):
-        warn = "  ⚠ possibly a standing reference DB, verify first (pass --include-caution to include it)" if o.caution else ""
+        warn = (
+            "  ⚠ possibly a standing reference DB, verify first (pass --include-caution to include it)"
+            if o.caution
+            else ""
+        )
         print(f"  {o.name} ({o.project}){warn}")
 
     to_drop = [o for o in orphaned if include_caution or not o.caution]
@@ -435,7 +497,11 @@ def clean_orphaned_dbs(root: Path, *, include_caution: bool, yes: bool, pg_host:
 
     if not yes:
         hint = "\nPass --yes to drop the above"
-        hint += "." if include_caution else " (excluding flagged ones; add --include-caution to include those too)."
+        hint += (
+            "."
+            if include_caution
+            else " (excluding flagged ones; add --include-caution to include those too)."
+        )
         print(hint)
         return
 
@@ -445,16 +511,22 @@ def clean_orphaned_dbs(root: Path, *, include_caution: bool, yes: bool, pg_host:
 
     for o in to_drop:
         result = testdb.drop_database(o.name, pg_host, pg_port, pg_user)
-        print(f"{'dropped' if result.returncode == 0 else 'FAILED to drop'} db {o.name}")
+        print(
+            f"{'dropped' if result.returncode == 0 else 'FAILED to drop'} db {o.name}"
+        )
 
     if skipped:
-        print(f"\n{len(skipped)} flagged DB(s) not dropped (pass --include-caution to include them): {', '.join(o.name for o in skipped)}")
+        print(
+            f"\n{len(skipped)} flagged DB(s) not dropped (pass --include-caution to include them): {', '.join(o.name for o in skipped)}"
+        )
 
 
 # --- `bdt cleanup db` ------------------------------------------------------
 
 
-def clean_current_db(repo: Path, *, confirm: bool, pg_host: str, pg_port: int, pg_user: str) -> None:
+def clean_current_db(
+    repo: Path, *, confirm: bool, pg_host: str, pg_port: int, pg_user: str
+) -> None:
     """Drop the pgdevkit test DB(s) owned by `repo` -- meant to be run from
     inside a live worktree (default `repo` is `.`), unlike `clean_worktrees`
     this never touches the worktree itself, only its database(s).
@@ -495,7 +567,15 @@ def clean_current_db(repo: Path, *, confirm: bool, pg_host: str, pg_port: int, p
 # --- `bdt cleanup worktree` -------------------------------------------------
 
 
-def clean_current_worktree(path: Path, *, confirm: bool, keep_db: bool, pg_host: str, pg_port: int, pg_user: str) -> None:
+def clean_current_worktree(
+    path: Path,
+    *,
+    confirm: bool,
+    keep_db: bool,
+    pg_host: str,
+    pg_port: int,
+    pg_user: str,
+) -> None:
     """Remove the single worktree at `path` (default: the current directory)
     plus, unless `keep_db`, its own pgdevkit test DB(s) -- meant to be run
     from inside that worktree, mirroring `clean_current_db`. Unlike
@@ -537,7 +617,9 @@ def clean_current_worktree(path: Path, *, confirm: bool, keep_db: bool, pg_host:
     if entry.get("locked"):
         sys.exit(f"Refusing to remove {path}: it is locked.")
     if _is_dirty(path):
-        sys.exit(f"Refusing to remove {path}: it has uncommitted changes (submodules included).")
+        sys.exit(
+            f"Refusing to remove {path}: it has uncommitted changes (submodules included)."
+        )
 
     db_names = frozenset() if keep_db else testdb.workspace_db_names(path)
     wt = Worktree(
@@ -568,7 +650,9 @@ def clean_current_worktree(path: Path, *, confirm: bool, keep_db: bool, pg_host:
         print("Aborted: database host not confirmed.")
         return
 
-    result, db_results = remove_worktree(wt, drop_dbs=bool(db_names), pg_host=pg_host, pg_port=pg_port, pg_user=pg_user)
+    result, db_results = remove_worktree(
+        wt, drop_dbs=bool(db_names), pg_host=pg_host, pg_port=pg_port, pg_user=pg_user
+    )
     if result.returncode != 0:
         sys.exit(f"FAILED to remove {wt.path}: {result.stderr.strip()}")
     print(f"removed {wt.path}")

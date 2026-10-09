@@ -15,10 +15,30 @@ runner = CliRunner()
 GITHUB_REMOTE = GitHubRemote("owner", "repo")
 ADO_REMOTE = AdoRemote("myorg", "MyProj", "myrepo")
 
-PASS = {"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SUCCESS", "name": "a"}
-SKIPPED = {"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SKIPPED", "name": "b"}
-FAIL = {"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "FAILURE", "name": "c"}
-CANCELLED = {"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "CANCELLED", "name": "d"}
+PASS = {
+    "__typename": "CheckRun",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS",
+    "name": "a",
+}
+SKIPPED = {
+    "__typename": "CheckRun",
+    "status": "COMPLETED",
+    "conclusion": "SKIPPED",
+    "name": "b",
+}
+FAIL = {
+    "__typename": "CheckRun",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE",
+    "name": "c",
+}
+CANCELLED = {
+    "__typename": "CheckRun",
+    "status": "COMPLETED",
+    "conclusion": "CANCELLED",
+    "name": "d",
+}
 RUNNING = {"__typename": "CheckRun", "status": "IN_PROGRESS", "name": "e"}
 WAITING = {"__typename": "CheckRun", "status": "WAITING", "name": "f"}
 
@@ -47,7 +67,13 @@ GH_PR = {
     "url": "https://github.com/owner/repo/pull/69",
     "state": "OPEN",
     "isDraft": True,
-    "closingIssuesReferences": [{"number": 68, "url": "https://github.com/owner/repo/issues/68", "repository": {"name": "repo"}}],
+    "closingIssuesReferences": [
+        {
+            "number": 68,
+            "url": "https://github.com/owner/repo/issues/68",
+            "repository": {"name": "repo"},
+        }
+    ],
     "statusCheckRollup": [PASS, RUNNING],
 }
 
@@ -67,23 +93,49 @@ def test_github_info_links_pr_and_closed_issue() -> None:
 
 
 def test_github_info_without_closing_issue_has_no_issues() -> None:
-    assert pr_info.github_info({**GH_PR, "closingIssuesReferences": []}, GITHUB_REMOTE).issues == []
+    assert (
+        pr_info.github_info(
+            {**GH_PR, "closingIssuesReferences": []}, GITHUB_REMOTE
+        ).issues
+        == []
+    )
 
 
 def test_github_info_ignores_closed_issues_of_other_repos() -> None:
-    other = {"number": 9, "url": "https://github.com/owner/other/issues/9", "repository": {"name": "other"}}
-    assert pr_info.github_info({**GH_PR, "closingIssuesReferences": [other]}, GITHUB_REMOTE).issues == []
+    other = {
+        "number": 9,
+        "url": "https://github.com/owner/other/issues/9",
+        "repository": {"name": "other"},
+    }
+    assert (
+        pr_info.github_info(
+            {**GH_PR, "closingIssuesReferences": [other]}, GITHUB_REMOTE
+        ).issues
+        == []
+    )
 
 
 def test_github_info_ignores_same_named_repo_of_another_owner() -> None:
-    other = {"number": 9, "url": "https://github.com/otherorg/repo/issues/9", "repository": {"name": "repo", "owner": {"login": "otherorg"}}}
-    mine = {"number": 8, "url": "https://github.com/Owner/repo/issues/8", "repository": {"name": "repo", "owner": {"login": "Owner"}}}
-    info = pr_info.github_info({**GH_PR, "closingIssuesReferences": [other, mine]}, GITHUB_REMOTE)
+    other = {
+        "number": 9,
+        "url": "https://github.com/otherorg/repo/issues/9",
+        "repository": {"name": "repo", "owner": {"login": "otherorg"}},
+    }
+    mine = {
+        "number": 8,
+        "url": "https://github.com/Owner/repo/issues/8",
+        "repository": {"name": "repo", "owner": {"login": "Owner"}},
+    }
+    info = pr_info.github_info(
+        {**GH_PR, "closingIssuesReferences": [other, mine]}, GITHUB_REMOTE
+    )
     assert [i.number for i in info.issues] == [8]
 
 
 def test_github_info_strips_terminal_escapes_from_title() -> None:
-    info = pr_info.github_info({**GH_PR, "title": "evil\x1b]8;;http://x\x07 \u202etitle"}, GITHUB_REMOTE)
+    info = pr_info.github_info(
+        {**GH_PR, "title": "evil\x1b]8;;http://x\x07 \u202etitle"}, GITHUB_REMOTE
+    )
     assert info.title == "evil]8;;http://x title"
 
 
@@ -98,34 +150,62 @@ ADO_PR = {
 
 
 def _build(status: str, result: str | None = None, pipeline: int = 1) -> dict:
-    return {"id": 100 + pipeline, "definition": {"id": pipeline, "name": f"p{pipeline}"}, "status": status, "result": result}
+    return {
+        "id": 100 + pipeline,
+        "definition": {"id": pipeline, "name": f"p{pipeline}"},
+        "status": status,
+        "result": result,
+    }
 
 
 @pytest.mark.parametrize(
     "builds,approval,expected",
     [
         ([], False, pr_info.BUILD_NONE),
-        ([_build("completed", "succeeded"), _build("completed", "canceled", 2)], False, pr_info.BUILD_PASSING),
-        ([_build("completed", "succeeded"), _build("inProgress", None, 2)], False, pr_info.BUILD_PENDING),
+        (
+            [_build("completed", "succeeded"), _build("completed", "canceled", 2)],
+            False,
+            pr_info.BUILD_PASSING,
+        ),
+        (
+            [_build("completed", "succeeded"), _build("inProgress", None, 2)],
+            False,
+            pr_info.BUILD_PENDING,
+        ),
         ([_build("notStarted")], False, pr_info.BUILD_PENDING),
         ([_build("inProgress")], True, pr_info.BUILD_WAITING),
-        ([_build("completed", "failed"), _build("inProgress", None, 2)], True, pr_info.BUILD_FAILING),
+        (
+            [_build("completed", "failed"), _build("inProgress", None, 2)],
+            True,
+            pr_info.BUILD_FAILING,
+        ),
     ],
 )
 def test_ado_build_state_matches_pr_status(builds, approval, expected) -> None:
     assert pr_info.ado_build_state(builds, approval) == expected
 
 
-def _ado_builds(monkeypatch, builds: list[dict], approvals: list | None = None) -> list[str]:
+def _ado_builds(
+    monkeypatch, builds: list[dict], approvals: list | None = None
+) -> list[str]:
     """Stub the ADO build lookups; returns the source branches asked about."""
     asked: list[str] = []
-    monkeypatch.setattr("bmsdna.devtools.pr_info.pr_build.get_builds_for_pr", lambda s, r, branch, pr_id: asked.append(branch) or builds)
-    monkeypatch.setattr("bmsdna.devtools.pr_info.pr_build.find_pending_approvals", lambda s, r, b: approvals or [])
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_info.pr_build.get_builds_for_pr",
+        lambda s, r, branch, pr_id: asked.append(branch) or builds,
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_info.pr_build.find_pending_approvals",
+        lambda s, r, b: approvals or [],
+    )
     return asked
 
 
 def test_ado_info_links_pr_and_work_item_and_judges_builds(monkeypatch) -> None:
-    asked = _ado_builds(monkeypatch, [_build("completed", "succeeded"), _build("completed", "failed", 2)])
+    asked = _ado_builds(
+        monkeypatch,
+        [_build("completed", "succeeded"), _build("completed", "failed", 2)],
+    )
 
     info = pr_info.ado_info(None, ADO_PR, ADO_REMOTE)  # ty: ignore[invalid-argument-type]
 
@@ -155,7 +235,9 @@ def test_ado_info_unknown_build_when_ado_cannot_be_asked(monkeypatch) -> None:
 def _github_cli(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.get_pr", lambda gh, pr_id=None, fields="": GH_PR)
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.get_pr", lambda gh, pr_id=None, fields="": GH_PR
+    )
 
 
 def test_pr_info_json(monkeypatch) -> None:
@@ -165,7 +247,11 @@ def test_pr_info_json(monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
-    assert data["number"] == 69 and data["build"] == "pending" and data["issues"][0]["number"] == 68
+    assert (
+        data["number"] == 69
+        and data["build"] == "pending"
+        and data["issues"][0]["number"] == 68
+    )
 
 
 def test_pr_info_text_mentions_pr_and_issue_links(monkeypatch) -> None:
@@ -182,7 +268,10 @@ def test_pr_info_passes_pr_id(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     seen = {}
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.get_pr", lambda gh, pr_id=None, fields="": seen.update(pr_id=pr_id) or GH_PR)
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.get_pr",
+        lambda gh, pr_id=None, fields="": seen.update(pr_id=pr_id) or GH_PR,
+    )
 
     assert runner.invoke(app, ["pr", "info", "--json", "--pr-id", "5"]).exit_code == 0
     assert seen == {"pr_id": 5}
@@ -196,7 +285,9 @@ def _take_cli(monkeypatch, *, user: str = "octocat") -> list[tuple]:
     _github_cli(monkeypatch)
     monkeypatch.setattr("bmsdna.devtools.cli._current_user", lambda remote: user)
     calls: list[tuple] = []
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.comment", lambda *args, **kw: calls.append(args))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_issue.comment", lambda *args, **kw: calls.append(args)
+    )
     monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: None)
     return calls
 
@@ -221,7 +312,10 @@ def test_issue_take_without_number_uses_issue_the_pr_closes(monkeypatch) -> None
 
 def test_issue_take_without_number_and_without_pr_issue_fails(monkeypatch) -> None:
     calls = _take_cli(monkeypatch)
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.get_pr", lambda gh, pr_id=None, fields="": {**GH_PR, "closingIssuesReferences": []})
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.get_pr",
+        lambda gh, pr_id=None, fields="": {**GH_PR, "closingIssuesReferences": []},
+    )
 
     result = runner.invoke(app, ["issue", "take"])
 
@@ -231,7 +325,16 @@ def test_issue_take_without_number_and_without_pr_issue_fails(monkeypatch) -> No
 
 def test_issue_take_with_several_closed_issues_is_ambiguous(monkeypatch) -> None:
     calls = _take_cli(monkeypatch)
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.get_pr", lambda gh, pr_id=None, fields="": {**GH_PR, "closingIssuesReferences": [{"number": 1, "url": "u1", "repository": {"name": "repo"}}, {"number": 2, "url": "u2", "repository": {"name": "repo"}}]})
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.get_pr",
+        lambda gh, pr_id=None, fields="": {
+            **GH_PR,
+            "closingIssuesReferences": [
+                {"number": 1, "url": "u1", "repository": {"name": "repo"}},
+                {"number": 2, "url": "u2", "repository": {"name": "repo"}},
+            ],
+        },
+    )
 
     result = runner.invoke(app, ["issue", "take"])
 
@@ -248,24 +351,42 @@ def test_issue_take_note_includes_session_link_under_claude(monkeypatch) -> None
     monkeypatch.setattr("bmsdna.devtools.cli._current_user", lambda remote: "octocat")
     monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: None)
     bodies: list[str] = []
-    monkeypatch.setattr("bmsdna.devtools.gh_issue._run_gh", lambda gh, args: bodies.append(args[args.index("--body") + 1]) or "https://x/issues/12#issuecomment-1")
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_issue._run_gh",
+        lambda gh, args: (
+            bodies.append(args[args.index("--body") + 1])
+            or "https://x/issues/12#issuecomment-1"
+        ),
+    )
 
     result = runner.invoke(app, ["issue", "take", "12"])
 
     assert result.exit_code == 0, result.output
-    assert bodies == ["Taken by octocat\n\nClaude Session: https://claude.ai/code/session_abc"]
+    assert bodies == [
+        "Taken by octocat\n\nClaude Session: https://claude.ai/code/session_abc"
+    ]
 
 
 def test_pr_info_on_azure_devops_passes_the_session_through(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
-    monkeypatch.setattr("bmsdna.devtools.cli._resolve_ado_pr", lambda pat, remote, target, pr_id=None: ("session", ADO_PR))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli._resolve_ado_pr",
+        lambda pat, remote, target, pr_id=None: ("session", ADO_PR),
+    )
     seen = {}
-    monkeypatch.setattr("bmsdna.devtools.pr_info.pr_build.get_builds_for_pr", lambda s, r, branch, pr_id: seen.update(session=s) or [_build("completed", "succeeded")])
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_info.pr_build.get_builds_for_pr",
+        lambda s, r, branch, pr_id: (
+            seen.update(session=s) or [_build("completed", "succeeded")]
+        ),
+    )
 
     result = runner.invoke(app, ["pr", "info", "--json"])
 
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output)["build"] == "passing" and seen == {"session": "session"}
+    assert json.loads(result.output)["build"] == "passing" and seen == {
+        "session": "session"
+    }
 
 
 def _target_options(command, path=()):
@@ -284,9 +405,23 @@ def test_target_options_default_to_dev_except_lookups_which_do_not_filter() -> N
 
     found = dict(_target_options(typer.main.get_command(app)))
 
-    assert {"pr create", "pr status", "pr info", "pr retry", "pr publish", "pr update", "pr comment", "pr watch-deploy", "issue take"} <= set(found)
+    assert {
+        "pr create",
+        "pr status",
+        "pr info",
+        "pr retry",
+        "pr publish",
+        "pr update",
+        "pr comment",
+        "pr watch-deploy",
+        "issue take",
+    } <= set(found)
     # status/info/take only look a PR up: no target given means no filter on it
-    assert {k: v for k, v in found.items() if v != "dev"} == {"pr status": None, "pr info": None, "issue take": None}
+    assert {k: v for k, v in found.items() if v != "dev"} == {
+        "pr status": None,
+        "pr info": None,
+        "issue take": None,
+    }
 
 
 # -- bdt issue do takes the issue first ---------------------------------------
@@ -297,7 +432,10 @@ def _do_cli(monkeypatch, *, agent_env: bool = False) -> dict:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     monkeypatch.setattr("bmsdna.devtools.cli._current_user", lambda remote: "octocat")
-    monkeypatch.setattr("bmsdna.devtools.cli.issue_do_mod.fetch_github", lambda gh, n: ("add thing", "details"))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.issue_do_mod.fetch_github",
+        lambda gh, n: ("add thing", "details"),
+    )
     monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: None)
     seen: dict = {"events": [], "bodies": []}
 
@@ -320,14 +458,18 @@ def _do_cli(monkeypatch, *, agent_env: bool = False) -> dict:
     return seen
 
 
-def test_issue_do_takes_the_issue_with_the_new_session_before_starting_the_agent(monkeypatch) -> None:
+def test_issue_do_takes_the_issue_with_the_new_session_before_starting_the_agent(
+    monkeypatch,
+) -> None:
     seen = _do_cli(monkeypatch)
 
     result = runner.invoke(app, ["issue", "do", "12"])
 
     assert seen["events"] == ["comment", "agent"], result.output
     session_id = seen["cmd"][seen["cmd"].index("--session-id") + 1]
-    assert seen["bodies"] == [f"Taken by octocat\n\nClaude Session: {session_id} (resume with `claude --resume {session_id}`)"]
+    assert seen["bodies"] == [
+        f"Taken by octocat\n\nClaude Session: {session_id} (resume with `claude --resume {session_id}`)"
+    ]
     assert "bdt issue take" in seen["cmd"][2]  # the prompt says not to run it again
 
 
@@ -354,7 +496,10 @@ def test_issue_do_other_agent_is_taken_without_a_session(monkeypatch) -> None:
 
     runner.invoke(app, ["issue", "do", "12", "--agent", "codex"])
 
-    assert seen["bodies"] == ["Taken by octocat (via codex)"] and "--session-id" not in seen["cmd"]
+    assert (
+        seen["bodies"] == ["Taken by octocat (via codex)"]
+        and "--session-id" not in seen["cmd"]
+    )
 
 
 # -- never take twice ---------------------------------------------------------
@@ -362,9 +507,15 @@ def test_issue_do_other_agent_is_taken_without_a_session(monkeypatch) -> None:
 
 @pytest.mark.parametrize(
     "last",
-    ["Taken by octocat", "Taken by octocat\n\nClaude Session: https://claude.ai/code/session_x", "  Taken by OctoCat (via codex)"],
+    [
+        "Taken by octocat",
+        "Taken by octocat\n\nClaude Session: https://claude.ai/code/session_x",
+        "  Taken by OctoCat (via codex)",
+    ],
 )
-def test_issue_take_skips_when_the_last_comment_is_already_a_take(monkeypatch, last) -> None:
+def test_issue_take_skips_when_the_last_comment_is_already_a_take(
+    monkeypatch, last
+) -> None:
     calls = _take_cli(monkeypatch)
     monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: last)
 
@@ -376,27 +527,40 @@ def test_issue_take_skips_when_the_last_comment_is_already_a_take(monkeypatch, l
 
 def test_issue_take_refuses_someone_elses_claim_without_force(monkeypatch) -> None:
     calls = _take_cli(monkeypatch)
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: "Taken by someone-else\n\nClaude Session: x")
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_issue.last_comment",
+        lambda *args: "Taken by someone-else\n\nClaude Session: x",
+    )
 
     result = runner.invoke(app, ["issue", "take", "12"])
 
     assert result.exit_code == 1 and calls == []
-    assert "already taken by someone-else" in result.output and "--force" in result.output
+    assert (
+        "already taken by someone-else" in result.output and "--force" in result.output
+    )
 
 
 def test_issue_take_force_takes_over_someone_elses_claim(monkeypatch) -> None:
     calls = _take_cli(monkeypatch)
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: "Taken by someone-else")
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_issue.last_comment",
+        lambda *args: "Taken by someone-else",
+    )
 
     result = runner.invoke(app, ["issue", "take", "12", "--force"])
 
     assert result.exit_code == 0 and len(calls) == 1
 
 
-def test_issue_take_comments_when_the_last_comment_is_something_else(monkeypatch) -> None:
+def test_issue_take_comments_when_the_last_comment_is_something_else(
+    monkeypatch,
+) -> None:
     calls = _take_cli(monkeypatch)
     # an older take followed by a later discussion comment: the claim is no longer the latest word
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: "Looks good, who is on this?")
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_issue.last_comment",
+        lambda *args: "Looks good, who is on this?",
+    )
 
     assert runner.invoke(app, ["issue", "take", "12"]).exit_code == 0
     assert len(calls) == 1
@@ -406,18 +570,31 @@ def test_issue_take_on_azure_devops_reads_the_html_comment(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.cli._current_user", lambda remote: "me")
-    monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.last_comment", lambda session, remote, n: "<div>Taken by <b>someone</b></div>")
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.ado_issue.last_comment",
+        lambda session, remote, n: "<div>Taken by <b>someone</b></div>",
+    )
     posted = []
-    monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.comment_with_screenshots", lambda *a, **k: posted.append(a))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.ado_issue.comment_with_screenshots",
+        lambda *a, **k: posted.append(a),
+    )
 
     result = runner.invoke(app, ["issue", "take", "7"])
 
-    assert result.exit_code == 1 and posted == [] and "already taken by someone" in result.output
+    assert (
+        result.exit_code == 1
+        and posted == []
+        and "already taken by someone" in result.output
+    )
 
 
 def test_issue_do_does_not_start_the_agent_on_someone_elses_claim(monkeypatch) -> None:
     seen = _do_cli(monkeypatch)
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: "Taken by someone-else")
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_issue.last_comment",
+        lambda *args: "Taken by someone-else",
+    )
 
     result = runner.invoke(app, ["issue", "do", "12"])
 
@@ -429,7 +606,9 @@ def test_issue_do_does_not_start_the_agent_on_someone_elses_claim(monkeypatch) -
 
 def test_issue_do_still_starts_the_agent_when_already_taken(monkeypatch) -> None:
     seen = _do_cli(monkeypatch)
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: "Taken by octocat")
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: "Taken by octocat"
+    )
 
     runner.invoke(app, ["issue", "do", "12"])
 
@@ -439,9 +618,19 @@ def test_issue_do_still_starts_the_agent_when_already_taken(monkeypatch) -> None
 def test_gh_last_comment_reads_graphql(monkeypatch) -> None:
     from bmsdna.devtools import gh_issue
 
-    out = json.dumps({"data": {"repository": {"issue": {"comments": {"nodes": [{"body": "Taken by x"}]}}}}})
+    out = json.dumps(
+        {
+            "data": {
+                "repository": {
+                    "issue": {"comments": {"nodes": [{"body": "Taken by x"}]}}
+                }
+            }
+        }
+    )
     seen = {}
-    monkeypatch.setattr(gh_issue, "_run_gh", lambda gh, args: seen.update(args=args) or out)
+    monkeypatch.setattr(
+        gh_issue, "_run_gh", lambda gh, args: seen.update(args=args) or out
+    )
 
     assert gh_issue.last_comment("gh", "o", "r", 5) == "Taken by x"
     assert "number=5" in seen["args"] and "owner=o" in seen["args"]
@@ -457,7 +646,9 @@ def test_ado_last_comment_asks_for_newest_first() -> None:
     from bmsdna.devtools import ado_issue
 
     session = MagicMock()
-    session.get.return_value.json.return_value = {"comments": [{"text": "<p>Taken by x</p>"}]}
+    session.get.return_value.json.return_value = {
+        "comments": [{"text": "<p>Taken by x</p>"}]
+    }
 
     assert ado_issue.last_comment(session, ADO_REMOTE, 7) == "<p>Taken by x</p>"
     params = session.get.call_args.kwargs["params"]

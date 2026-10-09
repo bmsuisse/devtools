@@ -46,7 +46,9 @@ def test_cleanup_worktrees_cli_passes_options_through(monkeypatch, tmp_path) -> 
     }
 
 
-def test_cleanup_worktrees_cli_falls_back_to_pgdevkits_own_user_when_no_pg_user_given(monkeypatch, tmp_path) -> None:
+def test_cleanup_worktrees_cli_falls_back_to_pgdevkits_own_user_when_no_pg_user_given(
+    monkeypatch, tmp_path
+) -> None:
     # No --pg-user and no PGUSER env var: falls back to pgdevkit's own
     # test-container user, not the current OS user -- these DBs were created
     # by pgdevkit in the first place, so its own default is the one actually
@@ -65,7 +67,9 @@ def test_cleanup_worktrees_cli_falls_back_to_pgdevkits_own_user_when_no_pg_user_
     assert captured["pg_user"] == pgdevkit_constants.USER
 
 
-def test_cleanup_worktrees_cli_falls_back_to_pgdevkits_own_user_even_when_shell_user_env_is_set(monkeypatch, tmp_path) -> None:
+def test_cleanup_worktrees_cli_falls_back_to_pgdevkits_own_user_even_when_shell_user_env_is_set(
+    monkeypatch, tmp_path
+) -> None:
     # $USER/$LOGNAME are set by the OS shell on virtually every real
     # session -- unlike PGUSER, they must NOT feed the --pg-user fallback,
     # or the intended default (pgdevkit's own test-container user) would
@@ -95,7 +99,15 @@ def test_cleanup_orphaned_dbs_cli_passes_options_through(monkeypatch, tmp_path) 
 
     result = runner.invoke(
         app,
-        ["cleanup", "orphaned-dbs", str(tmp_path), "--include-caution", "--yes", "--pg-user", "tester"],
+        [
+            "cleanup",
+            "orphaned-dbs",
+            str(tmp_path),
+            "--include-caution",
+            "--yes",
+            "--pg-user",
+            "tester",
+        ],
     )
 
     assert result.exit_code == 0, result.output

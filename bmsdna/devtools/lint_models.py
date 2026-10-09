@@ -36,7 +36,11 @@ def _is_classvar(annotation: ast.expr) -> bool:
     if not isinstance(annotation, ast.Subscript):
         return False
     value = annotation.value
-    name = value.id if isinstance(value, ast.Name) else (value.attr if isinstance(value, ast.Attribute) else None)
+    name = (
+        value.id
+        if isinstance(value, ast.Name)
+        else (value.attr if isinstance(value, ast.Attribute) else None)
+    )
     return name == "ClassVar"
 
 
@@ -44,11 +48,17 @@ def _count_fields(node: ast.ClassDef) -> int:
     return sum(
         1
         for stmt in node.body
-        if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name) and not _is_classvar(stmt.annotation)
+        if isinstance(stmt, ast.AnnAssign)
+        and isinstance(stmt.target, ast.Name)
+        and not _is_classvar(stmt.annotation)
     )
 
 
-def _is_disallowed_api_location(rel_dir_parts: tuple[str, ...], api_dir_names: frozenset[str], allowed_subdirs: frozenset[str]) -> bool:
+def _is_disallowed_api_location(
+    rel_dir_parts: tuple[str, ...],
+    api_dir_names: frozenset[str],
+    allowed_subdirs: frozenset[str],
+) -> bool:
     """True if `rel_dir_parts` (the file's directory components, repo-relative) passes through
     an `api/`-like directory with no `models/`/`schemas/`/`dto/`-like directory after it."""
     for i, part in enumerate(rel_dir_parts):
@@ -79,7 +89,7 @@ def check_models_file(
     else:
         try:
             text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        except OSError, UnicodeDecodeError:
             return []  # not a readable UTF-8 Python file -- skip it like a syntax error
     try:
         tree = ast.parse(text, filename=str(path))
@@ -88,7 +98,9 @@ def check_models_file(
 
     findings: list[Finding] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.ClassDef) or not _is_model_class(node, base_class_names):
+        if not isinstance(node, ast.ClassDef) or not _is_model_class(
+            node, base_class_names
+        ):
             continue
         field_count = _count_fields(node)
         if field_count > field_threshold:

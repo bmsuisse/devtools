@@ -38,14 +38,20 @@ def _plain(text: str) -> str:
 
 
 def _not_a_repo():
-    raise SystemExit("fatal: not a git repository (or any of the parent directories): .git")
+    raise SystemExit(
+        "fatal: not a git repository (or any of the parent directories): .git"
+    )
 
 
 # -- _merge_tags_and_labels ---------------------------------------------------
 
 
 def test_merge_tags_and_labels_dedupes_case_insensitively_first_wins() -> None:
-    assert _merge_tags_and_labels(["Bug", "urgent"], ["bug", "triage"]) == ["Bug", "urgent", "triage"]
+    assert _merge_tags_and_labels(["Bug", "urgent"], ["bug", "triage"]) == [
+        "Bug",
+        "urgent",
+        "triage",
+    ]
 
 
 def test_merge_tags_and_labels_none_when_both_none() -> None:
@@ -64,18 +70,33 @@ def test_merge_tags_and_labels_one_sided() -> None:
 # -- issue search --org-wide outside a repo -----------------------------------
 
 
-def test_issue_search_org_wide_falls_back_to_github_org_when_no_repo(monkeypatch) -> None:
+def test_issue_search_org_wide_falls_back_to_github_org_when_no_repo(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", _not_a_repo)
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     captured: dict = {}
 
-    def fake_search(gh, owner, repo, keywords, since, limit, state, board=None, org_wide=False, labels=None):
+    def fake_search(
+        gh,
+        owner,
+        repo,
+        keywords,
+        since,
+        limit,
+        state,
+        board=None,
+        org_wide=False,
+        labels=None,
+    ):
         captured.update(gh=gh, owner=owner, repo=repo, org_wide=org_wide, labels=labels)
         return []
 
     monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.search", fake_search)
 
-    result = runner.invoke(app, ["issue", "search", "--org-wide", "--github-org", "bmsuisse"])
+    result = runner.invoke(
+        app, ["issue", "search", "--org-wide", "--github-org", "bmsuisse"]
+    )
 
     assert result.exit_code == 0, result.output
     assert captured["owner"] == "bmsuisse"
@@ -87,7 +108,17 @@ def test_issue_search_org_wide_falls_back_to_org_when_no_repo(monkeypatch) -> No
     monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
     captured: dict = {}
 
-    def fake_search(session, remote, keywords, since=None, board=None, top=10, state="open", org_wide=False, tags=None):
+    def fake_search(
+        session,
+        remote,
+        keywords,
+        since=None,
+        board=None,
+        top=10,
+        state="open",
+        org_wide=False,
+        tags=None,
+    ):
         captured.update(remote=remote, org_wide=org_wide, tags=tags)
         return []
 
@@ -113,19 +144,34 @@ def test_issue_search_org_wide_falls_back_on_unrecognized_remote(monkeypatch) ->
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     captured: dict = {}
 
-    def fake_search(gh, owner, repo, keywords, since, limit, state, board=None, org_wide=False, labels=None):
+    def fake_search(
+        gh,
+        owner,
+        repo,
+        keywords,
+        since,
+        limit,
+        state,
+        board=None,
+        org_wide=False,
+        labels=None,
+    ):
         captured["owner"] = owner
         return []
 
     monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.search", fake_search)
 
-    result = runner.invoke(app, ["issue", "search", "--org-wide", "--github-org", "bmsuisse"])
+    result = runner.invoke(
+        app, ["issue", "search", "--org-wide", "--github-org", "bmsuisse"]
+    )
 
     assert result.exit_code == 0, result.output
     assert captured["owner"] == "bmsuisse"
 
 
-def test_issue_search_org_wide_without_org_flags_still_uses_current_remote(monkeypatch) -> None:
+def test_issue_search_org_wide_without_org_flags_still_uses_current_remote(
+    monkeypatch,
+) -> None:
     """Unchanged default behavior: no --org/--github-org means --org-wide still needs to run
     from inside a repo, exactly like before this feature was added.
     """
@@ -134,7 +180,18 @@ def test_issue_search_org_wide_without_org_flags_still_uses_current_remote(monke
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     captured: dict = {}
 
-    def fake_search(gh, owner, repo, keywords, since, limit, state, board=None, org_wide=False, labels=None):
+    def fake_search(
+        gh,
+        owner,
+        repo,
+        keywords,
+        since,
+        limit,
+        state,
+        board=None,
+        org_wide=False,
+        labels=None,
+    ):
         captured.update(owner=owner, repo=repo)
         return []
 
@@ -146,7 +203,9 @@ def test_issue_search_org_wide_without_org_flags_still_uses_current_remote(monke
     assert captured == {"owner": "owner", "repo": "repo"}
 
 
-def test_issue_search_org_wide_without_repo_and_without_org_flags_still_errors(monkeypatch) -> None:
+def test_issue_search_org_wide_without_repo_and_without_org_flags_still_errors(
+    monkeypatch,
+) -> None:
     """No --org/--github-org to fall back on: the original `current_remote()` error must still
     propagate unchanged (not silently swallowed into some other failure mode)."""
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", _not_a_repo)
@@ -157,7 +216,9 @@ def test_issue_search_org_wide_without_repo_and_without_org_flags_still_errors(m
     assert "not a git repository" in str(result.exception)
 
 
-def test_issue_search_ignores_org_and_github_org_when_current_remote_succeeds(monkeypatch) -> None:
+def test_issue_search_ignores_org_and_github_org_when_current_remote_succeeds(
+    monkeypatch,
+) -> None:
     """The core bug this design avoids: an ambient AZDO_ORG/GITHUB_ORG (e.g. set for `find-repo`,
     which documents having *both* set at once) must not affect a plain, in-repo `issue search` --
     --org/--github-org are only ever a fallback for when detecting the repo's own remote fails.
@@ -167,7 +228,18 @@ def test_issue_search_ignores_org_and_github_org_when_current_remote_succeeds(mo
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     captured: dict = {}
 
-    def fake_search(gh, owner, repo, keywords, since, limit, state, board=None, org_wide=False, labels=None):
+    def fake_search(
+        gh,
+        owner,
+        repo,
+        keywords,
+        since,
+        limit,
+        state,
+        board=None,
+        org_wide=False,
+        labels=None,
+    ):
         captured.update(owner=owner, repo=repo)
         return []
 
@@ -177,20 +249,42 @@ def test_issue_search_ignores_org_and_github_org_when_current_remote_succeeds(mo
     # be) would be an unresolvable conflict if actually used -- but since the repo's own remote
     # resolves fine here, neither should even be looked at.
     result = runner.invoke(
-        app, ["issue", "search", "--org-wide", "--org", "bmeurope", "--github-org", "bmsuisse"]
+        app,
+        [
+            "issue",
+            "search",
+            "--org-wide",
+            "--org",
+            "bmeurope",
+            "--github-org",
+            "bmsuisse",
+        ],
     )
 
     assert result.exit_code == 0, result.output
     assert captured == {"owner": "owner", "repo": "repo"}
 
 
-def test_issue_search_org_and_github_org_together_errors_only_when_actually_needed(monkeypatch) -> None:
+def test_issue_search_org_and_github_org_together_errors_only_when_actually_needed(
+    monkeypatch,
+) -> None:
     """Once `current_remote()` has actually failed and a fallback is genuinely needed, giving
     both --org and --github-org is an unresolvable conflict (org-wide search is single-backend)
     and should fail clearly, rather than silently picking one."""
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", _not_a_repo)
 
-    result = runner.invoke(app, ["issue", "search", "--org-wide", "--org", "bmeurope", "--github-org", "bmsuisse"])
+    result = runner.invoke(
+        app,
+        [
+            "issue",
+            "search",
+            "--org-wide",
+            "--org",
+            "bmeurope",
+            "--github-org",
+            "bmsuisse",
+        ],
+    )
 
     assert result.exit_code != 0
     assert "only one of --org or --github-org" in _plain(result.output)
@@ -205,13 +299,26 @@ def test_issue_search_merges_tag_and_label_for_github(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     captured: dict = {}
 
-    def fake_search(gh, owner, repo, keywords, since, limit, state, board=None, org_wide=False, labels=None):
+    def fake_search(
+        gh,
+        owner,
+        repo,
+        keywords,
+        since,
+        limit,
+        state,
+        board=None,
+        org_wide=False,
+        labels=None,
+    ):
         captured["labels"] = labels
         return []
 
     monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.search", fake_search)
 
-    result = runner.invoke(app, ["issue", "search", "--tag", "bug", "--label", "urgent"])
+    result = runner.invoke(
+        app, ["issue", "search", "--tag", "bug", "--label", "urgent"]
+    )
 
     assert result.exit_code == 0, result.output
     assert captured["labels"] == ["bug", "urgent"]
@@ -223,13 +330,25 @@ def test_issue_search_merges_tag_and_label_for_ado(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
     captured: dict = {}
 
-    def fake_search(session, remote, keywords, since=None, board=None, top=10, state="open", org_wide=False, tags=None):
+    def fake_search(
+        session,
+        remote,
+        keywords,
+        since=None,
+        board=None,
+        top=10,
+        state="open",
+        org_wide=False,
+        tags=None,
+    ):
         captured["tags"] = tags
         return []
 
     monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.search", fake_search)
 
-    result = runner.invoke(app, ["issue", "search", "--tag", "bug", "--label", "urgent"])
+    result = runner.invoke(
+        app, ["issue", "search", "--tag", "bug", "--label", "urgent"]
+    )
 
     assert result.exit_code == 0, result.output
     assert captured["tags"] == ["bug", "urgent"]
@@ -241,13 +360,26 @@ def test_issue_create_merges_tag_and_label_for_github(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     captured: dict = {}
 
-    def fake_create(gh, owner, repo, title, description, labels, screenshot_paths, extra_args, file_paths=None, board=None):
+    def fake_create(
+        gh,
+        owner,
+        repo,
+        title,
+        description,
+        labels,
+        screenshot_paths,
+        extra_args,
+        file_paths=None,
+        board=None,
+    ):
         captured["labels"] = labels
         return None
 
     monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.create", fake_create)
 
-    result = runner.invoke(app, ["issue", "create", "--title", "t", "--tag", "bug", "--label", "urgent"])
+    result = runner.invoke(
+        app, ["issue", "create", "--title", "t", "--tag", "bug", "--label", "urgent"]
+    )
 
     assert result.exit_code == 0, result.output
     assert captured["labels"] == ["bug", "urgent"]
@@ -259,19 +391,33 @@ def test_issue_create_merges_tag_and_label_for_ado(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
     captured: dict = {}
 
-    def fake_create(session, remote, work_item_type, title, description, board, tags, screenshot_paths, file_paths):
+    def fake_create(
+        session,
+        remote,
+        work_item_type,
+        title,
+        description,
+        board,
+        tags,
+        screenshot_paths,
+        file_paths,
+    ):
         captured["tags"] = tags
         return {"id": 1}
 
     monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.create", fake_create)
 
-    result = runner.invoke(app, ["issue", "create", "--title", "t", "--tag", "bug", "--label", "urgent"])
+    result = runner.invoke(
+        app, ["issue", "create", "--title", "t", "--tag", "bug", "--label", "urgent"]
+    )
 
     assert result.exit_code == 0, result.output
     assert captured["tags"] == ["bug", "urgent"]
 
 
-def test_issue_update_merges_tag_label_and_remove_tag_remove_label_for_github(monkeypatch) -> None:
+def test_issue_update_merges_tag_label_and_remove_tag_remove_label_for_github(
+    monkeypatch,
+) -> None:
     remote = GitHubRemote("owner", "repo")
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
@@ -284,7 +430,19 @@ def test_issue_update_merges_tag_label_and_remove_tag_remove_label_for_github(mo
 
     result = runner.invoke(
         app,
-        ["issue", "update", "1", "--tag", "bug", "--label", "urgent", "--remove-tag", "wontfix", "--remove-label", "stale"],
+        [
+            "issue",
+            "update",
+            "1",
+            "--tag",
+            "bug",
+            "--label",
+            "urgent",
+            "--remove-tag",
+            "wontfix",
+            "--remove-label",
+            "stale",
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -292,13 +450,17 @@ def test_issue_update_merges_tag_label_and_remove_tag_remove_label_for_github(mo
     assert captured["remove_labels"] == ["wontfix", "stale"]
 
 
-def test_issue_update_merges_tag_label_and_remove_tag_remove_label_for_ado(monkeypatch) -> None:
+def test_issue_update_merges_tag_label_and_remove_tag_remove_label_for_ado(
+    monkeypatch,
+) -> None:
     remote = AdoRemote("myorg", "MyProj", "myrepo")
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
     monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
     captured: dict = {}
 
-    def fake_update(session, remote, number, title, description, board, tags, remove_tags, state):
+    def fake_update(
+        session, remote, number, title, description, board, tags, remove_tags, state
+    ):
         captured.update(tags=tags, remove_tags=remove_tags)
         return {"id": number}
 
@@ -306,7 +468,19 @@ def test_issue_update_merges_tag_label_and_remove_tag_remove_label_for_ado(monke
 
     result = runner.invoke(
         app,
-        ["issue", "update", "1", "--tag", "bug", "--label", "urgent", "--remove-tag", "wontfix", "--remove-label", "stale"],
+        [
+            "issue",
+            "update",
+            "1",
+            "--tag",
+            "bug",
+            "--label",
+            "urgent",
+            "--remove-tag",
+            "wontfix",
+            "--remove-label",
+            "stale",
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -314,7 +488,9 @@ def test_issue_update_merges_tag_label_and_remove_tag_remove_label_for_ado(monke
     assert captured["remove_tags"] == ["wontfix", "stale"]
 
 
-def test_issue_update_omitting_tag_and_label_leaves_ado_tags_untouched(monkeypatch) -> None:
+def test_issue_update_omitting_tag_and_label_leaves_ado_tags_untouched(
+    monkeypatch,
+) -> None:
     """Neither --tag nor --label given must forward `None` (leave unchanged), never `[]`
     (which Azure DevOps' `update()` would take as "replace with no tags")."""
     remote = AdoRemote("myorg", "MyProj", "myrepo")
@@ -322,7 +498,9 @@ def test_issue_update_omitting_tag_and_label_leaves_ado_tags_untouched(monkeypat
     monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
     captured: dict = {}
 
-    def fake_update(session, remote, number, title, description, board, tags, remove_tags, state):
+    def fake_update(
+        session, remote, number, title, description, board, tags, remove_tags, state
+    ):
         captured.update(tags=tags, remove_tags=remove_tags)
         return {"id": number}
 

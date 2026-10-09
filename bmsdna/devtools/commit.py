@@ -19,10 +19,24 @@ IS_SANDBOX_ENV_VAR = "IS_BMS_AI_SANDBOX"
 
 # Conventional Commits (https://www.conventionalcommits.org) type prefixes that are
 # always accepted, regardless of what the calling repo configures.
-BUILTIN_COMMIT_TYPES = {"feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"}
+BUILTIN_COMMIT_TYPES = {
+    "feat",
+    "fix",
+    "docs",
+    "style",
+    "refactor",
+    "perf",
+    "test",
+    "build",
+    "ci",
+    "chore",
+    "revert",
+}
 
 # `type(scope)!: description` -- scope and the breaking-change `!` are both optional.
-_CONVENTIONAL_COMMIT_RE = re.compile(r"^(?P<type>[a-z]+)(?:\((?P<scope>[^)]+)\))?!?: .+")
+_CONVENTIONAL_COMMIT_RE = re.compile(
+    r"^(?P<type>[a-z]+)(?:\((?P<scope>[^)]+)\))?!?: .+"
+)
 
 
 def allowed_commit_types(start=None) -> set[str]:
@@ -91,7 +105,10 @@ def _staged_deletion(path: str, cwd: str | None = None) -> bool:
     to have this path" — a file that vanished because a write failed or raced
     would be missing from disk but NOT staged as a deletion, so it still
     fails the check below instead of silently being committed as removed."""
-    r = _run(["git", "diff", "--cached", "--name-only", "--diff-filter=D", "--", path], cwd=cwd)
+    r = _run(
+        ["git", "diff", "--cached", "--name-only", "--diff-filter=D", "--", path],
+        cwd=cwd,
+    )
     return r.returncode == 0 and path in r.stdout.splitlines()
 
 
@@ -135,7 +152,7 @@ def _present_or_staged_deletion(path: str, subrepos: list[str]) -> bool:
     for subrepo in subrepos:
         prefix = subrepo + "/"
         if path.startswith(prefix):
-            return _staged_deletion(path[len(prefix):], cwd=subrepo)
+            return _staged_deletion(path[len(prefix) :], cwd=subrepo)
     return _staged_deletion(path)
 
 
@@ -168,7 +185,9 @@ class CommitResult:
         return d
 
 
-def _git_commit(message: str, cwd: str | None = None, no_verify: bool = False) -> subprocess.CompletedProcess:
+def _git_commit(
+    message: str, cwd: str | None = None, no_verify: bool = False
+) -> subprocess.CompletedProcess:
     cmd = ["git", "commit", "-m", message]
     if no_verify:
         cmd.append("--no-verify")
@@ -252,7 +271,11 @@ def commit_and_push(
     missing = [f for f in files if not _present_or_staged_deletion(f, subrepos)]
     if not check(not missing, "files exist (or are a staged deletion)"):
         return CommitResult(
-            False, False, False, message, files,
+            False,
+            False,
+            False,
+            message,
+            files,
             error=f"File not found: {missing[0]} — did you typo the path? Run `git status` to see changed files",
             hint=f"Run `git status` to see what files are actually changed. Missing: {missing}",
             warnings=warnings,
@@ -261,9 +284,15 @@ def commit_and_push(
     commit_type = conventional_commit_type(message)
     allowed_types = allowed_commit_types()
     msg_ok = not require_message_quality or commit_type in allowed_types
-    if not check(msg_ok, "commit message follows Conventional Commits (type(scope): description)"):
+    if not check(
+        msg_ok, "commit message follows Conventional Commits (type(scope): description)"
+    ):
         return CommitResult(
-            False, False, False, message, files,
+            False,
+            False,
+            False,
+            message,
+            files,
             error=f"Commit message doesn't follow Conventional Commits format 'type(scope): description' "
             f"(allowed types: {', '.join(sorted(allowed_types))}) — got: {message!r}",
             hint="Use e.g. 'feat(x): add widget' or 'fix: correct off-by-one'. Add repo-specific types under "
@@ -284,7 +313,11 @@ def commit_and_push(
     )
     if not check(scope_ok, "commit scope is in the allowed list"):
         return CommitResult(
-            False, False, False, message, files,
+            False,
+            False,
+            False,
+            message,
+            files,
             error=f"Commit scope {commit_scope!r} isn't in the allowed list configured under "
             f"[tool.bdt.commit] scopes (allowed: {', '.join(sorted(allowed_scopes))}) — got: {message!r}",
             hint="Use one of the configured scopes, or omit the scope entirely.",
@@ -295,7 +328,11 @@ def commit_and_push(
     branch_ok = not require_feature_branch or current_branch not in ("main", "master")
     if not check(branch_ok, f"not on main/master (branch: {current_branch})"):
         return CommitResult(
-            False, False, False, message, files,
+            False,
+            False,
+            False,
+            message,
+            files,
             error=f"Direct push to {current_branch} blocked — create a feature branch first",
             hint="Run `git checkout -b feat/my-branch` to create a feature branch first.",
             warnings=warnings,
@@ -304,16 +341,24 @@ def commit_and_push(
     main_files = list(files)
     for subrepo in subrepos:
         prefix = subrepo + "/"
-        subrepo_files = [f[len(prefix):] for f in files if f.startswith(prefix)]
-        main_files = [f for f in main_files if not f.startswith(prefix) and f != subrepo]
+        subrepo_files = [f[len(prefix) :] for f in files if f.startswith(prefix)]
+        main_files = [
+            f for f in main_files if not f.startswith(prefix) and f != subrepo
+        ]
         if not subrepo_files:
             continue
 
         maybe_run_prek(subrepo, f"{subrepo} subrepo")
-        ok, failure = _commit_with_retry(message, subrepo_files, cwd=subrepo, no_verify=no_verify)
+        ok, failure = _commit_with_retry(
+            message, subrepo_files, cwd=subrepo, no_verify=no_verify
+        )
         if failure is not None:
             return CommitResult(
-                False, False, False, message, subrepo_files,
+                False,
+                False,
+                False,
+                message,
+                subrepo_files,
                 error=(failure.stdout + failure.stderr).strip(),
                 hint="Pre-commit hook may have failed in the subrepo. Check the error output above.",
                 warnings=warnings,
@@ -322,7 +367,11 @@ def commit_and_push(
             pr = _run(["git", "push"], cwd=subrepo)
             if pr.returncode != 0:
                 return CommitResult(
-                    False, True, False, message, subrepo_files,
+                    False,
+                    True,
+                    False,
+                    message,
+                    subrepo_files,
                     commit_sha=_sha(cwd=subrepo),
                     error=(pr.stdout + pr.stderr).strip(),
                     hint=f"Push failed. Try `git pull --rebase` in the {subrepo} submodule.",
@@ -336,7 +385,11 @@ def commit_and_push(
     ok, failure = _commit_with_retry(message, main_files, cwd=None, no_verify=no_verify)
     if failure is not None:
         return CommitResult(
-            False, False, False, message, files,
+            False,
+            False,
+            False,
+            message,
+            files,
             error=(failure.stdout + failure.stderr).strip(),
             hint="Pre-commit hook may have reformatted files and failed. Check output.",
             warnings=warnings,
@@ -347,12 +400,25 @@ def commit_and_push(
     extra = {"commit_type": commit_type, "commit_scope": commit_scope}
 
     if _in_sandbox():
-        return CommitResult(True, committed, False, message, files, commit_sha=_sha(), warnings=warnings, extra=extra)
+        return CommitResult(
+            True,
+            committed,
+            False,
+            message,
+            files,
+            commit_sha=_sha(),
+            warnings=warnings,
+            extra=extra,
+        )
 
     pr = _run(["git", "push"])
     if pr.returncode != 0:
         return CommitResult(
-            False, committed, False, message, files,
+            False,
+            committed,
+            False,
+            message,
+            files,
             commit_sha=_sha(),
             error=(pr.stdout + pr.stderr).strip(),
             hint="Push rejected. Run `git pull --rebase`, resolve conflicts, then retry.",
@@ -361,7 +427,16 @@ def commit_and_push(
         )
 
     print("  ✓ pushed", flush=True)
-    return CommitResult(True, committed, True, message, files, commit_sha=_sha(), warnings=warnings, extra=extra)
+    return CommitResult(
+        True,
+        committed,
+        True,
+        message,
+        files,
+        commit_sha=_sha(),
+        warnings=warnings,
+        extra=extra,
+    )
 
 
 def emit(result: CommitResult, *, use_json: bool) -> None:

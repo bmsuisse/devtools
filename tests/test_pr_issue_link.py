@@ -37,16 +37,28 @@ def test_parse_issue_ref_github_garbage_raises() -> None:
 
 
 def test_parse_issue_ref_ado_url_matching_org() -> None:
-    assert parse_issue_ref("https://dev.azure.com/myorg/MyProj/_workitems/edit/99", ADO_REMOTE) == 99
+    assert (
+        parse_issue_ref(
+            "https://dev.azure.com/myorg/MyProj/_workitems/edit/99", ADO_REMOTE
+        )
+        == 99
+    )
 
 
 def test_parse_issue_ref_ado_visualstudio_url_matching_org() -> None:
-    assert parse_issue_ref("https://myorg.visualstudio.com/MyProj/_workitems/edit/99", ADO_REMOTE) == 99
+    assert (
+        parse_issue_ref(
+            "https://myorg.visualstudio.com/MyProj/_workitems/edit/99", ADO_REMOTE
+        )
+        == 99
+    )
 
 
 def test_parse_issue_ref_ado_url_wrong_org_raises() -> None:
     with pytest.raises(ValueError, match="myorg"):
-        parse_issue_ref("https://dev.azure.com/otherorg/MyProj/_workitems/edit/99", ADO_REMOTE)
+        parse_issue_ref(
+            "https://dev.azure.com/otherorg/MyProj/_workitems/edit/99", ADO_REMOTE
+        )
 
 
 def test_parse_issue_ref_ado_github_url_raises() -> None:
@@ -64,7 +76,18 @@ def test_find_issue_refs_in_body_none_or_empty() -> None:
 
 @pytest.mark.parametrize(
     "keyword",
-    ["Fixes", "fixes", "Fix", "Fixed", "Closes", "close", "Closed", "Resolves", "resolve", "Resolved"],
+    [
+        "Fixes",
+        "fixes",
+        "Fix",
+        "Fixed",
+        "Closes",
+        "close",
+        "Closed",
+        "Resolves",
+        "resolve",
+        "Resolved",
+    ],
 )
 def test_find_issue_refs_in_body_github_keyword_variants(keyword: str) -> None:
     assert find_issue_refs_in_body(f"{keyword} #42", GH_REMOTE) == [42]
@@ -122,12 +145,16 @@ def test_find_issue_refs_in_body_ignores_lookalike_github_domain() -> None:
 
 def test_parse_issue_ref_accepts_real_github_subdomain() -> None:
     # A genuine github.com subdomain (dot boundary) must still work.
-    assert parse_issue_ref("https://www.github.com/owner/repo/issues/42", GH_REMOTE) == 42
+    assert (
+        parse_issue_ref("https://www.github.com/owner/repo/issues/42", GH_REMOTE) == 42
+    )
 
 
 def test_parse_issue_ref_rejects_lookalike_ado_domain() -> None:
     with pytest.raises(ValueError):
-        parse_issue_ref("https://notdev.azure.com/myorg/MyProj/_workitems/edit/9", ADO_REMOTE)
+        parse_issue_ref(
+            "https://notdev.azure.com/myorg/MyProj/_workitems/edit/9", ADO_REMOTE
+        )
 
 
 def test_find_issue_refs_in_body_ignores_lookalike_ado_domain() -> None:
@@ -149,7 +176,10 @@ def test_github_body_already_closes_false_for_plain_mention() -> None:
 
     # A bare mention (no closing keyword) doesn't count -- GitHub itself doesn't treat it as a
     # real "closes" link, so `link_issue_to_pr` must not be fooled into thinking one exists.
-    assert github_body_already_closes("See #42 for background, not fixing it here.", 42) is False
+    assert (
+        github_body_already_closes("See #42 for background, not fixing it here.", 42)
+        is False
+    )
 
 
 def test_github_body_already_closes_false_for_a_different_issue_number() -> None:
