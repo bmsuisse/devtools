@@ -625,8 +625,9 @@ it can't see through).
 
 pgdevkit's helpers are matched by name (`fetch_all(...)`, `db.fetch_all(...)`, `pgdevkit.db.execute(...)`). The one
 exception is a *bare* `execute(...)`, a far too generic name: it is only checked in a file that imports it from
-`pgdevkit`/`pgdevkit.db` (`from pgdevkit.db import execute`, also aliased: `... import execute as run`), so an unrelated
-`execute()` from another library, or one defined locally, is never flagged. Not covered: a re-export through the
+`pgdevkit`/`pgdevkit.db` (`from pgdevkit.db import execute`, also aliased: `... import execute as run`; the import is
+recognised file-wide), so an unrelated `execute()` from another library, or one defined locally in a file without that
+import, is never flagged. Aliased imports of the other helpers (`fetch_all as fa`) are recognised too. Not covered: a re-export through the
 project's own module (`from app.db import execute`; call it as `db.execute(...)` or import it from `pgdevkit.db`
 instead), a subclass of `PostgresJsonResponse` under another name, and CCMT2's pre-pgdevkit
 `PostgresJsonResponse("postgres", sql)`, whose first argument is a connection source, not SQL.

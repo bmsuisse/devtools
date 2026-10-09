@@ -851,3 +851,15 @@ async def f(cur, a, b, c, d, e, name):
     await cur.execute(f"set {name} {a} {b} {c} {d} {e}")
 '''
     assert _findings(source, tmp_path / "a.py") == []
+
+
+def test_probe_variants_do_not_read_prose_as_dml(tmp_path: Path) -> None:
+    # sqlglot parses these once the fragment is dropped/turned into an assignment ("UPDATE to AS version ...").
+    source = '''
+def f(cur, v):
+    cur.execute(f"Update to version {v}")
+    cur.execute(f"Delete the file {v}")
+    cur.execute(f"Insert coin {v}")
+    cur.execute(f"Update complete, {v} rows changed")
+'''
+    assert _findings(source, tmp_path / "a.py") == []

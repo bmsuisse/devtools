@@ -64,7 +64,8 @@ _POSITIONAL_PARAM_RE = re.compile(r"(?<!%)%s\b")
 # Placeholder substituted for a non-literal fragment (an f-string {expr}, a concatenated
 # non-constant operand, a str.format() {field}) before attempting an sqlglot parse -- padded
 # with spaces so it never merges into a neighboring identifier/keyword, and looks like an
-# ordinary identifier so the parse doesn't fail on the substitution itself.
+# ordinary identifier so the parse doesn't fail on the substitution itself (see
+# `_PROBE_SLOT_VARIANTS`/`_parse_probe_text` for the fallbacks when an identifier doesn't fit).
 _PROBE_PLACEHOLDER = " __X__ "
 _FORMAT_FIELD_RE = re.compile(r"\{[^{}]*\}")
 
@@ -294,9 +295,24 @@ _FSTRING_FIX = (
 _GENERIC_FIX = "Use a psycopg t-string (Python 3.14+), psycopg.sql for dynamic SQL, or load_sql()/a .sql file for static SQL."
 
 
+# Keyword that must literally be in the text before a variant reading (a fragment as nothing/an assignment) may
+# count: sqlglot is lenient enough to read prose like "Update to version {v}" as an UPDATE with the fragment gone.
+_VARIANT_REQUIRED_KEYWORD: dict[type, re.Pattern[str]] = {}
+if exp is not None:
+    _VARIANT_REQUIRED_KEYWORD = {
+        exp.Select: re.compile(r"(?i)\bfrom\b"),
+        exp.Union: re.compile(r"(?i)\bfrom\b"),
+        exp.Insert: re.compile(r"(?i)\binto\b"),
+        exp.Update: re.compile(r"(?i)\bset\b"),
+        exp.Delete: re.compile(r"(?i)\bfrom\b"),
+        exp.Merge: re.compile(r"(?i)\busing\b"),
+    }
+
+
 def _parse_probe_text(text: str) -> "exp.Expression | None":
     """`parse_sql_text` for text with `_PROBE_PLACEHOLDER` standing in for dynamic fragments: the placeholder
-    as an identifier first, then (see `_PROBE_SLOT_VARIANTS`) every fragment as nothing/an assignment."""
+    as an identifier first, then (see `_PROBE_SLOT_VARIANTS`) every fragment as nothing/an assignment -- the
+    latter only when the literal text carries the statement's own keyword (`_VARIANT_REQUIRED_KEYWORD`)."""
     parsed = parse_sql_text(text)
     if parsed is not None:
         return parsed
@@ -304,10 +320,16 @@ def _parse_probe_text(text: str) -> "exp.Expression | None":
     slots = len(parts) - 1
     if not 1 <= slots <= _MAX_PROBE_SLOTS:
         return None
+    literal_text = " ".join(parts)
     for combination in itertools.product(_PROBE_SLOT_VARIANTS, repeat=slots):
-        candidate = "".join(part + (combination[i] if i < slots else "") for i, part in enumerate(parts))
+        if all(c == _PROBE_PLACEHOLDER for c in combination):
+            continue  # that's `text` itself, already tried
+        candidate = "".join(a + b for a, b in itertools.zip_longest(parts, combination, fillvalue=""))
         parsed = parse_sql_text(candidate)
-        if parsed is not None:
+        if parsed is None:
+            continue
+        keyword = next((rx for t, rx in _VARIANT_REQUIRED_KEYWORD.items() if isinstance(parsed, t)), None)
+        if keyword is not None and keyword.search(literal_text):
             return parsed
     return None
 
@@ -493,13 +515,16 @@ def _is_sql_named(name: str) -> bool:
 # first argument as SQL, exactly like `.execute()`, so they get the same rules. As an attribute (`db.fetch_all(...)`,
 # `pgdevkit.db.execute(...)`) they are matched by name only, like `.execute()` itself.
 _PGDEVKIT_SQL_CALLEES = frozenset({"fetch_all", "fetch_one", "fetch_scalar", "execute", "PostgresJsonResponse"})
-# Bare names (`fetch_all(...)`) are matched by name alone -- except `execute`, far too generic a name (sqlite helpers,
-# subprocess wrappers, ...): `execute(...)` counts only in a file that imports it from `pgdevkit`/`pgdevkit.db` (also under an
-# alias: `from pgdevkit.db import execute as run`). The sqlglot DML gate still applies on top. Not covered: a re-export
-# through the project's own module (`from app.db import execute`), a subclass of PostgresJsonResponse under another name
-# (the documented `class AppJson(PostgresJsonResponse)`), and the pre-pgdevkit `PostgresJsonResponse("postgres", sql, ...)`
-# copy in CCMT2, whose first argument is a connection source -- its SQL only gets checked once that call site moves to pgdevkit.
-_BARE_NAME_SQL_CALLEES = _PGDEVKIT_SQL_CALLEES - {"execute"}
+# A bare `execute(...)` is far too generic a name (sqlite helpers, subprocess wrappers, ...): it counts only in a file
+# that imports it from `pgdevkit`/`pgdevkit.db` (also under an alias: `from pgdevkit.db import execute as run`; see
+# `_file_trust`). The import is tracked file-wide, so a local def/parameter named like it is not told apart. The sqlglot
+# DML gate still applies on top. The other callees are matched by bare name too, and by their pgdevkit import alias.
+# Not covered: a re-export through the project's own module (`from app.db import execute`), a subclass of
+# PostgresJsonResponse under another name (the documented `class AppJson(PostgresJsonResponse)`), and the pre-pgdevkit
+# `PostgresJsonResponse("postgres", sql, ...)` copy in CCMT2, whose first argument is a connection source -- its SQL
+# only gets checked once that call site moves to pgdevkit.
+_IMPORT_GATED_BARE_CALLEES = frozenset({"execute"})
+_BARE_NAME_SQL_CALLEES = _PGDEVKIT_SQL_CALLEES - _IMPORT_GATED_BARE_CALLEES
 
 
 def _is_pgdevkit_sink_call(func: ast.expr, trust: _Trust) -> bool:
