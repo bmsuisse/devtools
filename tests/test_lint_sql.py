@@ -483,3 +483,59 @@ def f(user_filter, parts):
 '''
     findings = _findings(source, tmp_path / "a.py")
     assert [f.rule for f in findings] == ["sql-sqlglot-string-injection"]
+
+
+def test_sqlglot_rule_gaps_found_in_review(tmp_path: Path) -> None:
+    source = '''
+from sqlglot import select as s, parse_one as p
+import sqlglot
+
+def f(x, y, cols, xs, m):
+    w = f"a={x}"
+    q = s("a").from_("t").where("a = " + x + y)       # 3-part concatenation
+    q = q.where(w)                                      # through a variable
+    p(f"select {x}")                                    # aliased import
+    s(*[f"{c} as {a}" for c, a in m])                   # starred comprehension
+    q.where(" and ".join(f"{c}=1" for c in cols))       # join of interpolated elements
+    return q
+'''
+    findings = _findings(source, tmp_path / "a.py")
+    assert [f.rule for f in findings] == ["sql-sqlglot-string-injection"] * 5
+    assert [f.line for f in findings] == [7, 8, 9, 10, 11]
+
+
+def test_sqlglot_rule_false_positive_guards(tmp_path: Path) -> None:
+    source = '''
+import sqlglot
+from sqlglot import select
+
+class A:
+    def go(self, c):
+        return self.where(f"{c}")
+
+def f(df, Model, session, x, d, i):
+    df.group_by(f"{x}_id")
+    Model.objects.order_by(f"-{x}")
+    session.query(A).group_by(f"{x}").having(f"{x}")
+    sqlglot.parse_one("select 1", dialect=f"{d}")
+    select("a").from_("t", alias=f"t{i}")
+    select("a").where(f"{1}")
+    select("a").where(f"a={'x'}")
+    select("a").where(f"b = {i}", dialect=d)  # the one real finding: positional f-string with a name
+'''
+    findings = _findings(source, tmp_path / "a.py")
+    assert [f.line for f in findings] == [17]
+
+
+def test_sqlglot_finding_line_is_the_offending_argument_in_a_multiline_chain(tmp_path: Path) -> None:
+    source = '''
+from sqlglot import select
+
+def f(y):
+    return (
+        select("a")
+        .from_("t")
+        .where(f"a={y}")
+    )
+'''
+    assert [f.line for f in _findings(source, tmp_path / "a.py")] == [8]
