@@ -586,6 +586,7 @@ def f(sql_loader, lng):
     PostgresJsonResponse(sql_loader.load_sql("articles", "list_articles"), {"lng": lng})
     PostgresJsonResponse("select id, name from articles where lng = %(lng)s", {"lng": lng})
     PostgresJsonResponse("select 1 as a", query_produces_json=False, batch_size=10, statement_timeout=5)
+    PostgresJsonResponse(t"select id from articles where lng = {lng}")
 '''
     assert _findings(source, tmp_path / "a.py") == []
 
@@ -607,20 +608,3 @@ def f(table):
     return PostgresJsonResponse("postgres", f"select id from dim.{table}", parameters={})
 '''
     assert _findings(source, tmp_path / "a.py") == []
-
-
-def test_postgres_json_response_advice_does_not_recommend_t_strings(tmp_path: Path) -> None:
-    # PostgresJsonResponse wraps the query as a subquery and raises TypeError for a t-string, so the usual
-    # "change the f prefix to t" fix would lead people astray; fetch_all, which does take one, keeps it.
-    source = '''
-def f(table, value):
-    PostgresJsonResponse(f"select id from dim.{table} where active")
-    PostgresJsonResponse("select id from t where id = " + str(value))
-    fetch_all(f"select id from dim.{table} where active")
-'''
-    findings = _findings(source, tmp_path / "a.py")
-    by_line = {f.line: f.message for f in findings}
-    assert "t-string" not in by_line[3].replace("takes no t-string", "")
-    assert "psycopg.sql" in by_line[3] and "psycopg.sql" in by_line[4]
-    assert "t-string" not in by_line[4].replace("takes no t-string", "")
-    assert "t-string" in by_line[5]

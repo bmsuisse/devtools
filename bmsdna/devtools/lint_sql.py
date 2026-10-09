@@ -27,7 +27,7 @@ import ast
 import re
 import sys
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .lint_findings import Finding
@@ -276,12 +276,6 @@ _FSTRING_FIX = (
     "`{name:i}` quotes a table/column identifier. Or use load_sql()/a .sql file for static SQL."
 )
 _GENERIC_FIX = "Use a psycopg t-string (Python 3.14+), psycopg.sql for dynamic SQL, or load_sql()/a .sql file for static SQL."
-# `PostgresJsonResponse` wraps its query as a subquery, which a t-string can't be: recommending one would send
-# people to a fix that raises TypeError.
-_NO_TSTRING_FIX = (
-    "Use psycopg.sql for dynamic SQL (`{}` placeholders for identifiers, bound params for values), or "
-    "load_sql()/a .sql file for static SQL. This call takes no t-string."
-)
 
 
 def _injection_finding(text: str, path: Path, lineno: int, rule: str, how: str) -> list[Finding]:
@@ -463,15 +457,11 @@ def _is_sql_named(name: str) -> bool:
 
 # pgdevkit's `fetch_all`/`fetch_one`/`fetch_scalar` and `pgdevkit.fastapi.PostgresJsonResponse` run their first
 # argument as SQL, exactly like `.execute()`, so they get the same rules (plain functions / a class, so matched by
-# bare name too). Not covered: the pre-pgdevkit `PostgresJsonResponse("postgres", sql, ...)` copy in CCMT2, whose
-# first argument is a connection source -- its SQL only gets checked once that call site moves to pgdevkit.
+# bare name too). Matched by name only, so not covered: an alias (`as PJR`), a subclass under another name (the
+# documented `class AppJson(PostgresJsonResponse): expose_errors = ...`), and the pre-pgdevkit
+# `PostgresJsonResponse("postgres", sql, ...)` copy in CCMT2, whose first argument is a connection source -- its SQL
+# only gets checked once that call site moves to pgdevkit.
 _PGDEVKIT_SQL_CALLEES = frozenset({"fetch_all", "fetch_one", "fetch_scalar", "PostgresJsonResponse"})
-_NO_TSTRING_CALLEES = frozenset({"PostgresJsonResponse"})
-
-
-def _callee_name(call: ast.Call) -> str | None:
-    func = call.func
-    return func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
 
 
 def _execute_query_arg(call: ast.Call) -> ast.expr | None:
@@ -649,11 +639,6 @@ class _ExecuteCallVisitor(ast.NodeVisitor):
             found = _check_query_arg(query_arg, self._lookup, self.path, node.lineno, self.trust, self.review)
             if isinstance(query_arg, ast.Name) and _is_sql_named(query_arg.id) and self._all_bare_strings(query_arg.id):
                 found = [f for f in found if f.rule != "sql-inline-too-complex"]  # already reported at the assignment
-            if _callee_name(node) in _NO_TSTRING_CALLEES:
-                found = [
-                    replace(f, message=f.message.replace(_FSTRING_FIX, _NO_TSTRING_FIX).replace(_GENERIC_FIX, _NO_TSTRING_FIX))
-                    for f in found
-                ]
             self.findings.extend(found)
         self.generic_visit(node)
 

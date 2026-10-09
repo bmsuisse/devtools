@@ -1092,7 +1092,8 @@ def lint(
         "[tool.bdt.lint] skip_tooling_check = true in pyproject.toml.",
     ),
 ) -> None:
-    """Static checks (bmsuisse/skills#52): postgres/psycopg SQL rules on every `.execute()` call
+    """Static checks (bmsuisse/skills#52): postgres/psycopg SQL rules on every `.execute()` call and pgdevkit
+    `fetch_all`/`fetch_one`/`fetch_scalar`/`PostgresJsonResponse` call
     (must use load_sql()/a .sql file, a t-string, or psycopg.sql for anything beyond a trivial
     query; never an f-string/concatenation/`%`-formatting), pydantic-model placement under api/
     directories, hand-wired HTTP in TypeScript, and that the repo declares/configures ty, ruff, pytest and prek.

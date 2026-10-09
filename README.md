@@ -617,7 +617,7 @@ bdt lint --no-tooling-check    # skip the tooling-config check for this run
 ```
 
 Every `.execute()`/`.executemany()` call -- and pgdevkit's `fetch_all`/`fetch_one`/`fetch_scalar` and
-`PostgresJsonResponse` (the latter takes no t-string), which only accept a literal string, sqlglot expression, `psycopg.sql` or t-string -- whose SQL argument can be resolved to a
+`PostgresJsonResponse`, which only accept a literal string, sqlglot expression, `psycopg.sql` or t-string -- whose SQL argument can be resolved to a
 literal or f-string/concatenation/`%`-format expression is checked (an
 unresolvable argument, e.g. a plain function parameter, is silently skipped --
 this can't false-positive on non-psycopg `.execute()` calls, or on dynamic SQL
