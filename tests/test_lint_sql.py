@@ -539,3 +539,72 @@ def f(y):
     )
 '''
     assert [f.line for f in _findings(source, tmp_path / "a.py")] == [8]
+
+
+def test_postgres_json_response_with_fstring_is_flagged_like_execute(tmp_path: Path) -> None:
+    source = '''
+from pgdevkit.fastapi import PostgresJsonResponse
+
+async def f(table):
+    return PostgresJsonResponse(f"SELECT id FROM dim.{table} WHERE active")
+'''
+    assert _rules(_findings(source, tmp_path / "a.py")) == {"sql-fstring-injection"}
+
+
+def test_postgres_json_response_flags_every_interpolation_form_and_call_shape(tmp_path: Path) -> None:
+    source = '''
+import pgdevkit.fastapi as pgf
+
+def f(value, table):
+    PostgresJsonResponse("select * from t where id = " + str(value))
+    PostgresJsonResponse("select * from t where id = %s" % value)
+    pgf.PostgresJsonResponse("select * from t where id = {}".format(value))
+    PostgresJsonResponse(query=f"select id from {table}", pool=None)
+'''
+    findings = _findings(source, tmp_path / "a.py")
+    assert _rules(findings) == {
+        "sql-concat-injection",
+        "sql-percent-format-injection",
+        "sql-format-injection",
+        "sql-fstring-injection",
+    }
+    assert len(findings) == 4
+
+
+def test_postgres_json_response_follows_a_variable_to_its_unsafe_assignment(tmp_path: Path) -> None:
+    source = '''
+def f(table):
+    query = f"select id from dim.{table} where active"
+    return PostgresJsonResponse(query, {"x": 1})
+'''
+    assert _rules(_findings(source, tmp_path / "a.py")) == {"sql-fstring-injection"}
+
+
+def test_postgres_json_response_accepts_literal_load_sql_and_named_params(tmp_path: Path) -> None:
+    source = '''
+def f(sql_loader, lng):
+    PostgresJsonResponse(sql_loader.load_sql("articles", "list_articles"), {"lng": lng})
+    PostgresJsonResponse("select id, name from articles where lng = %(lng)s", {"lng": lng})
+    PostgresJsonResponse("select 1 as a", query_produces_json=False, batch_size=10, statement_timeout=5)
+    PostgresJsonResponse(t"select id from articles where lng = {lng}")
+'''
+    assert _findings(source, tmp_path / "a.py") == []
+
+
+def test_postgres_json_response_applies_inline_complexity_and_positional_rules(tmp_path: Path) -> None:
+    source = '''
+def f():
+    PostgresJsonResponse("select a.id from a join b on b.a_id = a.id")
+    PostgresJsonResponse("select id from t where x = %s", (1,))
+'''
+    assert _rules(_findings(source, tmp_path / "a.py")) == {"sql-inline-too-complex", "sql-positional-param"}
+
+
+def test_legacy_ccmt_postgres_json_response_with_connection_first_is_not_flagged(tmp_path: Path) -> None:
+    # CCMT2's own pre-pgdevkit class takes `("postgres", sql, ...)`: its first argument is no SQL, so it stays
+    # unchecked (silently skipped, never a false positive) until that call site moves to pgdevkit's class.
+    source = '''
+def f(table):
+    return PostgresJsonResponse("postgres", f"select id from dim.{table}", parameters={})
+'''
+    assert _findings(source, tmp_path / "a.py") == []

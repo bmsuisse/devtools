@@ -123,7 +123,7 @@ vendor a git submodule under that path.
 
 ## Static checks
 
-- `bdt lint [paths]` -- SQL/psycopg rules, pydantic-model placement, hand-wired HTTP in TypeScript, baseline tooling.
+- `bdt lint [paths]` -- SQL/psycopg rules (`.execute()`, pgdevkit `fetch_*`, `PostgresJsonResponse`), pydantic-model placement, hand-wired HTTP in TypeScript, baseline tooling.
 - `uv run bdt dead-code` -- dead code a linter can't see, configured under `[tool.bdt.dead_code]` in pyproject.toml:
   `.sql` files no Python code loads (`sql_roots`) and FastAPI routes that neither non-generated frontend code nor a
   `url_for(...)` call uses (`[[tool.bdt.dead_code.apps]]`: app or openapi file, frontends, excludes, optional `baseline`;
