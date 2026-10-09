@@ -17,6 +17,7 @@ from pgdevkit.testdb import constants as pgdevkit_constants
 
 from . import ado_issue, api_usage as api_usage_mod, app_service_logs, commit as commit_mod, dead_code as dead_code_mod
 from . import env_config
+from . import env_files as env_files_mod
 from . import find_repo as find_repo_mod
 from . import issue_do as issue_do_mod
 from . import gh_issue, gh_pr
@@ -73,6 +74,9 @@ app.add_typer(pr_app, name="pr")
 
 translate_app = typer.Typer(name="translate", help="Generate <lng>.json files from translations.toml")
 app.add_typer(translate_app, name="translate")
+
+env_app = typer.Typer(name="env", help="Inspect .env files without exposing their values")
+app.add_typer(env_app, name="env")
 
 issue_app = typer.Typer(name="issue", help="Issue / work item commands (Azure DevOps or GitHub, auto-detected from the git remote)")
 app.add_typer(issue_app, name="issue")
@@ -1207,6 +1211,24 @@ def translate_cmd(
         raise typer.Exit(1)
     if not check:
         typer.echo(f"Wrote {len(res.written)} file(s)")
+
+
+@env_app.command("get-keys")
+def env_get_keys(
+    search: str | None = typer.Option(None, "--search", "-s", help="Only keys containing this text (case-insensitive)"),
+    no_home: bool = typer.Option(False, "--no-home", help="Don't also list the env files directly in ~"),
+) -> None:
+    """List variable names (never values) from .env, *.env and .env.* files under the current directory (and in ~).
+
+    Skips node_modules, .git, .venv, .worktrees and .claude.
+    """
+    home = None if no_home else Path.home()
+    cwd = Path.cwd()
+    files = env_files_mod.get_keys(cwd, home, search)
+    if not files:
+        typer.echo("No matching env files/keys found.", err=True)
+        raise typer.Exit(1)
+    typer.echo(env_files_mod.format_keys(files, home, cwd))
 
 
 @translate_app.command("add")

@@ -329,6 +329,13 @@ branch's PR closes (`Fixes #N`, or an issue/work-item URL in the PR body); it re
 that is none or several. If the issue's newest comment already is a "Taken by ..." claim (by anyone) it
 says so and posts nothing, so it's safe to run repeatedly -- including before `bdt issue do`.
 
+## `bdt env get-keys`
+
+Lists the variable **names** (never the values) defined in `.env`, `*.env` and `.env.*` files under the
+current directory (recursively, skipping `node_modules`, `.git`, `.venv`, `.worktrees` and `.claude`) and directly in `~`, so you (or an agent) can see which variables exist without `cat .env`.
+`--search TEXT` filters by key name (case-insensitive); `--no-home` leaves out the files in `~`. Files in `~` -- and any file using
+`export VAR=VALUE` -- are bash syntax, so the output adds a `source <file>` hint. Exits 1 if nothing matches.
+
 ## `bdt translate`
 
 One `translations.toml` is the source of truth for all UI translations; `bdt translate` generates the
