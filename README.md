@@ -616,7 +616,8 @@ bdt lint backend/db/a.py b.py  # scan only these files -- e.g. from a prek/pre-c
 bdt lint --no-tooling-check    # skip the tooling-config check for this run
 ```
 
-Every `.execute()`/`.executemany()` call whose SQL argument can be resolved to a
+Every `.execute()`/`.executemany()` call -- and pgdevkit's `fetch_all`/`fetch_one`/`fetch_scalar`,
+which only accept a literal string, sqlglot expression, `psycopg.sql` or t-string -- whose SQL argument can be resolved to a
 literal or f-string/concatenation/`%`-format expression is checked (an
 unresolvable argument, e.g. a plain function parameter, is silently skipped --
 this can't false-positive on non-psycopg `.execute()` calls, or on dynamic SQL
@@ -633,6 +634,10 @@ it can't see through):
   with an f-string, `+` concatenation, the `%` operator, or `str.format()`
   instead of a psycopg t-string (3.14+), `psycopg.sql`, or bound params. For an f-string the fix is
   usually just `f"..."` -> `t"..."` (`{value}` is bound, `{name:i}` quotes an identifier).
+- **`sql-sqlglot-string-injection`** — an f-string / concatenation / `%` / `.format()` string passed to a
+  sqlglot builder that parses it as SQL (`select(...)`, `.from_()`, `.where()`, `.order_by()`, `parse_one()`, ...).
+  The result is a sqlglot expression, which the rules above otherwise trust, so this is the hole they'd miss.
+  Use `exp.column()`/`exp.to_identifier()` for names and `exp.Placeholder` + bound params for values.
 - **`sql-positional-param`** — positional `%s` instead of named `%(name)s`.
 - **`sql-forbidden-join`** — `RIGHT JOIN`/`LATERAL JOIN`/`CROSS APPLY` (same
   patterns the `prek` skill's `check_files.py` forbids in `.sql` files).
@@ -816,7 +821,7 @@ Findings have two severities: **error** (a definite unsafe pattern, exit code 1)
 (depends on where a value comes from; listed with an instruction for an AI/human to verify, exit
 code 0 unless `--strict`).
 
-- **SQL** (Python `.execute()`): f-string / `%` / concatenation / `.format()` SQL is an error.
+- **SQL** (Python `.execute()` / `fetch_all()` / `fetch_one()` / `fetch_scalar()`): f-string / `%` / concatenation / `.format()` SQL is an error.
   SQL from `load_sql()`, `sql.SQL`, sqlglot (`expr.sql()`, `sqlglot.*`), `cast(LiteralString, <sqlglot expr>)` (the cast is only as safe as its argument) or
   a function in the same file annotated `-> LiteralString` is trusted; SQL from any other function
   call is a `sql-unverified-call` review item. (`bdt lint` accepts the same trusted forms but never

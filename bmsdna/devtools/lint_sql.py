@@ -1,5 +1,5 @@
 """AST rule engine for `bdt lint`'s postgres/psycopg checks (bmsuisse/skills#52):
-every `.execute()`/`.executemany()` call is classified by how its SQL argument was
+every `.execute()`/`.executemany()` call (and pgdevkit's `fetch_all`/`fetch_one`/`fetch_scalar`) is classified by how its SQL argument was
 built, then checked against the `postgres-best-practices` skill's rules
 (../../skills/postgres-best-practices in a checkout of bmsuisse/skills).
 
@@ -25,7 +25,8 @@ from __future__ import annotations
 import ast
 import re
 import sys
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .lint_findings import Finding
@@ -124,6 +125,7 @@ class _Trust:
 
     sqlglot_names: frozenset[str] = frozenset()
     literal_funcs: frozenset[str] = frozenset()
+    sqlglot_aliases: Mapping[str, str] = field(default_factory=dict)  # local name -> name it was imported as
 
 
 _NO_TRUST = _Trust()
@@ -185,6 +187,7 @@ def _unwrap_str_call(node: ast.Call) -> ast.expr | None:
 def _file_trust(tree: ast.AST) -> _Trust:
     literal_funcs: set[str] = set()
     sqlglot_names: set[str] = set()
+    sqlglot_aliases: dict[str, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.returns is not None and _is_literal_string_ref(node.returns):
             literal_funcs.add(node.name)
@@ -192,7 +195,8 @@ def _file_trust(tree: ast.AST) -> _Trust:
             sqlglot_names.update((a.asname or a.name).split(".")[0] for a in node.names if a.name.split(".")[0] == "sqlglot")
         elif isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "sqlglot":
             sqlglot_names.update(a.asname or a.name for a in node.names)
-    return _Trust(frozenset(sqlglot_names), frozenset(literal_funcs))
+            sqlglot_aliases.update({a.asname or a.name: a.name for a in node.names})
+    return _Trust(frozenset(sqlglot_names), frozenset(literal_funcs), sqlglot_aliases)
 
 
 def _resolve_single(expr: ast.expr, lookup) -> ast.expr:
@@ -450,12 +454,113 @@ def _is_sql_named(name: str) -> bool:
     return lowered == "sql" or lowered.endswith("_sql")
 
 
+# pgdevkit's `fetch_all`/`fetch_one`/`fetch_scalar` run their first argument as SQL, exactly like
+# `.execute()`, so they get the same rules (they're plain functions, so matched by bare name too).
+_FETCH_HELPERS = frozenset({"fetch_all", "fetch_one", "fetch_scalar"})
+
+
 def _execute_query_arg(call: ast.Call) -> ast.expr | None:
-    if not (isinstance(call.func, ast.Attribute) and call.func.attr in ("execute", "executemany")):
+    func = call.func
+    is_execute = isinstance(func, ast.Attribute) and func.attr in ("execute", "executemany")
+    is_fetch_helper = (isinstance(func, ast.Name) and func.id in _FETCH_HELPERS) or (
+        isinstance(func, ast.Attribute) and func.attr in _FETCH_HELPERS
+    )
+    if not (is_execute or is_fetch_helper):
         return None
     if call.args:
         return call.args[0]
     return next((kw.value for kw in call.keywords if kw.arg == "query"), None)
+
+
+# sqlglot's builders parse plain strings as SQL (`select(f"a, {x}")`, `.where(f"id = {x}")`), so text
+# interpolated into one is as dangerous as text passed straight to `.execute()` -- even though the
+# result is a sqlglot expression the rules above otherwise trust. Value arguments (`exp.column`,
+# `exp.Placeholder`, `exp.convert`, `exp.to_identifier`, ...) quote/bind safely and aren't listed.
+_SQLGLOT_STRING_BUILDERS = frozenset(
+    {"select", "from_", "where", "join", "order_by", "group_by", "having", "with_", "parse_one", "parse", "condition", "and_", "or_", "maybe_parse"}
+)
+# Keyword arguments of those builders that are options, not SQL text.
+_SQLGLOT_NON_SQL_KEYWORDS = frozenset(
+    {"dialect", "read", "write", "copy", "append", "alias", "join_alias", "join_type", "into", "opts", "dialect_name", "table"}
+)
+
+
+def _concat_leaves(node: ast.expr) -> list[ast.expr]:
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return [*_concat_leaves(node.left), *_concat_leaves(node.right)]
+    return [node]
+
+
+def _is_str_constant(node: ast.expr) -> bool:
+    return isinstance(node, ast.Constant) and isinstance(node.value, str)
+
+
+def _interpolation_kind(node: ast.expr) -> str | None:
+    """How `node` interpolates non-literal text into a string, or None if it doesn't. An
+    interpolated *constant* (`f"{1}"`, `f"{'x'}"`) can't carry user text, so it doesn't count."""
+    if isinstance(node, ast.JoinedStr):
+        dynamic = any(isinstance(v, ast.FormattedValue) and not isinstance(v.value, ast.Constant) for v in node.values)
+        return "an f-string" if dynamic else None
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        leaves = _concat_leaves(node)
+        if any(_is_str_constant(x) for x in leaves) and not all(isinstance(x, ast.Constant) for x in leaves):
+            return "string concatenation"
+        return None
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+        return "the `%` string-formatting operator" if _is_str_constant(node.left) else None
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        if node.func.attr == "format" and _is_str_constant(node.func.value):
+            return "`str.format()`"
+        if node.func.attr == "join" and _is_str_constant(node.func.value) and node.args:
+            # `" and ".join(f"{c} = 1" for c in cols)`: the element is what carries the text
+            elements = _elements(node.args[0])
+            return next((k for e in elements if (k := _interpolation_kind(e)) is not None), None)
+    return None
+
+
+def _elements(node: ast.expr) -> list[ast.expr]:
+    """The element expression(s) of a literal list/tuple or a comprehension/generator."""
+    if isinstance(node, (ast.ListComp, ast.GeneratorExp, ast.SetComp)):
+        return [node.elt]
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return list(node.elts)
+    return []
+
+
+def _sqlglot_builder_findings(
+    call: ast.Call, path: Path, trust: _Trust, lookup, sqlglot_vars: set[str]
+) -> list[Finding]:
+    if not trust.sqlglot_names:
+        return []
+    func = call.func
+    name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else None
+    root = _call_root_name(func)
+    if isinstance(func, ast.Name):
+        name = trust.sqlglot_aliases.get(func.id, func.id)  # `from sqlglot import select as s`
+    # Only chains rooted at a sqlglot name or at a variable holding a sqlglot expression: `.where()`/
+    # `.group_by()` on a polars/Django/SQLAlchemy object in the same file is none of our business.
+    if name not in _SQLGLOT_STRING_BUILDERS or not (root in trust.sqlglot_names or root in sqlglot_vars):
+        return []
+    arguments: list[ast.expr] = []
+    for arg in call.args:
+        arguments.append(arg.value if isinstance(arg, ast.Starred) else arg)
+    arguments.extend(kw.value for kw in call.keywords if kw.arg not in _SQLGLOT_NON_SQL_KEYWORDS)
+    for arg in arguments:
+        candidates = [c for top in [arg, *_elements(arg)] for c in _resolve_candidates(top, lookup)]
+        for candidate in candidates:
+            kind = _interpolation_kind(candidate)
+            if kind is not None:
+                return [
+                    Finding(
+                        path,
+                        arg.lineno,
+                        "sql-sqlglot-string-injection",
+                        f"`{name}(...)` parses its string argument as SQL, and it is built with {kind} -- injection risk. "
+                        "Build it from sqlglot nodes instead (`exp.column()`/`exp.to_identifier()` for names, `exp.Placeholder` "
+                        "+ bound params for values).",
+                    )
+                ]
+    return []
 
 
 class _ExecuteCallVisitor(ast.NodeVisitor):
@@ -471,6 +576,7 @@ class _ExecuteCallVisitor(ast.NodeVisitor):
         self.review = review
         self.findings: list[Finding] = []
         self._scopes: list[dict[str, list[ast.expr]]] = [{}]
+        self._sqlglot_vars: set[str] = set()  # names bound from a sqlglot expression chain
 
     def _lookup(self, name: str) -> list[ast.expr]:
         for scope in reversed(self._scopes):
@@ -487,14 +593,21 @@ class _ExecuteCallVisitor(ast.NodeVisitor):
     visit_AsyncFunctionDef = _visit_scoped
     visit_ClassDef = _visit_scoped
 
+    def _track_sqlglot_var(self, name: str, value: ast.expr) -> None:
+        if isinstance(value, ast.Call) and (root := _call_root_name(value.func)) is not None:
+            if root in self.trust.sqlglot_names or root in self._sqlglot_vars:
+                self._sqlglot_vars.add(name)
+
     def visit_Assign(self, node: ast.Assign) -> None:
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            self._track_sqlglot_var(node.targets[0].id, node.value)
             self._scopes[-1].setdefault(node.targets[0].id, []).append(node.value)
             self._check_sql_named_literal(node.targets[0].id, node.value, node.lineno)
         self.generic_visit(node)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         if isinstance(node.target, ast.Name) and node.value is not None:
+            self._track_sqlglot_var(node.target.id, node.value)
             self._scopes[-1].setdefault(node.target.id, []).append(node.value)
             self._check_sql_named_literal(node.target.id, node.value, node.lineno)
         self.generic_visit(node)
@@ -515,6 +628,7 @@ class _ExecuteCallVisitor(ast.NodeVisitor):
         return bool(values) and all(isinstance(v, ast.Constant) and isinstance(v.value, str) for v in values)
 
     def visit_Call(self, node: ast.Call) -> None:
+        self.findings.extend(_sqlglot_builder_findings(node, self.path, self.trust, self._lookup, self._sqlglot_vars))
         query_arg = _execute_query_arg(node)
         if query_arg is not None:
             found = _check_query_arg(query_arg, self._lookup, self.path, node.lineno, self.trust, self.review)
