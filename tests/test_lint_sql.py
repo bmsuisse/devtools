@@ -377,3 +377,58 @@ async def f(cur):
     await cur.execute(q_sql)
 """
     assert "sql-inline-too-complex" in _rules(_findings(source, tmp_path / "a.py"))
+
+
+def test_fetch_all_with_fstring_is_flagged_like_execute(tmp_path: Path) -> None:
+    source = '''
+from pgdevkit.db import fetch_all
+
+async def f(table):
+    return await fetch_all(f"SELECT id FROM dim.{table} WHERE active")
+'''
+    assert _rules(_findings(source, tmp_path / "a.py")) == {"sql-fstring-injection"}
+
+
+def test_fetch_helpers_flag_concat_format_and_percent(tmp_path: Path) -> None:
+    source = '''
+async def f(db, value):
+    await fetch_one("select * from t where id = " + str(value))
+    await fetch_scalar("select count(*) from t where id = %s" % value)
+    await db.fetch_all("select * from t where id = {}".format(value))
+'''
+    assert _rules(_findings(source, tmp_path / "a.py")) == {
+        "sql-concat-injection",
+        "sql-percent-format-injection",
+        "sql-format-injection",
+    }
+
+
+def test_fetch_all_accepts_literal_load_sql_sqlglot_and_template(tmp_path: Path) -> None:
+    source = '''
+from sqlglot import select
+from pgdevkit.db import fetch_all
+
+async def f(sql_loader, model, user_id):
+    await fetch_all(sql_loader.load_sql("users", "list_active"), {"limit": 5}, model=model)
+    await fetch_all(select("id").from_("t").sql(dialect="postgres"))
+    await fetch_all(t"select id from t where user_id = {user_id}")
+    await fetch_all("select id from t where user_id = %(id)s", {"id": user_id}, model=model)
+'''
+    assert _findings(source, tmp_path / "a.py") == []
+
+
+def test_fetch_all_applies_inline_complexity_and_positional_rules(tmp_path: Path) -> None:
+    source = '''
+async def f(model):
+    await fetch_all("select a.id from a join b on b.a_id = a.id", model=model)
+    await fetch_all("select id from t where x = %s", (1,))
+'''
+    assert _rules(_findings(source, tmp_path / "a.py")) == {"sql-inline-too-complex", "sql-positional-param"}
+
+
+def test_unrelated_fetch_all_name_with_non_sql_text_is_not_flagged(tmp_path: Path) -> None:
+    source = '''
+async def f(client, name):
+    return await client.fetch_all(f"users/{name}")
+'''
+    assert _findings(source, tmp_path / "a.py") == []

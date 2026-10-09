@@ -1,5 +1,5 @@
 """AST rule engine for `bdt lint`'s postgres/psycopg checks (bmsuisse/skills#52):
-every `.execute()`/`.executemany()` call is classified by how its SQL argument was
+every `.execute()`/`.executemany()` call (and pgdevkit's `fetch_all`/`fetch_one`/`fetch_scalar`) is classified by how its SQL argument was
 built, then checked against the `postgres-best-practices` skill's rules
 (../../skills/postgres-best-practices in a checkout of bmsuisse/skills).
 
@@ -450,8 +450,18 @@ def _is_sql_named(name: str) -> bool:
     return lowered == "sql" or lowered.endswith("_sql")
 
 
+# pgdevkit's `fetch_all`/`fetch_one`/`fetch_scalar` run their first argument as SQL, exactly like
+# `.execute()`, so they get the same rules (they're plain functions, so matched by bare name too).
+_FETCH_HELPERS = frozenset({"fetch_all", "fetch_one", "fetch_scalar"})
+
+
 def _execute_query_arg(call: ast.Call) -> ast.expr | None:
-    if not (isinstance(call.func, ast.Attribute) and call.func.attr in ("execute", "executemany")):
+    func = call.func
+    is_execute = isinstance(func, ast.Attribute) and func.attr in ("execute", "executemany")
+    is_fetch_helper = (isinstance(func, ast.Name) and func.id in _FETCH_HELPERS) or (
+        isinstance(func, ast.Attribute) and func.attr in _FETCH_HELPERS
+    )
+    if not (is_execute or is_fetch_helper):
         return None
     if call.args:
         return call.args[0]
