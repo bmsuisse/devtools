@@ -65,11 +65,7 @@ FAILED_CHECK_RUN_SAME_RUN = {
     "workflowName": "Python Test",
     "detailsUrl": "https://github.com/owner/repo/actions/runs/34882319228/job/104104399999",
 }
-FAILED_STATUS_CONTEXT = {
-    "__typename": "StatusContext",
-    "state": "FAILURE",
-    "context": "external-ci",
-}
+FAILED_STATUS_CONTEXT = {"__typename": "StatusContext", "state": "FAILURE", "context": "external-ci"}
 
 
 @pytest.mark.parametrize(
@@ -80,26 +76,9 @@ FAILED_STATUS_CONTEXT = {
         ({"__typename": "CheckRun", "status": "IN_PROGRESS"}, "pending"),
         ({"__typename": "CheckRun", "status": "QUEUED"}, "pending"),
         ({"__typename": "CheckRun", "status": "WAITING"}, "waiting_approval"),
-        (
-            {"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "FAILURE"},
-            "fail",
-        ),
-        (
-            {
-                "__typename": "CheckRun",
-                "status": "COMPLETED",
-                "conclusion": "TIMED_OUT",
-            },
-            "fail",
-        ),
-        (
-            {
-                "__typename": "CheckRun",
-                "status": "COMPLETED",
-                "conclusion": "CANCELLED",
-            },
-            "cancel",
-        ),
+        ({"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "FAILURE"}, "fail"),
+        ({"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "TIMED_OUT"}, "fail"),
+        ({"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "CANCELLED"}, "cancel"),
         ({"__typename": "StatusContext", "state": "SUCCESS"}, "pass"),
         ({"__typename": "StatusContext", "state": "PENDING"}, "pending"),
         ({"__typename": "StatusContext", "state": "ERROR"}, "fail"),
@@ -110,9 +89,7 @@ def test_check_bucket(check: dict, expected_bucket: str) -> None:
     assert check_bucket(check) == expected_bucket
 
 
-def test_run_wait_exits_1_not_2_when_a_check_already_failed_and_another_needs_approval(
-    monkeypatch,
-) -> None:
+def test_run_wait_exits_1_not_2_when_a_check_already_failed_and_another_needs_approval(monkeypatch) -> None:
     """Regression: an already-failed check elsewhere in the PR must still end --wait even when
     another check is separately waiting on a deployment approval — must report the failure
     (exit 1), not silently prioritize the approval prompt (exit 2) or hang forever.
@@ -124,19 +101,8 @@ def test_run_wait_exits_1_not_2_when_a_check_already_failed_and_another_needs_ap
         "mergeable": "MERGEABLE",
         "isDraft": False,
         "statusCheckRollup": [
-            {
-                "__typename": "CheckRun",
-                "name": "deploy",
-                "status": "WAITING",
-                "workflowName": "Deploy",
-            },
-            {
-                "__typename": "CheckRun",
-                "name": "build",
-                "status": "COMPLETED",
-                "conclusion": "FAILURE",
-                "workflowName": "CI",
-            },
+            {"__typename": "CheckRun", "name": "deploy", "status": "WAITING", "workflowName": "Deploy"},
+            {"__typename": "CheckRun", "name": "build", "status": "COMPLETED", "conclusion": "FAILURE", "workflowName": "CI"},
         ],
     }
     monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: pr)
@@ -147,9 +113,7 @@ def test_run_wait_exits_1_not_2_when_a_check_already_failed_and_another_needs_ap
     assert exc_info.value.code == 1
 
 
-def test_run_wait_does_not_hang_when_a_stuck_pending_check_also_exists(
-    monkeypatch,
-) -> None:
+def test_run_wait_does_not_hang_when_a_stuck_pending_check_also_exists(monkeypatch) -> None:
     """Regression: a genuinely-stuck pending check (e.g. downstream of the blocked deployment
     gate, so it can never leave "pending" on its own) combined with an already-failed check
     and a waiting-approval check must not send --wait into an infinite poll loop.
@@ -161,32 +125,13 @@ def test_run_wait_does_not_hang_when_a_stuck_pending_check_also_exists(
         "mergeable": "MERGEABLE",
         "isDraft": False,
         "statusCheckRollup": [
-            {
-                "__typename": "CheckRun",
-                "name": "deploy",
-                "status": "WAITING",
-                "workflowName": "Deploy",
-            },
-            {
-                "__typename": "CheckRun",
-                "name": "build",
-                "status": "COMPLETED",
-                "conclusion": "FAILURE",
-                "workflowName": "CI",
-            },
-            {
-                "__typename": "CheckRun",
-                "name": "downstream",
-                "status": "QUEUED",
-                "workflowName": "CI",
-            },
+            {"__typename": "CheckRun", "name": "deploy", "status": "WAITING", "workflowName": "Deploy"},
+            {"__typename": "CheckRun", "name": "build", "status": "COMPLETED", "conclusion": "FAILURE", "workflowName": "CI"},
+            {"__typename": "CheckRun", "name": "downstream", "status": "QUEUED", "workflowName": "CI"},
         ],
     }
     monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: pr)
-    monkeypatch.setattr(
-        "bmsdna.devtools.gh_pr.time.sleep",
-        lambda s: pytest.fail("must not poll — would hang --wait forever"),
-    )
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.time.sleep", lambda s: pytest.fail("must not poll — would hang --wait forever"))
 
     with pytest.raises(SystemExit) as exc_info:
         run("gh", wait=True)
@@ -195,10 +140,7 @@ def test_run_wait_does_not_hang_when_a_stuck_pending_check_also_exists(
 
 
 def test_check_label_prefixes_workflow_when_distinct() -> None:
-    assert (
-        check_label(COMPLETED_SUCCESS_CHECK_RUN)
-        == "PR Triaging / label-external / label_issues"
-    )
+    assert check_label(COMPLETED_SUCCESS_CHECK_RUN) == "PR Triaging / label-external / label_issues"
 
 
 def test_check_label_no_duplicate_when_workflow_name_already_in_name() -> None:
@@ -207,20 +149,13 @@ def test_check_label_no_duplicate_when_workflow_name_already_in_name() -> None:
 
 
 @pytest.mark.parametrize("mergeable", ["MERGEABLE", "UNKNOWN", None])
-def test_merge_conflict_message_none_when_not_conflicting(
-    mergeable: str | None,
-) -> None:
+def test_merge_conflict_message_none_when_not_conflicting(mergeable: str | None) -> None:
     pr = {"number": 1, "title": "x", "baseRefName": "main", "mergeable": mergeable}
     assert merge_conflict_message(pr) is None
 
 
 def test_merge_conflict_message_conflicting() -> None:
-    pr = {
-        "number": 42,
-        "title": "feat: widgets",
-        "baseRefName": "main",
-        "mergeable": "CONFLICTING",
-    }
+    pr = {"number": 42, "title": "feat: widgets", "baseRefName": "main", "mergeable": "CONFLICTING"}
     msg = merge_conflict_message(pr)
     assert msg is not None
     assert "PR #42" in msg
@@ -268,9 +203,7 @@ def test_create_passes_repeatable_label_flags(monkeypatch) -> None:
 
     def fake_run(cmd, **kwargs):
         captured_cmd[:] = cmd
-        return MagicMock(
-            returncode=0, stdout="https://github.com/owner/repo/pull/7\n", stderr=""
-        )
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/pull/7\n", stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
 
@@ -341,11 +274,7 @@ def test_set_draft_with_pr_id_views_and_undoes_that_pr_number(monkeypatch) -> No
     def fake_run(cmd, **kwargs):
         captured_cmds.append(cmd)
         if "view" in cmd:
-            return MagicMock(
-                returncode=0,
-                stdout=json.dumps({"number": 99, "isDraft": False}),
-                stderr="",
-            )
+            return MagicMock(returncode=0, stdout=json.dumps({"number": 99, "isDraft": False}), stderr="")
         return MagicMock(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
@@ -363,11 +292,7 @@ def test_set_draft_converts_ready_pr_to_draft(monkeypatch) -> None:
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
         if "view" in cmd:
-            return MagicMock(
-                returncode=0,
-                stdout=json.dumps({"number": 42, "isDraft": False}),
-                stderr="",
-            )
+            return MagicMock(returncode=0, stdout=json.dumps({"number": 42, "isDraft": False}), stderr="")
         return MagicMock(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
@@ -381,9 +306,7 @@ def test_set_draft_no_op_when_already_draft(monkeypatch) -> None:
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
-        return MagicMock(
-            returncode=0, stdout=json.dumps({"number": 42, "isDraft": True}), stderr=""
-        )
+        return MagicMock(returncode=0, stdout=json.dumps({"number": 42, "isDraft": True}), stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
 
@@ -396,9 +319,7 @@ def test_create_without_agent_makes_no_follow_up_calls(monkeypatch) -> None:
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
-        return MagicMock(
-            returncode=0, stdout="https://github.com/owner/repo/pull/7\n", stderr=""
-        )
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/pull/7\n", stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
 
@@ -414,34 +335,23 @@ def test_create_appends_agent_session_note_when_detected(monkeypatch) -> None:
 
     def fake_run(cmd, **kwargs):
         if "view" in cmd:
-            return MagicMock(
-                returncode=0,
-                stdout='{"number": 7, "title": "Fix bug", "body": "PR body"}',
-                stderr="",
-            )
+            return MagicMock(returncode=0, stdout='{"number": 7, "title": "Fix bug", "body": "PR body"}', stderr="")
         if "edit" in cmd:
             edited_body.append(cmd[cmd.index("--body") + 1])
             return MagicMock(returncode=0, stdout="", stderr="")
-        return MagicMock(
-            returncode=0, stdout="https://github.com/owner/repo/pull/7\n", stderr=""
-        )
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/pull/7\n", stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
 
     create("gh", "main", [])
 
-    assert edited_body == [
-        "PR body\n\nClaude Session: https://claude.ai/code/session_abc123"
-    ]
+    assert edited_body == ["PR body\n\nClaude Session: https://claude.ai/code/session_abc123"]
 
 
 def _fake_push_assets(monkeypatch) -> None:
     monkeypatch.setattr(
         "bmsdna.devtools.gh_pr.push_assets",
-        lambda owner, repo, branch, paths, **kwargs: [
-            f"https://github.com/{owner}/{repo}/blob/pr-assets/{branch}/{i:02d}-{p.split('/')[-1]}?raw=true"
-            for i, p in enumerate(paths)
-        ],
+        lambda owner, repo, branch, paths, **kwargs: [f"https://github.com/{owner}/{repo}/blob/pr-assets/{branch}/{i:02d}-{p.split('/')[-1]}?raw=true" for i, p in enumerate(paths)],
     )
 
 
@@ -452,9 +362,7 @@ def test_add_files_pushes_and_appends_attachments_section(monkeypatch) -> None:
     def fake_run(cmd, **kwargs):
         captured_cmds.append(cmd)
         if "view" in cmd:
-            return MagicMock(
-                returncode=0, stdout='{"number": 7, "body": "existing body"}', stderr=""
-            )
+            return MagicMock(returncode=0, stdout='{"number": 7, "body": "existing body"}', stderr="")
         return MagicMock(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
@@ -475,21 +383,12 @@ def test_add_attachments_edits_pr_body_once_for_both_kinds(monkeypatch) -> None:
     def fake_run(cmd, **kwargs):
         captured_cmds.append(cmd)
         if "view" in cmd:
-            return MagicMock(
-                returncode=0, stdout='{"number": 7, "body": "existing body"}', stderr=""
-            )
+            return MagicMock(returncode=0, stdout='{"number": 7, "body": "existing body"}', stderr="")
         return MagicMock(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
 
-    add_attachments(
-        "gh",
-        "owner",
-        "repo",
-        "feature-x",
-        screenshot_paths=["/tmp/shot.png"],
-        file_paths=["/tmp/report.pdf"],
-    )
+    add_attachments("gh", "owner", "repo", "feature-x", screenshot_paths=["/tmp/shot.png"], file_paths=["/tmp/report.pdf"])
 
     view_cmds = [cmd for cmd in captured_cmds if "view" in cmd]
     edit_cmds = [cmd for cmd in captured_cmds if "edit" in cmd]
@@ -507,22 +406,13 @@ def test_update_appends_both_screenshots_and_files(monkeypatch) -> None:
 
     def fake_run(cmd, **kwargs):
         if "view" in cmd:
-            return MagicMock(
-                returncode=0, stdout='{"number": 7, "body": "existing body"}', stderr=""
-            )
+            return MagicMock(returncode=0, stdout='{"number": 7, "body": "existing body"}', stderr="")
         captured_cmd[:] = cmd
         return MagicMock(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
 
-    update(
-        "gh",
-        "owner",
-        "repo",
-        "feature-x",
-        screenshot_paths=["/tmp/shot.png"],
-        file_paths=["/tmp/report.pdf"],
-    )
+    update("gh", "owner", "repo", "feature-x", screenshot_paths=["/tmp/shot.png"], file_paths=["/tmp/report.pdf"])
 
     body = captured_cmd[captured_cmd.index("--body") + 1]
     assert "## Screenshots" in body
@@ -555,9 +445,7 @@ def test_update_skips_session_note_if_already_in_current_title(monkeypatch) -> N
     assert body == "new body"
 
 
-def test_update_with_pr_id_views_that_pr_and_ignores_the_passed_in_branch(
-    monkeypatch,
-) -> None:
+def test_update_with_pr_id_views_that_pr_and_ignores_the_passed_in_branch(monkeypatch) -> None:
     """With `--pr-id`, `update()` must resolve the given PR directly (not the current
     branch's), and namespace any uploaded screenshots/files under that PR's actual head
     branch -- not the `branch` argument the caller passed in, which may be stale or just
@@ -569,25 +457,12 @@ def test_update_with_pr_id_views_that_pr_and_ignores_the_passed_in_branch(
     def fake_run(cmd, **kwargs):
         captured_cmds.append(cmd)
         if "view" in cmd:
-            return MagicMock(
-                returncode=0,
-                stdout=json.dumps(
-                    {"number": 99, "body": "existing body", "headRefName": "feature-y"}
-                ),
-                stderr="",
-            )
+            return MagicMock(returncode=0, stdout=json.dumps({"number": 99, "body": "existing body", "headRefName": "feature-y"}), stderr="")
         return MagicMock(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
 
-    update(
-        "gh",
-        "owner",
-        "repo",
-        "wrong-branch",
-        screenshot_paths=["/tmp/shot.png"],
-        pr_id=99,
-    )
+    update("gh", "owner", "repo", "wrong-branch", screenshot_paths=["/tmp/shot.png"], pr_id=99)
 
     view_cmd = next(cmd for cmd in captured_cmds if "view" in cmd)
     edit_cmd = next(cmd for cmd in captured_cmds if "edit" in cmd)
@@ -608,15 +483,7 @@ def test_comment_with_screenshots_and_files_builds_both_sections(monkeypatch) ->
 
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
 
-    comment_with_screenshots(
-        "gh",
-        "owner",
-        "repo",
-        "feature-x",
-        "Fixed",
-        ["/tmp/shot.png"],
-        ["/tmp/report.pdf"],
-    )
+    comment_with_screenshots("gh", "owner", "repo", "feature-x", "Fixed", ["/tmp/shot.png"], ["/tmp/report.pdf"])
 
     body = captured_cmd[captured_cmd.index("--body") + 1]
     assert "Fixed" in body
@@ -624,9 +491,7 @@ def test_comment_with_screenshots_and_files_builds_both_sections(monkeypatch) ->
     assert "## Attachments" in body
 
 
-def test_comment_with_screenshots_with_pr_id_targets_that_pr_number(
-    monkeypatch,
-) -> None:
+def test_comment_with_screenshots_with_pr_id_targets_that_pr_number(monkeypatch) -> None:
     captured_cmd: list[str] = []
 
     def fake_run(cmd, **kwargs):
@@ -650,9 +515,7 @@ def test_failed_run_ids_skips_status_context_with_no_details_url() -> None:
 
 
 def test_failed_run_ids_empty_when_nothing_failed() -> None:
-    assert (
-        failed_run_ids([COMPLETED_SUCCESS_CHECK_RUN, COMPLETED_SKIPPED_CHECK_RUN]) == []
-    )
+    assert failed_run_ids([COMPLETED_SUCCESS_CHECK_RUN, COMPLETED_SKIPPED_CHECK_RUN]) == []
 
 
 def test_retry_hint_names_the_command(monkeypatch) -> None:
@@ -671,13 +534,7 @@ def test_retry_reruns_each_distinct_failed_run(monkeypatch) -> None:
     def fake_run(cmd, **kwargs):
         captured_cmds.append(cmd)
         if "view" in cmd:
-            return MagicMock(
-                returncode=0,
-                stdout=json.dumps(
-                    {"statusCheckRollup": [FAILED_CHECK_RUN, FAILED_CHECK_RUN_SAME_RUN]}
-                ),
-                stderr="",
-            )
+            return MagicMock(returncode=0, stdout=json.dumps({"statusCheckRollup": [FAILED_CHECK_RUN, FAILED_CHECK_RUN_SAME_RUN]}), stderr="")
         return MagicMock(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
@@ -689,19 +546,13 @@ def test_retry_reruns_each_distinct_failed_run(monkeypatch) -> None:
     assert rerun_cmds[0] == ["gh", "run", "rerun", "34882319228", "--failed"]
 
 
-def test_retry_with_pr_id_views_that_pr_instead_of_the_current_branch(
-    monkeypatch,
-) -> None:
+def test_retry_with_pr_id_views_that_pr_instead_of_the_current_branch(monkeypatch) -> None:
     captured_cmds: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):
         captured_cmds.append(cmd)
         if "view" in cmd:
-            return MagicMock(
-                returncode=0,
-                stdout=json.dumps({"statusCheckRollup": [FAILED_CHECK_RUN]}),
-                stderr="",
-            )
+            return MagicMock(returncode=0, stdout=json.dumps({"statusCheckRollup": [FAILED_CHECK_RUN]}), stderr="")
         return MagicMock(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
@@ -714,11 +565,7 @@ def test_retry_with_pr_id_views_that_pr_instead_of_the_current_branch(
 
 def test_retry_exits_when_no_failed_run_found(monkeypatch) -> None:
     def fake_run(cmd, **kwargs):
-        return MagicMock(
-            returncode=0,
-            stdout=json.dumps({"statusCheckRollup": [COMPLETED_SUCCESS_CHECK_RUN]}),
-            stderr="",
-        )
+        return MagicMock(returncode=0, stdout=json.dumps({"statusCheckRollup": [COMPLETED_SUCCESS_CHECK_RUN]}), stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
 
@@ -729,11 +576,7 @@ def test_retry_exits_when_no_failed_run_found(monkeypatch) -> None:
 def test_retry_exits_on_rerun_failure(monkeypatch) -> None:
     def fake_run(cmd, **kwargs):
         if "view" in cmd:
-            return MagicMock(
-                returncode=0,
-                stdout=json.dumps({"statusCheckRollup": [FAILED_CHECK_RUN]}),
-                stderr="",
-            )
+            return MagicMock(returncode=0, stdout=json.dumps({"statusCheckRollup": [FAILED_CHECK_RUN]}), stderr="")
         return MagicMock(returncode=1, stdout="", stderr="run is already in progress")
 
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
@@ -742,9 +585,7 @@ def test_retry_exits_on_rerun_failure(monkeypatch) -> None:
         retry("gh")
 
 
-def test_retry_still_attempts_remaining_runs_after_one_fails(
-    monkeypatch, capsys
-) -> None:
+def test_retry_still_attempts_remaining_runs_after_one_fails(monkeypatch, capsys) -> None:
     """A failure reranning one run shouldn't stop bdt from attempting the others."""
     rerun_ids: list[str] = []
 
@@ -752,28 +593,19 @@ def test_retry_still_attempts_remaining_runs_after_one_fails(
         if "view" in cmd:
             return MagicMock(
                 returncode=0,
-                stdout=json.dumps(
-                    {"statusCheckRollup": [FAILED_CHECK_RUN, FAILED_CHECK_RUN_SAME_RUN]}
-                ),
+                stdout=json.dumps({"statusCheckRollup": [FAILED_CHECK_RUN, FAILED_CHECK_RUN_SAME_RUN]}),
                 stderr="",
             )
         rerun_ids.append(cmd[3])
         if cmd[3] == "34882319228":
-            return MagicMock(
-                returncode=1, stdout="", stderr="run is already in progress"
-            )
+            return MagicMock(returncode=1, stdout="", stderr="run is already in progress")
         return MagicMock(returncode=0, stdout="", stderr="")
 
     # Make the two failed checks belong to *different* runs so both get a rerun attempt.
-    other_run_check = {
-        **FAILED_CHECK_RUN_SAME_RUN,
-        "detailsUrl": "https://github.com/owner/repo/actions/runs/999/job/1",
-    }
+    other_run_check = {**FAILED_CHECK_RUN_SAME_RUN, "detailsUrl": "https://github.com/owner/repo/actions/runs/999/job/1"}
     monkeypatch.setattr(
         "bmsdna.devtools.gh_pr.get_pr",
-        lambda gh, pr_id=None: {
-            "statusCheckRollup": [FAILED_CHECK_RUN, other_run_check]
-        },
+        lambda gh, pr_id=None: {"statusCheckRollup": [FAILED_CHECK_RUN, other_run_check]},
     )
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
 
@@ -785,9 +617,7 @@ def test_retry_still_attempts_remaining_runs_after_one_fails(
     assert "34882319228" in str(exc_info.value)
 
 
-def test_comment_with_screenshots_appends_agent_session_note_when_detected(
-    monkeypatch,
-) -> None:
+def test_comment_with_screenshots_appends_agent_session_note_when_detected(monkeypatch) -> None:
     monkeypatch.setenv("CLAUDECODE", "1")
     monkeypatch.setenv("CLAUDE_CODE_BRIDGE_SESSION_ID", "session_abc123")
     captured_cmd: list[str] = []
@@ -817,9 +647,7 @@ DEPLOY_RUN = {
 }
 
 
-def test_get_workflow_runs_for_branch_filters_by_branch_and_push_event(
-    monkeypatch,
-) -> None:
+def test_get_workflow_runs_for_branch_filters_by_branch_and_push_event(monkeypatch) -> None:
     captured_cmd: list[str] = []
 
     def fake_run(cmd, **kwargs):
@@ -859,18 +687,12 @@ def test_latest_per_workflow_keeps_highest_id_per_workflow() -> None:
 
 
 def test_deploy_run_hint_none_when_no_runs_on_target(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "bmsdna.devtools.gh_pr.get_workflow_runs_for_branch",
-        lambda gh, branch, limit=5: [],
-    )
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_workflow_runs_for_branch", lambda gh, branch, limit=5: [])
     assert deploy_run_hint("gh", "main") is None
 
 
 def test_deploy_run_hint_mentions_branch_and_run_when_found(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "bmsdna.devtools.gh_pr.get_workflow_runs_for_branch",
-        lambda gh, branch, limit=5: [DEPLOY_RUN],
-    )
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_workflow_runs_for_branch", lambda gh, branch, limit=5: [DEPLOY_RUN])
 
     hint = deploy_run_hint("gh", "main")
 
@@ -884,9 +706,7 @@ def test_deploy_run_hint_fails_open_on_error(monkeypatch) -> None:
     def raise_exit(gh, branch, limit=5):
         raise SystemExit("boom")
 
-    monkeypatch.setattr(
-        "bmsdna.devtools.gh_pr.get_workflow_runs_for_branch", raise_exit
-    )
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_workflow_runs_for_branch", raise_exit)
 
     assert deploy_run_hint("gh", "main") is None
 
@@ -902,12 +722,8 @@ def _fake_run_and_view(runs_json: list[dict], log_failed_output: str = ""):
     return fake_run
 
 
-def test_run_watch_deploy_prints_completed_run_and_returns_without_wait(
-    monkeypatch, capsys
-) -> None:
-    monkeypatch.setattr(
-        "bmsdna.devtools.gh_pr.subprocess.run", _fake_run_and_view([DEPLOY_RUN])
-    )
+def test_run_watch_deploy_prints_completed_run_and_returns_without_wait(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", _fake_run_and_view([DEPLOY_RUN]))
 
     run_watch_deploy("gh", "main", wait=False)
 
@@ -916,9 +732,7 @@ def test_run_watch_deploy_prints_completed_run_and_returns_without_wait(
     assert "SUCCESS" in out
 
 
-def test_run_watch_deploy_no_runs_prints_message_and_returns(
-    monkeypatch, capsys
-) -> None:
+def test_run_watch_deploy_no_runs_prints_message_and_returns(monkeypatch, capsys) -> None:
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", _fake_run_and_view([]))
 
     run_watch_deploy("gh", "main", wait=False)
@@ -928,9 +742,7 @@ def test_run_watch_deploy_no_runs_prints_message_and_returns(
 
 def test_run_watch_deploy_exits_1_on_failed_run(monkeypatch) -> None:
     failed_run = {**DEPLOY_RUN, "databaseId": 556, "conclusion": "failure"}
-    monkeypatch.setattr(
-        "bmsdna.devtools.gh_pr.subprocess.run", _fake_run_and_view([failed_run])
-    )
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", _fake_run_and_view([failed_run]))
 
     with pytest.raises(SystemExit) as exc_info:
         run_watch_deploy("gh", "main", wait=False)
@@ -938,21 +750,12 @@ def test_run_watch_deploy_exits_1_on_failed_run(monkeypatch) -> None:
     assert exc_info.value.code == 1
 
 
-def test_run_watch_deploy_wait_stops_and_reports_pending_approval(
-    monkeypatch, capsys
-) -> None:
+def test_run_watch_deploy_wait_stops_and_reports_pending_approval(monkeypatch, capsys) -> None:
     """--wait must not poll forever when the only deploy workflow run is paused on a
     deployment protection rule (status "waiting") -- it never completes on its own.
     """
-    waiting_run = {
-        **DEPLOY_RUN,
-        "databaseId": 557,
-        "status": "waiting",
-        "conclusion": None,
-    }
-    monkeypatch.setattr(
-        "bmsdna.devtools.gh_pr.subprocess.run", _fake_run_and_view([waiting_run])
-    )
+    waiting_run = {**DEPLOY_RUN, "databaseId": 557, "status": "waiting", "conclusion": None}
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", _fake_run_and_view([waiting_run]))
 
     with pytest.raises(SystemExit) as exc_info:
         run_watch_deploy("gh", "main", wait=True)
@@ -961,27 +764,11 @@ def test_run_watch_deploy_wait_stops_and_reports_pending_approval(
     assert "needs a reviewer" in capsys.readouterr().out
 
 
-def test_run_watch_deploy_wait_exits_1_not_2_when_another_run_already_failed(
-    monkeypatch,
-) -> None:
+def test_run_watch_deploy_wait_exits_1_not_2_when_another_run_already_failed(monkeypatch) -> None:
     """A run stuck on approval must not mask an already-failed run in the same batch."""
-    failed_run = {
-        **DEPLOY_RUN,
-        "databaseId": 556,
-        "workflowName": "CI",
-        "conclusion": "failure",
-    }
-    waiting_run = {
-        **DEPLOY_RUN,
-        "databaseId": 557,
-        "workflowName": "Deploy",
-        "status": "waiting",
-        "conclusion": None,
-    }
-    monkeypatch.setattr(
-        "bmsdna.devtools.gh_pr.subprocess.run",
-        _fake_run_and_view([failed_run, waiting_run]),
-    )
+    failed_run = {**DEPLOY_RUN, "databaseId": 556, "workflowName": "CI", "conclusion": "failure"}
+    waiting_run = {**DEPLOY_RUN, "databaseId": 557, "workflowName": "Deploy", "status": "waiting", "conclusion": None}
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", _fake_run_and_view([failed_run, waiting_run]))
 
     with pytest.raises(SystemExit) as exc_info:
         run_watch_deploy("gh", "main", wait=True)
@@ -1015,9 +802,7 @@ def test_run_prints_deploy_hint_after_checks_pass(monkeypatch, capsys) -> None:
     assert "main" in out
 
 
-def test_run_prints_deploy_hint_when_pr_has_no_checks_at_all(
-    monkeypatch, capsys
-) -> None:
+def test_run_prints_deploy_hint_when_pr_has_no_checks_at_all(monkeypatch, capsys) -> None:
     """Regression: a PR with no `statusCheckRollup` entries at all (e.g. this repo's only
     workflow triggers on a push to the target branch, not on `pull_request`) is itself a
     settled state -- exactly when the hint is most useful -- so it must still be checked,
@@ -1047,9 +832,7 @@ def test_run_prints_deploy_hint_when_pr_has_no_checks_at_all(
     assert "bdt pr watch-deploy" in out
 
 
-def test_run_skips_deploy_hint_when_checks_still_pending_without_wait(
-    monkeypatch, capsys
-) -> None:
+def test_run_skips_deploy_hint_when_checks_still_pending_without_wait(monkeypatch, capsys) -> None:
     """Regression: without --wait, a still-pending check must not be mistaken for
     'checks succeeded' -- the hint should only ever follow a genuinely settled result."""
     pr_view = {
@@ -1057,9 +840,7 @@ def test_run_skips_deploy_hint_when_checks_still_pending_without_wait(
         "title": "feat: x",
         "baseRefName": "main",
         "mergeable": "MERGEABLE",
-        "statusCheckRollup": [
-            {"__typename": "CheckRun", "status": "IN_PROGRESS", "name": "build"}
-        ],
+        "statusCheckRollup": [{"__typename": "CheckRun", "status": "IN_PROGRESS", "name": "build"}],
         "isDraft": False,
     }
     hint_calls: list[str] = []
@@ -1087,14 +868,7 @@ def test_run_skips_deploy_hint_when_check_failed(monkeypatch, capsys) -> None:
         "title": "feat: x",
         "baseRefName": "main",
         "mergeable": "MERGEABLE",
-        "statusCheckRollup": [
-            {
-                "__typename": "CheckRun",
-                "status": "COMPLETED",
-                "conclusion": "FAILURE",
-                "name": "build",
-            }
-        ],
+        "statusCheckRollup": [{"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "FAILURE", "name": "build"}],
         "isDraft": False,
     }
     hint_calls: list[str] = []
@@ -1133,14 +907,7 @@ def test_get_pr_with_pr_id_views_that_pr_number_directly(monkeypatch) -> None:
     result = get_pr("gh", pr_id=99)
 
     assert result == {"number": 99}
-    assert captured_cmd == [
-        "gh",
-        "pr",
-        "view",
-        "99",
-        "--json",
-        "number,title,baseRefName,headRefName,mergeable,statusCheckRollup,isDraft",
-    ]
+    assert captured_cmd == ["gh", "pr", "view", "99", "--json", "number,title,baseRefName,headRefName,mergeable,statusCheckRollup,isDraft"]
 
 
 def test_get_pr_without_pr_id_views_the_current_branch(monkeypatch) -> None:
@@ -1188,9 +955,7 @@ def test_has_build_policy_fails_open_on_timeout(monkeypatch) -> None:
     assert has_build_policy("gh", "main") is False
 
 
-def test_push_assets_bounds_fetch_and_push_with_a_longer_upload_timeout(
-    monkeypatch,
-) -> None:
+def test_push_assets_bounds_fetch_and_push_with_a_longer_upload_timeout(monkeypatch) -> None:
     """Regression: `git fetch`/`git push` of actual screenshot blob content on the
     `pr-assets` branch must get more time than a plain metadata call (CLI_UPLOAD_TIMEOUT_SECS,
     not the tighter CLI_TIMEOUT_SECS) -- a large/slow transfer shouldn't be aborted just
@@ -1201,9 +966,7 @@ def test_push_assets_bounds_fetch_and_push_with_a_longer_upload_timeout(
     def fake_run(cmd, **kwargs):
         calls.append((cmd, kwargs))
         if cmd[:2] == ["git", "ls-remote"]:
-            return MagicMock(
-                returncode=0, stdout="abc123\trefs/heads/pr-assets\n", stderr=""
-            )
+            return MagicMock(returncode=0, stdout="abc123\trefs/heads/pr-assets\n", stderr="")
         if cmd[:2] == ["git", "hash-object"]:
             return MagicMock(returncode=0, stdout="blobsha\n", stderr="")
         if cmd[:2] == ["git", "write-tree"]:
@@ -1218,9 +981,7 @@ def test_push_assets_bounds_fetch_and_push_with_a_longer_upload_timeout(
 
     fetch_kwargs = next(kwargs for cmd, kwargs in calls if cmd[:2] == ["git", "fetch"])
     push_kwargs = next(kwargs for cmd, kwargs in calls if cmd[:2] == ["git", "push"])
-    ls_remote_kwargs = next(
-        kwargs for cmd, kwargs in calls if cmd[:2] == ["git", "ls-remote"]
-    )
+    ls_remote_kwargs = next(kwargs for cmd, kwargs in calls if cmd[:2] == ["git", "ls-remote"])
 
     assert fetch_kwargs["timeout"] == CLI_UPLOAD_TIMEOUT_SECS
     assert push_kwargs["timeout"] == CLI_UPLOAD_TIMEOUT_SECS
@@ -1233,9 +994,7 @@ def test_push_assets_bounds_fetch_and_push_with_a_longer_upload_timeout(
 def test_get_pr_body_returns_number_and_body(monkeypatch) -> None:
     def fake_run(cmd, **kwargs):
         assert cmd == ["gh", "pr", "view", "--json", "number,body"]
-        return MagicMock(
-            returncode=0, stdout='{"number": 7, "body": "some body"}', stderr=""
-        )
+        return MagicMock(returncode=0, stdout='{"number": 7, "body": "some body"}', stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)
 
@@ -1245,9 +1004,7 @@ def test_get_pr_body_returns_number_and_body(monkeypatch) -> None:
 def test_get_pr_body_missing_body_is_empty_string(monkeypatch) -> None:
     monkeypatch.setattr(
         "bmsdna.devtools.gh_pr.subprocess.run",
-        lambda cmd, **kwargs: MagicMock(
-            returncode=0, stdout='{"number": 7}', stderr=""
-        ),
+        lambda cmd, **kwargs: MagicMock(returncode=0, stdout='{"number": 7}', stderr=""),
     )
 
     assert get_pr_body("gh") == (7, "")
@@ -1272,9 +1029,7 @@ def test_link_issue_to_pr_appends_fixes_keyword(monkeypatch) -> None:
     assert new_body == edited_body
 
 
-def test_link_issue_to_pr_noop_when_body_already_has_closing_keyword(
-    monkeypatch,
-) -> None:
+def test_link_issue_to_pr_noop_when_body_already_has_closing_keyword(monkeypatch) -> None:
     def fail_if_called(cmd, **kwargs):
         raise AssertionError("should not edit the PR -- body already closes the issue")
 
@@ -1284,9 +1039,7 @@ def test_link_issue_to_pr_noop_when_body_already_has_closing_keyword(
     assert link_issue_to_pr("gh", 7, body, 42) == body
 
 
-def test_link_issue_to_pr_still_appends_when_body_only_has_a_plain_mention(
-    monkeypatch,
-) -> None:
+def test_link_issue_to_pr_still_appends_when_body_only_has_a_plain_mention(monkeypatch) -> None:
     """Regression: a bare `#42` mention elsewhere in the body (e.g. "see #42 for background")
     isn't a real GitHub closing keyword -- must not be mistaken for one already being present.
     """
@@ -1308,9 +1061,7 @@ def test_link_issue_to_pr_still_appends_when_body_only_has_a_plain_mention(
 def test_link_issue_to_pr_raises_on_gh_failure(monkeypatch) -> None:
     monkeypatch.setattr(
         "bmsdna.devtools.gh_pr.subprocess.run",
-        lambda cmd, **kwargs: MagicMock(
-            returncode=1, stdout="", stderr="permission denied"
-        ),
+        lambda cmd, **kwargs: MagicMock(returncode=1, stdout="", stderr="permission denied"),
     )
 
     with pytest.raises(SystemExit, match="permission denied"):

@@ -34,8 +34,6 @@ def test_fetch_uses_production_label_when_slot_is_none(monkeypatch, tmp_path):
             pass
 
     monkeypatch.setattr(app_service_logs, "download_logs", fake_download)
-    error_file = app_service_logs.fetch(
-        "my-app", "my-rg", None, tmp_path, keep_archive=True
-    )
+    error_file = app_service_logs.fetch("my-app", "my-rg", None, tmp_path, keep_archive=True)
     assert error_file == tmp_path / "production_errors.log"
     assert (tmp_path / "production_logs.zip").exists()

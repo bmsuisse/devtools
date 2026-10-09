@@ -5,22 +5,13 @@ import pytest
 from typer.testing import CliRunner
 
 from bmsdna.devtools.cli import app
-from bmsdna.devtools.find_repo import (
-    RemoteRepo,
-    find_github,
-    find_local,
-    find_remote,
-    run,
-    work_dir,
-)
+from bmsdna.devtools.find_repo import RemoteRepo, find_github, find_local, find_remote, run, work_dir
 
 runner = CliRunner()
 
 
 def _git(args, cwd, check=True):
-    return subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, check=check
-    )
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=check)
 
 
 def init_repo(path):
@@ -37,9 +28,7 @@ def init_repo(path):
 # --- work_dir ------------------------------------------------------------
 
 
-def test_work_dir_prefers_azdo_work_dir_over_bms_work_dir(
-    monkeypatch, tmp_path
-) -> None:
+def test_work_dir_prefers_azdo_work_dir_over_bms_work_dir(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("AZDO_WORK_DIR", str(tmp_path / "azdo"))
     monkeypatch.setenv("BMS_WORK_DIR", str(tmp_path / "bms"))
     assert work_dir() == tmp_path / "azdo"
@@ -99,12 +88,8 @@ def _fake_az(projects: list[dict], repos_by_project: dict[str, list[dict]]):
         if "--project" in cmd:
             project = cmd[cmd.index("--project") + 1]
             payload = repos_by_project.get(project, [])
-            return subprocess.CompletedProcess(
-                cmd, 0, stdout=json.dumps(payload), stderr=""
-            )
-        return subprocess.CompletedProcess(
-            cmd, 0, stdout=json.dumps({"value": projects}), stderr=""
-        )
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"value": projects}), stderr="")
 
     return fake_run
 
@@ -116,9 +101,7 @@ def test_find_remote_prefers_exact_match_across_projects(monkeypatch) -> None:
         _fake_az(
             [{"name": "ProjectA"}, {"name": "ProjectB"}],
             {
-                "ProjectA": [
-                    {"name": "widgets-extra", "remoteUrl": "https://a/widgets-extra"}
-                ],
+                "ProjectA": [{"name": "widgets-extra", "remoteUrl": "https://a/widgets-extra"}],
                 "ProjectB": [{"name": "widgets", "remoteUrl": "https://b/widgets"}],
             },
         ),
@@ -135,29 +118,20 @@ def test_find_remote_falls_back_to_substring_match(monkeypatch) -> None:
         "run",
         _fake_az(
             [{"name": "ProjectA"}],
-            {
-                "ProjectA": [
-                    {"name": "widgets-extra", "remoteUrl": "https://a/widgets-extra"}
-                ]
-            },
+            {"ProjectA": [{"name": "widgets-extra", "remoteUrl": "https://a/widgets-extra"}]},
         ),
     )
 
     result = find_remote("az", "org", "widgets")
 
-    assert result == [
-        RemoteRepo("ProjectA", "widgets-extra", "https://a/widgets-extra")
-    ]
+    assert result == [RemoteRepo("ProjectA", "widgets-extra", "https://a/widgets-extra")]
 
 
 def test_find_remote_no_match(monkeypatch) -> None:
     monkeypatch.setattr(
         subprocess,
         "run",
-        _fake_az(
-            [{"name": "ProjectA"}],
-            {"ProjectA": [{"name": "other", "remoteUrl": "https://a/other"}]},
-        ),
+        _fake_az([{"name": "ProjectA"}], {"ProjectA": [{"name": "other", "remoteUrl": "https://a/other"}]}),
     )
 
     assert find_remote("az", "org", "widgets") == []
@@ -175,29 +149,17 @@ def test_find_remote_exits_if_project_list_fails(monkeypatch) -> None:
     assert "not logged in" in str(exc_info.value)
 
 
-def test_find_remote_skips_project_whose_repos_list_fails_but_keeps_searching(
-    monkeypatch, capsys
-) -> None:
+def test_find_remote_skips_project_whose_repos_list_fails_but_keeps_searching(monkeypatch, capsys) -> None:
     def fake_run(cmd, **kwargs):
         if "--project" in cmd:
             project = cmd[cmd.index("--project") + 1]
             if project == "NoAccess":
-                return subprocess.CompletedProcess(
-                    cmd, 1, stdout="", stderr="TF401019: no access"
-                )
+                return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="TF401019: no access")
             return subprocess.CompletedProcess(
-                cmd,
-                0,
-                stdout=json.dumps(
-                    [{"name": "widgets", "remoteUrl": "https://b/widgets"}]
-                ),
-                stderr="",
+                cmd, 0, stdout=json.dumps([{"name": "widgets", "remoteUrl": "https://b/widgets"}]), stderr=""
             )
         return subprocess.CompletedProcess(
-            cmd,
-            0,
-            stdout=json.dumps({"value": [{"name": "NoAccess"}, {"name": "ProjectB"}]}),
-            stderr="",
+            cmd, 0, stdout=json.dumps({"value": [{"name": "NoAccess"}, {"name": "ProjectB"}]}), stderr=""
         )
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -224,10 +186,7 @@ def test_find_github_prefers_exact_match(monkeypatch) -> None:
         "run",
         _fake_gh(
             [
-                {
-                    "name": "widgets-extra",
-                    "url": "https://github.com/org/widgets-extra",
-                },
+                {"name": "widgets-extra", "url": "https://github.com/org/widgets-extra"},
                 {"name": "widgets", "url": "https://github.com/org/widgets"},
             ]
         ),
@@ -235,38 +194,21 @@ def test_find_github_prefers_exact_match(monkeypatch) -> None:
 
     result = find_github("gh", "org", "widgets")
 
-    assert result == [
-        RemoteRepo("org", "widgets", "https://github.com/org/widgets", source="github")
-    ]
+    assert result == [RemoteRepo("org", "widgets", "https://github.com/org/widgets", source="github")]
 
 
 def test_find_github_falls_back_to_substring_match(monkeypatch) -> None:
     monkeypatch.setattr(
-        subprocess,
-        "run",
-        _fake_gh(
-            [{"name": "widgets-extra", "url": "https://github.com/org/widgets-extra"}]
-        ),
+        subprocess, "run", _fake_gh([{"name": "widgets-extra", "url": "https://github.com/org/widgets-extra"}])
     )
 
     result = find_github("gh", "org", "widgets")
 
-    assert result == [
-        RemoteRepo(
-            "org",
-            "widgets-extra",
-            "https://github.com/org/widgets-extra",
-            source="github",
-        )
-    ]
+    assert result == [RemoteRepo("org", "widgets-extra", "https://github.com/org/widgets-extra", source="github")]
 
 
 def test_find_github_no_match(monkeypatch) -> None:
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        _fake_gh([{"name": "other", "url": "https://github.com/org/other"}]),
-    )
+    monkeypatch.setattr(subprocess, "run", _fake_gh([{"name": "other", "url": "https://github.com/org/other"}]))
 
     assert find_github("gh", "org", "widgets") == []
 
@@ -295,9 +237,7 @@ def test_run_exits_if_work_dir_missing(tmp_path, capsys) -> None:
     assert "AZDO_WORK_DIR" in str(exc_info.value)
 
 
-def test_run_prints_local_match_without_touching_remote(
-    tmp_path, monkeypatch, capsys
-) -> None:
+def test_run_prints_local_match_without_touching_remote(tmp_path, monkeypatch, capsys) -> None:
     repo = init_repo(tmp_path / "widgets")
 
     def fail_if_called(*args, **kwargs):
@@ -319,9 +259,7 @@ def test_run_exits_if_no_local_match_and_no_org(tmp_path) -> None:
 
 def test_run_exits_if_no_match_anywhere(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.find_repo.require_az", lambda: "az")
-    monkeypatch.setattr(
-        "bmsdna.devtools.find_repo.find_remote", lambda az, org, name: []
-    )
+    monkeypatch.setattr("bmsdna.devtools.find_repo.find_remote", lambda az, org, name: [])
 
     with pytest.raises(SystemExit) as exc_info:
         run("widgets", root=tmp_path, org="someorg", yes=False)
@@ -339,10 +277,7 @@ def test_run_exits_on_multiple_remote_matches(tmp_path, monkeypatch) -> None:
         ],
     )
     clone_calls = []
-    monkeypatch.setattr(
-        "bmsdna.devtools.find_repo.clone",
-        lambda url, dest, auth=None: clone_calls.append((url, dest)),
-    )
+    monkeypatch.setattr("bmsdna.devtools.find_repo.clone", lambda url, dest, auth=None: clone_calls.append((url, dest)))
 
     with pytest.raises(SystemExit):
         run("widgets", root=tmp_path, org="someorg", yes=True)
@@ -356,10 +291,7 @@ def test_run_clones_into_project_nested_dest(tmp_path, monkeypatch) -> None:
         "bmsdna.devtools.find_repo.find_remote",
         lambda az, org, name: [RemoteRepo("ProjectA", "widgets", "https://a/widgets")],
     )
-    monkeypatch.setattr(
-        "bmsdna.devtools.find_repo.auth_header",
-        lambda pat: {"Authorization": "Bearer token"},
-    )
+    monkeypatch.setattr("bmsdna.devtools.find_repo.auth_header", lambda pat: {"Authorization": "Bearer token"})
     clone_calls = []
 
     def fake_clone(url, dest, auth=None):
@@ -370,13 +302,7 @@ def test_run_clones_into_project_nested_dest(tmp_path, monkeypatch) -> None:
 
     run("widgets", root=tmp_path, org="someorg", yes=True)
 
-    assert clone_calls == [
-        (
-            "https://a/widgets",
-            tmp_path / "ProjectA" / "widgets",
-            {"Authorization": "Bearer token"},
-        )
-    ]
+    assert clone_calls == [("https://a/widgets", tmp_path / "ProjectA" / "widgets", {"Authorization": "Bearer token"})]
 
 
 def test_run_exits_if_no_local_match_and_no_org_or_github_org(tmp_path) -> None:
@@ -387,27 +313,17 @@ def test_run_exits_if_no_local_match_and_no_org_or_github_org(tmp_path) -> None:
     assert "GITHUB_ORG" in str(exc_info.value)
 
 
-def test_run_clones_github_org_match_via_gh_repo_clone_not_ado_auth(
-    tmp_path, monkeypatch
-) -> None:
+def test_run_clones_github_org_match_via_gh_repo_clone_not_ado_auth(tmp_path, monkeypatch) -> None:
     """A GitHub-sourced match must clone via `gh repo clone` (so it authenticates the same
     way `gh repo list` already did), never via `clone()` + `auth_header()` -- the latter is
     ADO's Basic-PAT-or-`az`-Bearer-token helper and must never be sent to github.com."""
     monkeypatch.setattr("bmsdna.devtools.find_repo.require_gh", lambda: "gh")
     monkeypatch.setattr(
         "bmsdna.devtools.find_repo.find_github",
-        lambda gh, org, name: [
-            RemoteRepo(
-                "someghorg",
-                "widgets",
-                "https://github.com/someghorg/widgets",
-                source="github",
-            )
-        ],
+        lambda gh, org, name: [RemoteRepo("someghorg", "widgets", "https://github.com/someghorg/widgets", source="github")],
     )
     monkeypatch.setattr(
-        "bmsdna.devtools.find_repo.auth_header",
-        lambda pat: (_ for _ in ()).throw(AssertionError("must not be called")),
+        "bmsdna.devtools.find_repo.auth_header", lambda pat: (_ for _ in ()).throw(AssertionError("must not be called"))
     )
     clone_calls = []
 
@@ -425,27 +341,15 @@ def test_run_clones_github_org_match_via_gh_repo_clone_not_ado_auth(
 def test_run_searches_both_org_and_github_org(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.find_repo.require_az", lambda: "az")
     monkeypatch.setattr("bmsdna.devtools.find_repo.require_gh", lambda: "gh")
-    monkeypatch.setattr(
-        "bmsdna.devtools.find_repo.find_remote", lambda az, org, name: []
-    )
+    monkeypatch.setattr("bmsdna.devtools.find_repo.find_remote", lambda az, org, name: [])
     monkeypatch.setattr(
         "bmsdna.devtools.find_repo.find_github",
-        lambda gh, org, name: [
-            RemoteRepo(
-                "someghorg",
-                "widgets",
-                "https://github.com/someghorg/widgets",
-                source="github",
-            )
-        ],
+        lambda gh, org, name: [RemoteRepo("someghorg", "widgets", "https://github.com/someghorg/widgets", source="github")],
     )
     clone_calls = []
     monkeypatch.setattr(
         "bmsdna.devtools.find_repo.clone_github",
-        lambda gh, full_name, dest: (
-            clone_calls.append((full_name, dest))
-            or subprocess.CompletedProcess(["gh"], 0)
-        ),
+        lambda gh, full_name, dest: clone_calls.append((full_name, dest)) or subprocess.CompletedProcess(["gh"], 0),
     )
 
     run("widgets", root=tmp_path, org="someorg", github_org="someghorg", yes=True)
@@ -453,37 +357,23 @@ def test_run_searches_both_org_and_github_org(tmp_path, monkeypatch) -> None:
     assert clone_calls == [("someghorg/widgets", tmp_path / "github" / "widgets")]
 
 
-def test_run_prefers_exact_match_from_either_source_over_substring_from_the_other(
-    tmp_path, monkeypatch
-) -> None:
+def test_run_prefers_exact_match_from_either_source_over_substring_from_the_other(tmp_path, monkeypatch) -> None:
     """An ADO substring-only match shouldn't beat an exact GitHub match (or vice versa) --
     exact-first must apply across the combined results, not just within each source."""
     monkeypatch.setattr("bmsdna.devtools.find_repo.require_az", lambda: "az")
     monkeypatch.setattr("bmsdna.devtools.find_repo.require_gh", lambda: "gh")
     monkeypatch.setattr(
         "bmsdna.devtools.find_repo.find_remote",
-        lambda az, org, name: [
-            RemoteRepo("ProjectA", "widgets-extra", "https://a/widgets-extra")
-        ],
+        lambda az, org, name: [RemoteRepo("ProjectA", "widgets-extra", "https://a/widgets-extra")],
     )
     monkeypatch.setattr(
         "bmsdna.devtools.find_repo.find_github",
-        lambda gh, org, name: [
-            RemoteRepo(
-                "someghorg",
-                "widgets",
-                "https://github.com/someghorg/widgets",
-                source="github",
-            )
-        ],
+        lambda gh, org, name: [RemoteRepo("someghorg", "widgets", "https://github.com/someghorg/widgets", source="github")],
     )
     clone_calls = []
     monkeypatch.setattr(
         "bmsdna.devtools.find_repo.clone_github",
-        lambda gh, full_name, dest: (
-            clone_calls.append((full_name, dest))
-            or subprocess.CompletedProcess(["gh"], 0)
-        ),
+        lambda gh, full_name, dest: clone_calls.append((full_name, dest)) or subprocess.CompletedProcess(["gh"], 0),
     )
 
     run("widgets", root=tmp_path, org="someorg", github_org="someghorg", yes=True)
@@ -499,10 +389,7 @@ def test_run_exits_if_dest_already_exists(tmp_path, monkeypatch) -> None:
         lambda az, org, name: [RemoteRepo("ProjectA", "widgets", "https://a/widgets")],
     )
     clone_calls = []
-    monkeypatch.setattr(
-        "bmsdna.devtools.find_repo.clone",
-        lambda url, dest, auth=None: clone_calls.append((url, dest)),
-    )
+    monkeypatch.setattr("bmsdna.devtools.find_repo.clone", lambda url, dest, auth=None: clone_calls.append((url, dest)))
 
     with pytest.raises(SystemExit) as exc_info:
         run("widgets", root=tmp_path, org="someorg", yes=True)
@@ -520,19 +407,14 @@ def test_run_prompts_before_cloning_and_skips_on_no(tmp_path, monkeypatch) -> No
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda prompt: "n")
     clone_calls = []
-    monkeypatch.setattr(
-        "bmsdna.devtools.find_repo.clone",
-        lambda url, dest, auth=None: clone_calls.append((url, dest)),
-    )
+    monkeypatch.setattr("bmsdna.devtools.find_repo.clone", lambda url, dest, auth=None: clone_calls.append((url, dest)))
 
     run("widgets", root=tmp_path, org="someorg", yes=False)
 
     assert clone_calls == []
 
 
-def test_run_skips_prompt_and_does_not_clone_when_stdin_is_not_a_tty(
-    tmp_path, monkeypatch, capsys
-) -> None:
+def test_run_skips_prompt_and_does_not_clone_when_stdin_is_not_a_tty(tmp_path, monkeypatch, capsys) -> None:
     """Non-interactive callers (CI, an AI-agent caller, piped/closed stdin) must never
     block on input() -- they get told to pass --yes instead."""
     monkeypatch.setattr("bmsdna.devtools.find_repo.require_az", lambda: "az")
@@ -547,10 +429,7 @@ def test_run_skips_prompt_and_does_not_clone_when_stdin_is_not_a_tty(
 
     monkeypatch.setattr("builtins.input", fail_if_called)
     clone_calls = []
-    monkeypatch.setattr(
-        "bmsdna.devtools.find_repo.clone",
-        lambda url, dest, auth=None: clone_calls.append((url, dest)),
-    )
+    monkeypatch.setattr("bmsdna.devtools.find_repo.clone", lambda url, dest, auth=None: clone_calls.append((url, dest)))
 
     run("widgets", root=tmp_path, org="someorg", yes=False)
 
@@ -564,10 +443,7 @@ def test_run_clones_remote_only_match_when_yes(tmp_path, monkeypatch) -> None:
         "bmsdna.devtools.find_repo.find_remote",
         lambda az, org, name: [RemoteRepo("ProjectA", "widgets", "https://a/widgets")],
     )
-    monkeypatch.setattr(
-        "bmsdna.devtools.find_repo.auth_header",
-        lambda pat: {"Authorization": "Bearer token"},
-    )
+    monkeypatch.setattr("bmsdna.devtools.find_repo.auth_header", lambda pat: {"Authorization": "Bearer token"})
     clone_calls = []
 
     def fake_clone(url, dest, auth=None):
@@ -578,13 +454,7 @@ def test_run_clones_remote_only_match_when_yes(tmp_path, monkeypatch) -> None:
 
     run("widgets", root=tmp_path, org="someorg", yes=True)
 
-    assert clone_calls == [
-        (
-            "https://a/widgets",
-            tmp_path / "ProjectA" / "widgets",
-            {"Authorization": "Bearer token"},
-        )
-    ]
+    assert clone_calls == [("https://a/widgets", tmp_path / "ProjectA" / "widgets", {"Authorization": "Bearer token"})]
 
 
 def test_run_passes_pat_through_to_auth_header(tmp_path, monkeypatch) -> None:
@@ -594,13 +464,9 @@ def test_run_passes_pat_through_to_auth_header(tmp_path, monkeypatch) -> None:
         lambda az, org, name: [RemoteRepo("ProjectA", "widgets", "https://a/widgets")],
     )
     auth_calls = []
+    monkeypatch.setattr("bmsdna.devtools.find_repo.auth_header", lambda pat: auth_calls.append(pat) or {})
     monkeypatch.setattr(
-        "bmsdna.devtools.find_repo.auth_header",
-        lambda pat: auth_calls.append(pat) or {},
-    )
-    monkeypatch.setattr(
-        "bmsdna.devtools.find_repo.clone",
-        lambda url, dest, auth=None: subprocess.CompletedProcess(["git"], 0),
+        "bmsdna.devtools.find_repo.clone", lambda url, dest, auth=None: subprocess.CompletedProcess(["git"], 0)
     )
 
     run("widgets", root=tmp_path, org="someorg", yes=True, pat="my-pat")
@@ -616,8 +482,7 @@ def test_run_raises_on_failed_clone(tmp_path, monkeypatch) -> None:
     )
     monkeypatch.setattr("bmsdna.devtools.find_repo.auth_header", lambda pat: {})
     monkeypatch.setattr(
-        "bmsdna.devtools.find_repo.clone",
-        lambda url, dest, auth=None: subprocess.CompletedProcess(["git", "clone"], 1),
+        "bmsdna.devtools.find_repo.clone", lambda url, dest, auth=None: subprocess.CompletedProcess(["git", "clone"], 1)
     )
 
     with pytest.raises(SystemExit) as exc_info:
@@ -642,11 +507,7 @@ def test_clone_passes_auth_header_via_env_not_argv(tmp_path, monkeypatch) -> Non
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    clone(
-        "https://example/widgets",
-        tmp_path / "widgets",
-        {"Authorization": "Bearer secret-token"},
-    )
+    clone("https://example/widgets", tmp_path / "widgets", {"Authorization": "Bearer secret-token"})
 
     assert "secret-token" not in " ".join(captured["cmd"])
     assert captured["env"]["GIT_CONFIG_KEY_0"] == "http.extraheader"
@@ -684,10 +545,7 @@ def test_find_repo_cli_delegates_to_run(monkeypatch, tmp_path) -> None:
         lambda name, **kwargs: captured.update(name=name, **kwargs),
     )
 
-    result = runner.invoke(
-        app,
-        ["find-repo", "widgets", "--root", str(tmp_path), "--org", "someorg", "--yes"],
-    )
+    result = runner.invoke(app, ["find-repo", "widgets", "--root", str(tmp_path), "--org", "someorg", "--yes"])
 
     assert result.exit_code == 0, result.output
     assert captured == {
@@ -709,18 +567,7 @@ def test_find_repo_cli_passes_github_org(monkeypatch, tmp_path) -> None:
         lambda name, **kwargs: captured.update(name=name, **kwargs),
     )
 
-    result = runner.invoke(
-        app,
-        [
-            "find-repo",
-            "widgets",
-            "--root",
-            str(tmp_path),
-            "--github-org",
-            "someghorg",
-            "--yes",
-        ],
-    )
+    result = runner.invoke(app, ["find-repo", "widgets", "--root", str(tmp_path), "--github-org", "someghorg", "--yes"])
 
     assert result.exit_code == 0, result.output
     assert captured["github_org"] == "someghorg"

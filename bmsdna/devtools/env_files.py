@@ -6,11 +6,15 @@ Lets an agent (or human) find out which variables exist without `cat .env` /
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 _KEY_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=")
+# Never descended into: dependency/VCS/tooling trees that are huge and never hold project env files.
+SKIP_DIRS = frozenset({"node_modules", ".git", ".venv", ".worktrees", ".claude"})
+
 _EXPORT_RE = re.compile(r"^\s*export\s+[A-Za-z_]")
 
 
@@ -22,25 +26,44 @@ class EnvFile:
     in_home: bool = False
 
 
-def _is_env_file(p: Path) -> bool:
-    name = p.name
-    return p.is_file() and (
-        name == ".env" or name.endswith(".env") or name.startswith(".env.")
-    )
+def _is_env_name(name: str) -> bool:
+    return name == ".env" or name.endswith(".env") or name.startswith(".env.")
+
+
+def _walk_env_files(root: Path) -> list[Path]:
+    """Env files under root, pruning SKIP_DIRS (and not following symlinked dirs) so big trees stay fast."""
+    found: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+        base = Path(dirpath)
+        found.extend(base / n for n in sorted(filenames) if _is_env_name(n) and (base / n).is_file())
+    return found
 
 
 def find_env_files(cwd: Path, home: Path | None = None) -> list[tuple[Path, bool]]:
-    """`.env`, `*.env` and `.env.*` in cwd and in home (not recursive). Returns (path, in_home)."""
+    """`.env`, `*.env` and `.env.*` under cwd (recursive, skipping SKIP_DIRS) and directly in home.
+
+    Returns (path, in_home). When cwd is home itself it is not walked recursively.
+    """
     found: list[tuple[Path, bool]] = []
     seen: set[Path] = set()
-    for base, in_home in ((cwd, False), (home, True)):
-        if base is None:
-            continue
-        for p in sorted(base.iterdir()):
-            real = p.resolve()
-            if _is_env_file(p) and real not in seen:
-                seen.add(real)
-                found.append((p, in_home))
+
+    def add(p: Path, in_home: bool) -> None:
+        real = p.resolve()
+        if real not in seen:
+            seen.add(real)
+            found.append((p, in_home))
+
+    if home is not None and cwd.resolve() == home.resolve():
+        cwd_files = [p for p in sorted(cwd.iterdir()) if _is_env_name(p.name) and p.is_file()]
+    else:
+        cwd_files = _walk_env_files(cwd)
+    for p in cwd_files:
+        add(p, False)
+    if home is not None:
+        for p in sorted(home.iterdir()):
+            if _is_env_name(p.name) and p.is_file():
+                add(p, True)
     return found
 
 
@@ -62,9 +85,7 @@ def parse_env_file(path: Path, in_home: bool = False) -> EnvFile:
     return res
 
 
-def get_keys(
-    cwd: Path, home: Path | None = None, search: str | None = None
-) -> list[EnvFile]:
+def get_keys(cwd: Path, home: Path | None = None, search: str | None = None) -> list[EnvFile]:
     """Env files with their key names; with `search`, only keys containing it (case-insensitive)."""
     out: list[EnvFile] = []
     for path, in_home in find_env_files(cwd, home):
@@ -77,17 +98,26 @@ def get_keys(
     return out
 
 
-def format_keys(files: list[EnvFile], home: Path | None = None) -> str:
+def _display(path: Path, cwd: Path | None, home: Path | None) -> Path:
+    for base, prefix in ((cwd, None), (home, Path("~"))):
+        if base is None:
+            continue
+        try:
+            rel = path.relative_to(base)
+        except ValueError:
+            continue
+        return prefix / rel if prefix else rel
+    return path
+
+
+def format_keys(files: list[EnvFile], home: Path | None = None, cwd: Path | None = None) -> str:
+    """Paths under cwd are shown relative to it, home files as ~/..., so the `source` hint works as printed."""
     lines: list[str] = []
     for ef in files:
-        shown = ef.path
-        if home is not None:
-            try:
-                shown = Path("~") / ef.path.relative_to(home)
-            except ValueError:
-                pass
+        shown = _display(ef.path, None if ef.in_home else cwd, home if ef.in_home else None)
         lines.append(f"{shown}:")
         if ef.in_home or ef.uses_export:
-            lines.append(f"  # bash syntax, load with: source {shown}")
+            src = f"./{shown}" if not shown.is_absolute() and not str(shown).startswith("~") else shown
+            lines.append(f"  # bash syntax, load with: source {src}")
         lines.extend(f"  {k}" for k in ef.keys)
     return "\n".join(lines)

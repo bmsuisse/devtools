@@ -12,9 +12,7 @@ from bmsdna.devtools.lint_typescript import (
 
 
 def _check(source: str) -> list[tuple[int, str]]:
-    findings = check_typescript_file(
-        Path("x.ts"), generator="openapi-fetch", source=source
-    )
+    findings = check_typescript_file(Path("x.ts"), generator="openapi-fetch", source=source)
     return [(f.line, f.rule) for f in findings]
 
 
@@ -29,9 +27,7 @@ def test_fetch_with_template_url_and_post_json_is_flagged() -> None:
 
 
 def test_inline_then_json_fetch_is_flagged() -> None:
-    assert _check(
-        'const q = { queryFn: () => fetch("/api/me").then((r) => r.json()) };\n'
-    ) == [(1, RULE_HTTP)]
+    assert _check('const q = { queryFn: () => fetch("/api/me").then((r) => r.json()) };\n') == [(1, RULE_HTTP)]
 
 
 def test_axios_calls_and_instances_are_flagged() -> None:
@@ -89,9 +85,7 @@ def test_external_url_held_in_a_variable_is_not_flagged() -> None:
     assert _check(src) == []
 
 
-def test_text_only_response_is_not_flagged_but_error_text_alone_does_not_exempt() -> (
-    None
-):
+def test_text_only_response_is_not_flagged_but_error_text_alone_does_not_exempt() -> None:
     text_only = "async function md() {\n  const r = await fetch('/api/r.md');\n  return r.text();\n}\n"
     err_text = "async function a() {\n  const r = await fetch('/api/a');\n  if (!r.ok) throw new Error(await r.text());\n  return r.json();\n}\n"
     assert _check(text_only) == []
@@ -192,66 +186,35 @@ def test_generated_and_test_files_are_excluded(tmp_path: Path) -> None:
     ):
         assert is_excluded_ts_file(tmp_path / rel, repo_root=tmp_path), rel
     assert not is_excluded_ts_file(tmp_path / "src/lib/api.ts", repo_root=tmp_path)
-    assert is_excluded_ts_file(
-        tmp_path / "src/legacy/old.ts",
-        repo_root=tmp_path,
-        exclude_globs=["src/legacy/*"],
-    )
+    assert is_excluded_ts_file(tmp_path / "src/legacy/old.ts", repo_root=tmp_path, exclude_globs=["src/legacy/*"])
 
 
 def test_find_generator_uses_nearest_package_json(tmp_path: Path) -> None:
     (tmp_path / "with_gen/src").mkdir(parents=True)
-    (tmp_path / "with_gen/package.json").write_text(
-        json.dumps({"devDependencies": {"openapi-typescript": "^7"}})
-    )
+    (tmp_path / "with_gen/package.json").write_text(json.dumps({"devDependencies": {"openapi-typescript": "^7"}}))
     (tmp_path / "no_gen/src").mkdir(parents=True)
-    (tmp_path / "no_gen/package.json").write_text(
-        json.dumps({"dependencies": {"react": "^19"}})
-    )
+    (tmp_path / "no_gen/package.json").write_text(json.dumps({"dependencies": {"react": "^19"}}))
     (tmp_path / "script_gen/src").mkdir(parents=True)
-    (tmp_path / "script_gen/package.json").write_text(
-        json.dumps({"scripts": {"gen": "openapi-ts -i x.json"}})
-    )
+    (tmp_path / "script_gen/package.json").write_text(json.dumps({"scripts": {"gen": "openapi-ts -i x.json"}}))
     cache: dict[Path, str | None] = {}
-    assert (
-        find_generator(tmp_path / "with_gen/src/a.ts", repo_root=tmp_path, cache=cache)
-        == "openapi-typescript"
-    )
-    assert (
-        find_generator(tmp_path / "no_gen/src/a.ts", repo_root=tmp_path, cache=cache)
-        is None
-    )
-    assert (
-        find_generator(
-            tmp_path / "script_gen/src/a.ts", repo_root=tmp_path, cache=cache
-        )
-        == "an openapi script"
-    )
-    assert (
-        find_generator(tmp_path / "orphan/a.ts", repo_root=tmp_path, cache=cache)
-        is None
-    )
+    assert find_generator(tmp_path / "with_gen/src/a.ts", repo_root=tmp_path, cache=cache) == "openapi-typescript"
+    assert find_generator(tmp_path / "no_gen/src/a.ts", repo_root=tmp_path, cache=cache) is None
+    assert find_generator(tmp_path / "script_gen/src/a.ts", repo_root=tmp_path, cache=cache) == "an openapi script"
+    assert find_generator(tmp_path / "orphan/a.ts", repo_root=tmp_path, cache=cache) is None
 
 
 def test_run_flags_only_packages_with_a_generator(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
-    for pkg, deps in (
-        ("withgen", {"openapi-fetch": "^0.15"}),
-        ("plain", {"react": "^19"}),
-    ):
+    for pkg, deps in (("withgen", {"openapi-fetch": "^0.15"}), ("plain", {"react": "^19"})):
         (tmp_path / pkg / "src").mkdir(parents=True)
         (tmp_path / pkg / "package.json").write_text(json.dumps({"dependencies": deps}))
-        (tmp_path / pkg / "src/api.ts").write_text(
-            "export const me = () => fetch('/api/me').then((r) => r.json());\n"
-        )
+        (tmp_path / pkg / "src/api.ts").write_text("export const me = () => fetch('/api/me').then((r) => r.json());\n")
     (tmp_path / "withgen/node_modules/dep").mkdir(parents=True)
     (tmp_path / "withgen/node_modules/dep/index.ts").write_text("fetch('/x');\n")
 
     result = lint.run([], root=tmp_path, skip_tooling_check=True)
 
-    assert [
-        (f.path.relative_to(tmp_path).as_posix(), f.rule) for f in result.findings
-    ] == [("withgen/src/api.ts", RULE_HTTP)]
+    assert [(f.path.relative_to(tmp_path).as_posix(), f.rule) for f in result.findings] == [("withgen/src/api.ts", RULE_HTTP)]
 
 
 def test_run_honours_ts_exclude_globs_and_extra_markers(tmp_path: Path) -> None:
@@ -259,22 +222,16 @@ def test_run_honours_ts_exclude_globs_and_extra_markers(tmp_path: Path) -> None:
         "[project]\nname='x'\n[tool.bdt.lint]\nts_exclude_globs=['src/legacy/*']\nts_non_json_markers=['WebSocket']\n"
     )
     (tmp_path / "src/legacy").mkdir(parents=True)
-    (tmp_path / "package.json").write_text(
-        json.dumps({"dependencies": {"orval": "^7"}})
-    )
+    (tmp_path / "package.json").write_text(json.dumps({"dependencies": {"orval": "^7"}}))
     (tmp_path / "src/legacy/old.ts").write_text("fetch('/a');\n")
-    (tmp_path / "src/ws.ts").write_text(
-        "function f() {\n  const w = new WebSocket('/ws');\n  w.send(1);\n  fetch('/a');\n}\n"
-    )
+    (tmp_path / "src/ws.ts").write_text("function f() {\n  const w = new WebSocket('/ws');\n  w.send(1);\n  fetch('/a');\n}\n")
 
     assert lint.run([], root=tmp_path, skip_tooling_check=True).ok
 
 
 def test_run_scans_explicit_ts_file(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
-    (tmp_path / "package.json").write_text(
-        json.dumps({"dependencies": {"openapi-fetch": "^0.15"}})
-    )
+    (tmp_path / "package.json").write_text(json.dumps({"dependencies": {"openapi-fetch": "^0.15"}}))
     target = tmp_path / "a.tsx"
     target.write_text("fetch('/api/a');\n")
 
@@ -303,12 +260,7 @@ def test_nested_axios_generics_are_flagged() -> None:
 
 
 def test_incoming_request_body_cast_is_not_a_model_finding() -> None:
-    assert (
-        _check(
-            "const body = (await request.json()) as CreateBody;\nconst b2 = (await req.json()) as X;\n"
-        )
-        == []
-    )
+    assert _check("const body = (await request.json()) as CreateBody;\nconst b2 = (await req.json()) as X;\n") == []
 
 
 def test_fetch_wrapper_passed_to_generated_client_is_not_flagged() -> None:
@@ -323,14 +275,9 @@ def test_mts_test_and_declaration_files_are_excluded(tmp_path: Path) -> None:
 
 def test_marker_only_package_json_defers_to_parent(tmp_path: Path) -> None:
     (tmp_path / "src/legacy").mkdir(parents=True)
-    (tmp_path / "package.json").write_text(
-        json.dumps({"dependencies": {"openapi-fetch": "^0.15"}})
-    )
+    (tmp_path / "package.json").write_text(json.dumps({"dependencies": {"openapi-fetch": "^0.15"}}))
     (tmp_path / "src/legacy/package.json").write_text(json.dumps({"type": "module"}))
-    assert (
-        find_generator(tmp_path / "src/legacy/a.ts", repo_root=tmp_path, cache={})
-        == "openapi-fetch"
-    )
+    assert find_generator(tmp_path / "src/legacy/a.ts", repo_root=tmp_path, cache={}) == "openapi-fetch"
 
 
 def test_sse_stream_markers_are_not_flagged() -> None:

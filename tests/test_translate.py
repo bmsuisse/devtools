@@ -129,9 +129,7 @@ def test_import_rejects_non_string(tmp_path):
 
 def test_check_detects_stale_and_missing_json(tmp_path):
     make_repo(tmp_path, '[A]\nen = "a"\n')
-    assert (
-        len(run(load_config(tmp_path), check=True).stale) == 4
-    )  # nothing generated yet
+    assert len(run(load_config(tmp_path), check=True).stale) == 4  # nothing generated yet
     run(load_config(tmp_path))
     assert run(load_config(tmp_path), check=True).ok
     (tmp_path / "translations.toml").write_text('[A]\nen = "changed"\n')
@@ -140,57 +138,28 @@ def test_check_detects_stale_and_missing_json(tmp_path):
 
 def test_scan_regex_variants(tmp_path):
     make_repo(tmp_path, "")
-    (tmp_path / "src" / "a.vue").write_text(
-        "this.$t('V1'); i18n.t('V2'); t('dyn.' + x); foo.t('NO')"
-    )
+    (tmp_path / "src" / "a.vue").write_text("this.$t('V1'); i18n.t('V2'); t('dyn.' + x); foo.t('NO')")
     assert run(load_config(tmp_path), check=True).new_keys == ["V1", "V2"]
 
 
 def test_add_key_cli(tmp_path, monkeypatch):
     make_repo(tmp_path, '[A]\nen = "a"\nde = "a"\n')
     monkeypatch.chdir(tmp_path)
-    r = runner.invoke(
-        app, ["translate", "add", "NEW", "en=New", "de=Neu", "fr=Nouveau"]
-    )
+    r = runner.invoke(app, ["translate", "add", "NEW", "en=New", "de=Neu", "fr=Nouveau"])
     assert r.exit_code == 0, r.output
-    assert load_translations(tmp_path / "translations.toml")["NEW"] == {
-        "en": "New",
-        "de": "Neu",
-        "fr": "Nouveau",
-    }
-    for lng, text in (
-        ("en", "New"),
-        ("de", "Neu"),
-        ("fr", "Nouveau"),
-        ("it", "Neu"),
-    ):  # it falls back to de
-        assert (
-            json.loads((tmp_path / "out" / f"{lng}.json").read_text(encoding="utf-8"))[
-                "NEW"
-            ]
-            == text
-        )
-    assert (
-        runner.invoke(app, ["translate", "add", "NEW", "en=x"]).exit_code == 1
-    )  # exists
-    assert (
-        runner.invoke(app, ["translate", "add", "NEW", "en=x", "--force"]).exit_code
-        == 0
-    )
-    assert (
-        runner.invoke(app, ["translate", "add", "K", "xx=x"]).exit_code == 1
-    )  # unknown language
+    assert load_translations(tmp_path / "translations.toml")["NEW"] == {"en": "New", "de": "Neu", "fr": "Nouveau"}
+    for lng, text in (("en", "New"), ("de", "Neu"), ("fr", "Nouveau"), ("it", "Neu")):  # it falls back to de
+        assert json.loads((tmp_path / "out" / f"{lng}.json").read_text(encoding="utf-8"))["NEW"] == text
+    assert runner.invoke(app, ["translate", "add", "NEW", "en=x"]).exit_code == 1  # exists
+    assert runner.invoke(app, ["translate", "add", "NEW", "en=x", "--force"]).exit_code == 0
+    assert runner.invoke(app, ["translate", "add", "K", "xx=x"]).exit_code == 1  # unknown language
     assert runner.invoke(app, ["translate", "add", "K", "oops"]).exit_code == 2
-    assert (
-        runner.invoke(app, ["translate", "add", "K", "de=nur deutsch"]).exit_code == 1
-    )  # en is required
+    assert runner.invoke(app, ["translate", "add", "K", "de=nur deutsch"]).exit_code == 1  # en is required
     assert runner.invoke(app, ["translate", "add", "K", "en="]).exit_code == 1
 
 
 def test_add_required_languages_configurable(tmp_path, monkeypatch):
     make_repo(tmp_path, "", PYPROJECT + 'required_languages = ["en", "de"]\n')
     monkeypatch.chdir(tmp_path)
-    assert (
-        runner.invoke(app, ["translate", "add", "K", "en=x"]).exit_code == 1
-    )  # de now required too
+    assert runner.invoke(app, ["translate", "add", "K", "en=x"]).exit_code == 1  # de now required too
     assert runner.invoke(app, ["translate", "add", "K", "en=x", "de=y"]).exit_code == 0

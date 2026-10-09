@@ -15,9 +15,7 @@ from bmsdna.devtools.pull import (
 
 
 def _git(args, cwd, check=True):
-    return subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, check=check
-    )
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=check)
 
 
 def init_repo(path):
@@ -46,11 +44,7 @@ def clone(remote, path, checkout: str | None = None):
     # `git commit` here would otherwise fail with "Author identity unknown".
     _git(["config", "user.email", "test@example.com"], cwd=path)
     _git(["config", "user.name", "Test"], cwd=path)
-    if (
-        checkout
-        and _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=path).stdout.strip()
-        != checkout
-    ):
+    if checkout and _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=path).stdout.strip() != checkout:
         _git(["checkout", "-q", "-b", checkout, f"origin/{checkout}"], cwd=path)
     return path
 
@@ -63,9 +57,7 @@ def commit_file(repo, content, message="change"):
 # --- _run_capture timeout handling -------------------------------------------
 
 
-def test_run_capture_converts_timeout_into_a_failed_completed_process_instead_of_hanging(
-    tmp_path, monkeypatch
-) -> None:
+def test_run_capture_converts_timeout_into_a_failed_completed_process_instead_of_hanging(tmp_path, monkeypatch) -> None:
     """A stalled network call (or git blocking on an interactive credential
     prompt) must not hang `bdt pull` forever -- it's reported the same way as
     any other git failure (non-zero returncode, message in stderr) instead of
@@ -77,9 +69,7 @@ def test_run_capture_converts_timeout_into_a_failed_completed_process_instead_of
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    result = _run_capture(
-        ["git", "ls-remote", "--symref", "origin", "HEAD"], tmp_path, timeout=1.0
-    )
+    result = _run_capture(["git", "ls-remote", "--symref", "origin", "HEAD"], tmp_path, timeout=1.0)
 
     assert result.returncode == 124
     assert "timed out after 1s" in result.stderr
@@ -155,9 +145,7 @@ def test_default_branch_resolves_remote_head_symref(tmp_path) -> None:
 def test_default_branch_none_for_unreachable_remote(tmp_path) -> None:
     remote = init_repo(tmp_path / "remote")
     checkout = clone(remote, tmp_path / "clone")
-    _git(
-        ["remote", "set-url", "origin", str(tmp_path / "does-not-exist")], cwd=checkout
-    )
+    _git(["remote", "set-url", "origin", str(tmp_path / "does-not-exist")], cwd=checkout)
 
     assert default_branch("origin", checkout) is None
 
@@ -165,16 +153,12 @@ def test_default_branch_none_for_unreachable_remote(tmp_path) -> None:
 # --- build_steps ---------------------------------------------------------------
 
 
-def test_build_steps_dedups_main_pull_when_it_matches_the_tracking_branch(
-    tmp_path,
-) -> None:
+def test_build_steps_dedups_main_pull_when_it_matches_the_tracking_branch(tmp_path) -> None:
     """Running `bdt pull` while already on main/master itself -- whose tracking
     branch IS origin/main -- must not pull origin/main a second time in step 2:
     it's the exact ref step 1 (the bare `git pull`) already covers."""
     remote = init_repo(tmp_path / "remote")
-    checkout = clone(
-        remote, tmp_path / "clone"
-    )  # stays on 'main', tracking origin/main
+    checkout = clone(remote, tmp_path / "clone")  # stays on 'main', tracking origin/main
 
     steps = build_steps("origin", no_default=False, pull_args=[], cwd=checkout)
 
@@ -194,9 +178,7 @@ def test_build_steps_dedups_default_branch_pull_when_it_matches_main(tmp_path) -
     a second time (step 3 after step 2) would be a no-op -- skip it instead."""
     remote = init_repo(tmp_path / "remote")
     checkout = clone(remote, tmp_path / "clone")
-    _git(
-        ["checkout", "-q", "-b", "feature", "--no-track"], cwd=checkout
-    )  # no upstream -- isolates step 2 vs 3
+    _git(["checkout", "-q", "-b", "feature", "--no-track"], cwd=checkout)  # no upstream -- isolates step 2 vs 3
 
     steps = build_steps("origin", no_default=False, pull_args=[], cwd=checkout)
 
@@ -209,18 +191,12 @@ def test_build_steps_dedups_default_branch_pull_when_it_matches_main(tmp_path) -
     assert steps[2].cmd is None
 
 
-def test_build_steps_includes_all_three_distinct_real_pulls_when_none_overlap(
-    tmp_path,
-) -> None:
+def test_build_steps_includes_all_three_distinct_real_pulls_when_none_overlap(tmp_path) -> None:
     remote = init_repo(tmp_path / "remote")
-    _git(
-        ["checkout", "-q", "-b", "develop"], cwd=remote
-    )  # 'main' still exists; remote's default is now 'develop'
+    _git(["checkout", "-q", "-b", "develop"], cwd=remote)  # 'main' still exists; remote's default is now 'develop'
     checkout = clone(remote, tmp_path / "clone", checkout="develop")
     _git(["checkout", "-q", "-b", "feature"], cwd=checkout)
-    _git(
-        ["push", "-q", "-u", "origin", "feature"], cwd=checkout
-    )  # tracks origin/feature -- distinct from main and develop
+    _git(["push", "-q", "-u", "origin", "feature"], cwd=checkout)  # tracks origin/feature -- distinct from main and develop
 
     steps = build_steps("origin", no_default=False, pull_args=[], cwd=checkout)
 
@@ -234,9 +210,7 @@ def test_build_steps_includes_all_three_distinct_real_pulls_when_none_overlap(
         assert "--no-rebase" in step.cmd
 
 
-def test_build_steps_queries_the_remote_exactly_once_for_main_and_default_branch(
-    tmp_path, monkeypatch
-) -> None:
+def test_build_steps_queries_the_remote_exactly_once_for_main_and_default_branch(tmp_path, monkeypatch) -> None:
     """`remote_main_or_master` and `default_branch`'s info (main/master heads, and
     the default branch) both come from a single `git ls-remote`, not two separate
     round trips to the same remote -- regression test for that dedup."""
@@ -263,9 +237,7 @@ def test_build_steps_queries_the_remote_exactly_once_for_main_and_default_branch
 def test_build_steps_skips_default_branch_when_no_default(tmp_path) -> None:
     remote = init_repo(tmp_path / "remote")
     checkout = clone(remote, tmp_path / "clone")
-    _git(
-        ["checkout", "-q", "-b", "feature", "--no-track"], cwd=checkout
-    )  # isolate from the tracking-branch dedup
+    _git(["checkout", "-q", "-b", "feature", "--no-track"], cwd=checkout)  # isolate from the tracking-branch dedup
 
     steps = build_steps("origin", no_default=True, pull_args=[], cwd=checkout)
 
@@ -286,9 +258,7 @@ def test_build_steps_reports_skipped_tracking_branch_when_no_upstream(tmp_path) 
     assert "no upstream configured" in steps[0].label
 
 
-def test_build_steps_does_not_add_default_strategy_when_pull_args_already_pick_one(
-    tmp_path,
-) -> None:
+def test_build_steps_does_not_add_default_strategy_when_pull_args_already_pick_one(tmp_path) -> None:
     remote = init_repo(tmp_path / "remote")
     checkout = clone(remote, tmp_path / "clone")
 
@@ -302,9 +272,7 @@ def test_build_steps_passes_through_extra_pull_args(tmp_path) -> None:
     remote = init_repo(tmp_path / "remote")
     checkout = clone(remote, tmp_path / "clone")
 
-    steps = build_steps(
-        "origin", no_default=True, pull_args=["--ff-only"], cwd=checkout
-    )
+    steps = build_steps("origin", no_default=True, pull_args=["--ff-only"], cwd=checkout)
 
     assert steps[0].cmd == ["git", "pull", "--ff-only"]
 
@@ -316,12 +284,8 @@ def test_rerun_command_minimal() -> None:
     assert rerun_command("origin", no_default=False, pull_args=[]) == "bdt pull"
 
 
-def test_rerun_command_includes_non_default_remote_and_no_default_and_pull_args() -> (
-    None
-):
-    cmd = rerun_command(
-        "upstream", no_default=True, pull_args=["--rebase", "--ff-only"]
-    )
+def test_rerun_command_includes_non_default_remote_and_no_default_and_pull_args() -> None:
+    cmd = rerun_command("upstream", no_default=True, pull_args=["--rebase", "--ff-only"])
     assert cmd == "bdt pull --remote upstream --no-default -- --rebase --ff-only"
 
 
@@ -371,15 +335,11 @@ def test_run_no_default_skips_default_branch_pull(tmp_path, capsys) -> None:
     run(no_default=True, cwd=checkout)
 
     out = capsys.readouterr().out
-    assert (
-        "skip: origin's default branch" not in out
-    )  # no_default drops the step entirely
+    assert "skip: origin's default branch" not in out  # no_default drops the step entirely
     assert "default branch" not in out
 
 
-def test_run_exits_with_conflict_message_and_rerun_command_on_merge_conflict(
-    tmp_path, capsys
-) -> None:
+def test_run_exits_with_conflict_message_and_rerun_command_on_merge_conflict(tmp_path, capsys) -> None:
     remote = init_repo(tmp_path / "remote")
     checkout = clone(remote, tmp_path / "clone")
     commit_file(remote, "remote change\n")
@@ -399,9 +359,7 @@ def test_run_exits_with_conflict_message_and_rerun_command_on_merge_conflict(
 def test_run_reports_non_conflict_pull_failure(tmp_path, capsys) -> None:
     remote = init_repo(tmp_path / "remote")
     checkout = clone(remote, tmp_path / "clone")
-    _git(
-        ["remote", "set-url", "origin", str(tmp_path / "does-not-exist")], cwd=checkout
-    )
+    _git(["remote", "set-url", "origin", str(tmp_path / "does-not-exist")], cwd=checkout)
 
     with pytest.raises(SystemExit) as exc_info:
         run(cwd=checkout)
@@ -409,9 +367,7 @@ def test_run_reports_non_conflict_pull_failure(tmp_path, capsys) -> None:
     assert "failed" in str(exc_info.value)
 
 
-def test_run_refuses_to_start_with_a_pre_existing_unrelated_conflict(
-    tmp_path, capsys
-) -> None:
+def test_run_refuses_to_start_with_a_pre_existing_unrelated_conflict(tmp_path, capsys) -> None:
     """Regression test: without an up-front check, a conflict already sitting in the
     worktree from something unrelated (an earlier manual rebase, a previous unresolved
     `bdt pull`, ...) would make the *first* step's `git pull` fail and get mislabeled as

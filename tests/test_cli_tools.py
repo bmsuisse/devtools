@@ -30,56 +30,40 @@ def test_detect_agent_session_claude_prefers_bridge_link(monkeypatch) -> None:
     monkeypatch.setenv("CLAUDECODE", "1")
     monkeypatch.setenv("CLAUDE_CODE_BRIDGE_SESSION_ID", "session_abc123")
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "local-uuid")
-    assert detect_agent_session() == AgentSession(
-        "Claude", "https://claude.ai/code/session_abc123"
-    )
+    assert detect_agent_session() == AgentSession("Claude", "https://claude.ai/code/session_abc123")
 
 
-def test_detect_agent_session_claude_falls_back_to_local_session_id(
-    monkeypatch,
-) -> None:
+def test_detect_agent_session_claude_falls_back_to_local_session_id(monkeypatch) -> None:
     monkeypatch.setenv("CLAUDECODE", "1")
     monkeypatch.delenv("CLAUDE_CODE_BRIDGE_SESSION_ID", raising=False)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "local-uuid")
     assert detect_agent_session() == AgentSession("Claude", "local-uuid")
 
 
-def test_detect_agent_session_claude_without_any_session_id_is_none(
-    monkeypatch,
-) -> None:
+def test_detect_agent_session_claude_without_any_session_id_is_none(monkeypatch) -> None:
     monkeypatch.setenv("CLAUDECODE", "1")
     monkeypatch.delenv("CLAUDE_CODE_BRIDGE_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     assert detect_agent_session() is None
 
 
-def test_detect_agent_session_ai_agent_resolves_known_tool_session_id(
-    monkeypatch,
-) -> None:
+def test_detect_agent_session_ai_agent_resolves_known_tool_session_id(monkeypatch) -> None:
     monkeypatch.setenv("AI_AGENT", "goose_1-2-3_agent")
     monkeypatch.setenv("GOOSE_SESSION", "goose-session-id")
     assert detect_agent_session() == AgentSession("Goose", "goose-session-id")
 
 
-def test_detect_agent_session_ai_agent_unknown_tool_records_raw_tag(
-    monkeypatch,
-) -> None:
+def test_detect_agent_session_ai_agent_unknown_tool_records_raw_tag(monkeypatch) -> None:
     monkeypatch.setenv("AI_AGENT", "some-new-tool_9-9-9_agent")
-    assert detect_agent_session() == AgentSession(
-        "Some New Tool", "some-new-tool_9-9-9_agent"
-    )
+    assert detect_agent_session() == AgentSession("Some New Tool", "some-new-tool_9-9-9_agent")
 
 
-def test_detect_agent_session_falls_back_to_goose_env_without_ai_agent(
-    monkeypatch,
-) -> None:
+def test_detect_agent_session_falls_back_to_goose_env_without_ai_agent(monkeypatch) -> None:
     monkeypatch.setenv("GOOSE_SESSION", "goose-session-id")
     assert detect_agent_session() == AgentSession("Goose", "goose-session-id")
 
 
-def test_detect_agent_session_falls_back_to_opencode_env_without_ai_agent(
-    monkeypatch,
-) -> None:
+def test_detect_agent_session_falls_back_to_opencode_env_without_ai_agent(monkeypatch) -> None:
     monkeypatch.setenv("OPENCODE", "1")
     monkeypatch.setenv("OPENCODE_SESSION_ID", "opencode-session-id")
     assert detect_agent_session() == AgentSession("OpenCode", "opencode-session-id")
@@ -94,19 +78,13 @@ def test_ensure_agent_session_note_appends_when_missing(monkeypatch) -> None:
     monkeypatch.setenv("CLAUDECODE", "1")
     monkeypatch.setenv("CLAUDE_CODE_BRIDGE_SESSION_ID", "session_abc123")
     result = ensure_agent_session_note("Fixes the bug")
-    assert (
-        result
-        == "Fixes the bug\n\nClaude Session: https://claude.ai/code/session_abc123"
-    )
+    assert result == "Fixes the bug\n\nClaude Session: https://claude.ai/code/session_abc123"
 
 
 def test_ensure_agent_session_note_handles_none_text(monkeypatch) -> None:
     monkeypatch.setenv("CLAUDECODE", "1")
     monkeypatch.setenv("CLAUDE_CODE_BRIDGE_SESSION_ID", "session_abc123")
-    assert (
-        ensure_agent_session_note(None)
-        == "Claude Session: https://claude.ai/code/session_abc123"
-    )
+    assert ensure_agent_session_note(None) == "Claude Session: https://claude.ai/code/session_abc123"
 
 
 def test_ensure_agent_session_note_skips_if_already_in_text(monkeypatch) -> None:
@@ -130,9 +108,7 @@ def test_poll_heartbeat_prints_first_call(capsys) -> None:
     assert capsys.readouterr().out == "\rstatus: pending"
 
 
-def test_poll_heartbeat_suppresses_unchanged_status_before_interval(
-    monkeypatch, capsys
-) -> None:
+def test_poll_heartbeat_suppresses_unchanged_status_before_interval(monkeypatch, capsys) -> None:
     clock = [0.0]
     monkeypatch.setattr("bmsdna.devtools.cli_tools.time.monotonic", lambda: clock[0])
     heartbeat = PollHeartbeat(heartbeat_secs=600)
@@ -145,14 +121,10 @@ def test_poll_heartbeat_suppresses_unchanged_status_before_interval(
     assert capsys.readouterr().out == ""
 
 
-def test_poll_heartbeat_reprints_unchanged_status_after_interval(
-    monkeypatch, capsys
-) -> None:
+def test_poll_heartbeat_reprints_unchanged_status_after_interval(monkeypatch, capsys) -> None:
     clock = [0.0]
     monkeypatch.setattr("bmsdna.devtools.cli_tools.time.monotonic", lambda: clock[0])
-    monkeypatch.setattr(
-        "bmsdna.devtools.cli_tools.time.strftime", lambda fmt: "12:00:00"
-    )
+    monkeypatch.setattr("bmsdna.devtools.cli_tools.time.strftime", lambda fmt: "12:00:00")
     heartbeat = PollHeartbeat(heartbeat_secs=600)
 
     heartbeat.show("\rstatus: pending")
@@ -177,9 +149,7 @@ def test_poll_heartbeat_always_prints_a_changed_status(monkeypatch, capsys) -> N
     assert capsys.readouterr().out == "\rstatus: passed"
 
 
-def test_poll_heartbeat_resets_interval_after_a_real_change(
-    monkeypatch, capsys
-) -> None:
+def test_poll_heartbeat_resets_interval_after_a_real_change(monkeypatch, capsys) -> None:
     clock = [0.0]
     monkeypatch.setattr("bmsdna.devtools.cli_tools.time.monotonic", lambda: clock[0])
     heartbeat = PollHeartbeat(heartbeat_secs=600)
@@ -189,8 +159,6 @@ def test_poll_heartbeat_resets_interval_after_a_real_change(
     heartbeat.show("\rstatus: passed")
     capsys.readouterr()
 
-    clock[0] = (
-        700  # 400s after the last (changed) print -- still under a fresh 600s window
-    )
+    clock[0] = 700  # 400s after the last (changed) print -- still under a fresh 600s window
     heartbeat.show("\rstatus: passed")
     assert capsys.readouterr().out == ""

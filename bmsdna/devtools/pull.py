@@ -40,9 +40,7 @@ from .gitrepo import current_branch as _current_branch
 PULL_TIMEOUT_SECS = CLI_TIMEOUT_SECS * 4
 
 
-def _run_capture(
-    cmd: list[str], cwd: Path | str | None = None, *, timeout: float = CLI_TIMEOUT_SECS
-) -> subprocess.CompletedProcess:
+def _run_capture(cmd: list[str], cwd: Path | str | None = None, *, timeout: float = CLI_TIMEOUT_SECS) -> subprocess.CompletedProcess:
     """`subprocess.run` bounded by `timeout` -- every `git` call in this module goes
     through this, so a stalled network call (or git blocking on an interactive
     prompt, e.g. an expired SSH/HTTPS credential) can't hang the caller forever.
@@ -52,17 +50,12 @@ def _run_capture(
     don't need special-casing for it.
     """
     try:
-        return subprocess.run(
-            cmd, cwd=cwd, capture_output=True, text=True, check=False, timeout=timeout
-        )
+        return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False, timeout=timeout)
     except FileNotFoundError:
         sys.exit(f"'{cmd[0]}' is required for this command but wasn't found on PATH.")
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(
-            cmd,
-            124,
-            "",
-            f"`{' '.join(cmd)}` timed out after {timeout:.0f}s -- stalled network, or needs an interactive login?",
+            cmd, 124, "", f"`{' '.join(cmd)}` timed out after {timeout:.0f}s -- stalled network, or needs an interactive login?"
         )
 
 
@@ -73,9 +66,7 @@ def current_branch(cwd: Path | str | None = None) -> str:
 def upstream_branch(cwd: Path | str | None = None) -> str | None:
     """The current branch's configured remote tracking branch (e.g.
     'origin/my-feature'), or None if it has none set."""
-    result = _run_capture(
-        ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd
-    )
+    result = _run_capture(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd)
     return result.stdout.strip() if result.returncode == 0 else None
 
 
@@ -88,28 +79,20 @@ def _parse_ls_remote_heads(output: str) -> dict[str, str]:
     return branches
 
 
-def _query_remote(
-    remote: str, cwd: Path | str | None, *, timeout: float
-) -> tuple[str | None, dict[str, str]]:
+def _query_remote(remote: str, cwd: Path | str | None, *, timeout: float) -> tuple[str | None, dict[str, str]]:
     """One `git ls-remote --symref <remote> HEAD main master` covering both
     `default_branch`'s and `remote_main_or_master`'s needs in a single
     network round trip -- returns (HEAD's symref target, {branch: sha}).
     ({} and None respectively if the remote couldn't be reached.)
     """
-    result = _run_capture(
-        ["git", "ls-remote", "--symref", remote, "HEAD", "main", "master"],
-        cwd,
-        timeout=timeout,
-    )
+    result = _run_capture(["git", "ls-remote", "--symref", remote, "HEAD", "main", "master"], cwd, timeout=timeout)
     if result.returncode != 0:
         return None, {}
     default = None
     for line in result.stdout.splitlines():
         # "ref: refs/heads/main\tHEAD"
         if line.startswith("ref:") and line.endswith("HEAD"):
-            default = (
-                line[len("ref:") :].split("\t")[0].strip().removeprefix("refs/heads/")
-            )
+            default = line[len("ref:"):].split("\t")[0].strip().removeprefix("refs/heads/")
     return default, _parse_ls_remote_heads(result.stdout)
 
 
@@ -135,9 +118,7 @@ def remote_main_or_master(remote: str, cwd: Path | str | None = None) -> str | N
     return _pick_main_or_master(branches)
 
 
-def default_branch(
-    remote: str, cwd: Path | str | None = None, *, timeout: float = CLI_TIMEOUT_SECS
-) -> str | None:
+def default_branch(remote: str, cwd: Path | str | None = None, *, timeout: float = CLI_TIMEOUT_SECS) -> str | None:
     """The branch `remote`'s HEAD points at -- i.e. its configured default
     branch -- or None if it couldn't be determined (remote unreachable, or
     it has no HEAD symref, e.g. an empty repo).
@@ -178,13 +159,7 @@ class PullStep:
     cmd: list[str] | None
 
 
-def build_steps(
-    remote: str,
-    *,
-    no_default: bool,
-    pull_args: list[str],
-    cwd: Path | str | None = None,
-) -> list[PullStep]:
+def build_steps(remote: str, *, no_default: bool, pull_args: list[str], cwd: Path | str | None = None) -> list[PullStep]:
     steps: list[PullStep] = []
     args = _with_default_strategy(pull_args)
     # Fully-qualified "remote/branch" refs a step above has already pulled,
@@ -201,12 +176,7 @@ def build_steps(
         steps.append(PullStep(label, ["git", "pull", *args]))
         pulled_refs[upstream] = label
     else:
-        steps.append(
-            PullStep(
-                "current branch's remote tracking branch (skipped: no upstream configured)",
-                None,
-            )
-        )
+        steps.append(PullStep("current branch's remote tracking branch (skipped: no upstream configured)", None))
 
     # One combined `git ls-remote` covers both main/master and the default
     # branch -- see `_query_remote` -- rather than two separate round trips
@@ -216,47 +186,22 @@ def build_steps(
     if main is not None:
         main_ref = f"{remote}/{main}"
         if main_ref in pulled_refs:
-            steps.append(
-                PullStep(
-                    f"{main_ref} (skipped: same as {pulled_refs[main_ref]}, already pulled above)",
-                    None,
-                )
-            )
+            steps.append(PullStep(f"{main_ref} (skipped: same as {pulled_refs[main_ref]}, already pulled above)", None))
         else:
             steps.append(PullStep(main_ref, ["git", "pull", remote, main, *args]))
             pulled_refs[main_ref] = main_ref
     else:
-        steps.append(
-            PullStep(
-                f"{remote}'s main/master branch (skipped: neither exists on {remote}, or it's unreachable)",
-                None,
-            )
-        )
+        steps.append(PullStep(f"{remote}'s main/master branch (skipped: neither exists on {remote}, or it's unreachable)", None))
 
     if not no_default:
         if default is not None:
             default_ref = f"{remote}/{default}"
             if default_ref in pulled_refs:
-                steps.append(
-                    PullStep(
-                        f"{remote}'s default branch ({default}) (skipped: same as {pulled_refs[default_ref]}, already pulled above)",
-                        None,
-                    )
-                )
+                steps.append(PullStep(f"{remote}'s default branch ({default}) (skipped: same as {pulled_refs[default_ref]}, already pulled above)", None))
             else:
-                steps.append(
-                    PullStep(
-                        f"{remote}'s default branch ({default})",
-                        ["git", "pull", remote, default, *args],
-                    )
-                )
+                steps.append(PullStep(f"{remote}'s default branch ({default})", ["git", "pull", remote, default, *args]))
         else:
-            steps.append(
-                PullStep(
-                    f"{remote}'s default branch (skipped: could not be determined)",
-                    None,
-                )
-            )
+            steps.append(PullStep(f"{remote}'s default branch (skipped: could not be determined)", None))
 
     return steps
 

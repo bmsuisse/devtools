@@ -15,13 +15,9 @@ import sys
 import time
 from dataclasses import dataclass
 
-AZ_INSTALL_HINT = (
-    "Install the Azure CLI: https://learn.microsoft.com/cli/azure/install-azure-cli"
-)
+AZ_INSTALL_HINT = "Install the Azure CLI: https://learn.microsoft.com/cli/azure/install-azure-cli"
 GH_INSTALL_HINT = "Install the GitHub CLI: https://cli.github.com"
-PSQL_INSTALL_HINT = (
-    "Install the PostgreSQL client tools (psql): https://www.postgresql.org/download/"
-)
+PSQL_INSTALL_HINT = "Install the PostgreSQL client tools (psql): https://www.postgresql.org/download/"
 
 # `pr status --wait` exits with this code (not 0=success, not 1=CI failure) when it stops
 # because a build/check needs a human to approve it — there's nothing more the CLI can do
@@ -67,19 +63,12 @@ class PollHeartbeat:
 
     def show(self, msg: str) -> None:
         now = time.monotonic()
-        if (
-            msg == self._last_line
-            and self._last_print is not None
-            and now - self._last_print < self._heartbeat_secs
-        ):
+        if msg == self._last_line and self._last_print is not None and now - self._last_print < self._heartbeat_secs:
             return
         if msg != self._last_line:
             print(msg, end="", flush=True)
         else:
-            print(
-                f"\n[{time.strftime('%H:%M:%S')}] still waiting: {msg.lstrip(chr(13))}",
-                flush=True,
-            )
+            print(f"\n[{time.strftime('%H:%M:%S')}] still waiting: {msg.lstrip(chr(13))}", flush=True)
         self._last_line = msg
         self._last_print = now
 
@@ -187,9 +176,7 @@ def detect_agent_session() -> AgentSession | None:
     return None
 
 
-def ensure_agent_session_note(
-    text: str | None, *, also_check: str | None = None
-) -> str | None:
+def ensure_agent_session_note(text: str | None, *, also_check: str | None = None) -> str | None:
     """`text` with a trailing `"<Agent> Session: <id>"` line appended, if bdt is running
     under a detected coding agent (see `detect_agent_session`) and neither `text` nor
     `also_check` (e.g. a title, checked but never modified) already mentions that
@@ -201,9 +188,7 @@ def ensure_agent_session_note(
     session = detect_agent_session()
     if session is None:
         return text
-    if session.session_id in (text or "") or (
-        also_check and session.session_id in also_check
-    ):
+    if session.session_id in (text or "") or (also_check and session.session_id in also_check):
         return text
     note = f"{session.name} Session: {session.session_id}"
     body = text or ""
@@ -213,9 +198,7 @@ def ensure_agent_session_note(
 def require_tool(name: str, install_hint: str) -> str:
     path = shutil.which(name)
     if not path:
-        sys.exit(
-            f"'{name}' is required for this command but wasn't found on PATH.\n{install_hint}"
-        )
+        sys.exit(f"'{name}' is required for this command but wasn't found on PATH.\n{install_hint}")
     return path
 
 

@@ -14,9 +14,7 @@ from bmsdna.devtools.commit import (
 
 def init_repo(path):
     subprocess.run(["git", "init", "-q", "-b", "feature"], cwd=path, check=True)
-    subprocess.run(
-        ["git", "config", "user.email", "test@example.com"], cwd=path, check=True
-    )
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=path, check=True)
 
 
@@ -55,10 +53,7 @@ def test_commit_and_push_allows_staged_deletion(tmp_path, monkeypatch):
     )
 
     assert result.committed is True
-    assert (
-        result.error
-        != "File not found: a.txt — did you typo the path? Run `git status` to see changed files"
-    )
+    assert result.error != "File not found: a.txt — did you typo the path? Run `git status` to see changed files"
 
 
 def test_commit_and_push_rejects_unstaged_missing_file(tmp_path, monkeypatch):
@@ -81,15 +76,10 @@ def test_commit_and_push_rejects_unstaged_missing_file(tmp_path, monkeypatch):
     )
 
     assert result.committed is False
-    assert (
-        result.error
-        == "File not found: a.txt — did you typo the path? Run `git status` to see changed files"
-    )
+    assert result.error == "File not found: a.txt — did you typo the path? Run `git status` to see changed files"
 
 
-def test_commit_and_push_stages_modified_file_alongside_staged_deletion(
-    tmp_path, monkeypatch
-):
+def test_commit_and_push_stages_modified_file_alongside_staged_deletion(tmp_path, monkeypatch):
     """Regression test: `git add <modified-file> <already-git-rm'd-file>` fails
     its ENTIRE invocation (git errors "pathspec did not match any files" for
     the already-removed path, staging nothing at all in that call) -- which
@@ -114,11 +104,7 @@ def test_commit_and_push_stages_modified_file_alongside_staged_deletion(
 
     assert result.committed is True
     committed_content = subprocess.run(
-        ["git", "show", "HEAD:a.md"],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=True,
+        ["git", "show", "HEAD:a.md"], cwd=tmp_path, capture_output=True, text=True, check=True
     ).stdout
     assert committed_content == "new content"
 
@@ -133,9 +119,7 @@ def test_commit_and_push_allows_staged_deletion_in_subrepo(tmp_path, monkeypatch
 
     init_repo(tmp_path)
     monkeypatch.chdir(tmp_path)
-    subprocess.run(
-        ["git", "commit", "-q", "-m", "init", "--allow-empty"], cwd=tmp_path, check=True
-    )
+    subprocess.run(["git", "commit", "-q", "-m", "init", "--allow-empty"], cwd=tmp_path, check=True)
     subprocess.run(["git", "rm", "-q", "schema.sql"], cwd=subrepo, check=True)
 
     result = commit_and_push(
@@ -146,10 +130,7 @@ def test_commit_and_push_allows_staged_deletion_in_subrepo(tmp_path, monkeypatch
         subrepos=["database"],
     )
 
-    assert (
-        result.error
-        != "File not found: database/schema.sql — did you typo the path? Run `git status` to see changed files"
-    )
+    assert result.error != "File not found: database/schema.sql — did you typo the path? Run `git status` to see changed files"
 
 
 def test_commit_and_push_warns_on_no_verify(tmp_path, monkeypatch):
@@ -240,9 +221,7 @@ def test_allowed_commit_types_includes_builtins_with_no_pyproject(tmp_path) -> N
 
 
 def test_allowed_commit_types_extends_with_pyproject_config(tmp_path) -> None:
-    (tmp_path / "pyproject.toml").write_text(
-        '[tool.bdt.commit]\ntypes = ["sql", "infra"]\n'
-    )
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.commit]\ntypes = ["sql", "infra"]\n')
     types = allowed_commit_types(tmp_path)
     assert {"feat", "fix", "sql", "infra"} <= types
 
@@ -312,9 +291,7 @@ def test_allowed_commit_scopes_empty_with_no_pyproject(tmp_path) -> None:
 
 
 def test_allowed_commit_scopes_reads_pyproject_config(tmp_path) -> None:
-    (tmp_path / "pyproject.toml").write_text(
-        '[tool.bdt.commit]\nscopes = ["api", "ui"]\n'
-    )
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.commit]\nscopes = ["api", "ui"]\n')
     assert allowed_commit_scopes(tmp_path) == {"api", "ui"}
 
 
@@ -332,9 +309,7 @@ def test_commit_and_push_allows_any_scope_when_unconfigured(tmp_path, monkeypatc
     assert result.committed is True
 
 
-def test_commit_and_push_allows_no_scope_even_when_scopes_configured(
-    tmp_path, monkeypatch
-):
+def test_commit_and_push_allows_no_scope_even_when_scopes_configured(tmp_path, monkeypatch):
     init_repo(tmp_path)
     (tmp_path / "a.txt").write_text("hello")
     (tmp_path / "pyproject.toml").write_text('[tool.bdt.commit]\nscopes = ["api"]\n')
@@ -382,9 +357,7 @@ def test_commit_and_push_rejects_scope_outside_configured_list(tmp_path, monkeyp
     assert "scope" in (result.error or "").lower()
 
 
-def test_commit_and_push_skips_scope_check_with_skip_message_check(
-    tmp_path, monkeypatch
-):
+def test_commit_and_push_skips_scope_check_with_skip_message_check(tmp_path, monkeypatch):
     init_repo(tmp_path)
     (tmp_path / "a.txt").write_text("hello")
     (tmp_path / "pyproject.toml").write_text('[tool.bdt.commit]\nscopes = ["api"]\n')

@@ -59,9 +59,7 @@ def label_for_scope(scope_label_map: dict[str, str], scope: str | None) -> str |
     return lowered.get(scope.lower())
 
 
-def missing_label_groups(
-    groups: dict[str, list[str]], labels: list[str]
-) -> dict[str, list[str]]:
+def missing_label_groups(groups: dict[str, list[str]], labels: list[str]) -> dict[str, list[str]]:
     """The subset of `groups` for which none of `labels` is a member.
 
     Matched case-insensitively — this is a local config check independent of
@@ -69,16 +67,9 @@ def missing_label_groups(
     actually gets sent through unchanged.
     """
     given = {label.lower() for label in labels}
-    return {
-        name: choices
-        for name, choices in groups.items()
-        if given.isdisjoint(choice.lower() for choice in choices)
-    }
+    return {name: choices for name, choices in groups.items() if given.isdisjoint(choice.lower() for choice in choices)}
 
 
 def format_missing_groups_error(missing: dict[str, list[str]]) -> str:
-    parts = [
-        f"'{name}' (choose one of: {', '.join(choices)})"
-        for name, choices in missing.items()
-    ]
+    parts = [f"'{name}' (choose one of: {', '.join(choices)})" for name, choices in missing.items()]
     return "Missing required PR label(s) for group " + "; group ".join(parts)

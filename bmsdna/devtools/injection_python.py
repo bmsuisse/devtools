@@ -17,16 +17,7 @@ _SAFE_YAML_LOADERS = frozenset({"SafeLoader", "CSafeLoader", "BaseLoader"})
 _MARKUP_FUNCS = frozenset({"Markup", "mark_safe", "format_html_join"})
 
 
-_FIRST_ARG_KEYWORDS = (
-    "command",
-    "cmd",
-    "args",
-    "source",
-    "string",
-    "template_source",
-    "data",
-    "s",
-)
+_FIRST_ARG_KEYWORDS = ("command", "cmd", "args", "source", "string", "template_source", "data", "s")
 
 
 def _import_aliases(tree: ast.AST) -> dict[str, str]:
@@ -87,17 +78,12 @@ class _ScopeBuilder(ast.NodeVisitor):
         for name in _target_names(target):
             self._bind(name, None)
 
-    def _function(
-        self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda
-    ) -> None:
+    def _function(self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda) -> None:
         if not isinstance(node, ast.Lambda):
             self._bind(node.name, None)
             for deco in node.decorator_list:
                 self.visit(deco)
-        for default in [
-            *node.args.defaults,
-            *(d for d in node.args.kw_defaults if d is not None),
-        ]:
+        for default in [*node.args.defaults, *(d for d in node.args.kw_defaults if d is not None)]:
             self.visit(default)
         outer = self.scope
         parent = outer
@@ -105,12 +91,7 @@ class _ScopeBuilder(ast.NodeVisitor):
             parent = parent.parent
         self.scope = _Scope(parent)
         args = node.args
-        for a in [
-            *args.posonlyargs,
-            *args.args,
-            *args.kwonlyargs,
-            *(x for x in (args.vararg, args.kwarg) if x),
-        ]:
+        for a in [*args.posonlyargs, *args.args, *args.kwonlyargs, *(x for x in (args.vararg, args.kwarg) if x)]:
             self._bind(a.arg, None)
         for stmt in node.body if isinstance(node.body, list) else [node.body]:
             self.visit(stmt)
@@ -120,11 +101,7 @@ class _ScopeBuilder(ast.NodeVisitor):
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self._bind(node.name, None)
-        for expr in [
-            *node.bases,
-            *(k.value for k in node.keywords),
-            *node.decorator_list,
-        ]:
+        for expr in [*node.bases, *(k.value for k in node.keywords), *node.decorator_list]:
             self.visit(expr)
         outer = self.scope
         self.scope = _Scope(outer, is_class=True)
@@ -170,9 +147,7 @@ class _ScopeBuilder(ast.NodeVisitor):
 
     def visit_For(self, node: ast.For | ast.AsyncFor) -> None:
         self.visit(node.iter)
-        if isinstance(node.target, ast.Name) and isinstance(
-            node.iter, (ast.List, ast.Tuple, ast.Set)
-        ):
+        if isinstance(node.target, ast.Name) and isinstance(node.iter, (ast.List, ast.Tuple, ast.Set)):
             for element in node.iter.elts:
                 self._bind(node.target.id, element)
         else:
@@ -236,72 +211,42 @@ def _lookup(scope: _Scope, name: str) -> list[ast.expr | None] | None:
     return None
 
 
-def _is_const(
-    node: ast.expr, scope: _Scope, seen: frozenset[str] = frozenset()
-) -> bool:
+def _is_const(node: ast.expr, scope: _Scope, seen: frozenset[str] = frozenset()) -> bool:
     """True when every value `node` can take is a string built only from literals -- including names
     whose every assignment in scope is such a constant."""
     if isinstance(node, ast.Constant):
         return isinstance(node.value, str)
     if isinstance(node, ast.BinOp):
-        return (
-            isinstance(node.op, ast.Add)
-            and _is_const(node.left, scope, seen)
-            and _is_const(node.right, scope, seen)
-        )
+        return isinstance(node.op, ast.Add) and _is_const(node.left, scope, seen) and _is_const(node.right, scope, seen)
     if isinstance(node, ast.JoinedStr):
-        return all(
-            _is_const(v.value if isinstance(v, ast.FormattedValue) else v, scope, seen)
-            for v in node.values
-        )
+        return all(_is_const(v.value if isinstance(v, ast.FormattedValue) else v, scope, seen) for v in node.values)
     if isinstance(node, ast.IfExp):
         return _is_const(node.body, scope, seen) and _is_const(node.orelse, scope, seen)
     if isinstance(node, ast.Name):
         if node.id in seen:
             return False
         bound = _lookup(scope, node.id)
-        return bool(bound) and all(
-            b is not None and _is_const(b, scope, seen | {node.id}) for b in bound
-        )
+        return bool(bound) and all(b is not None and _is_const(b, scope, seen | {node.id}) for b in bound)
     return False
 
 
 def _is_arg_list(node: ast.expr | None, scope: _Scope) -> bool:
     """A list/tuple command whose program is a literal: extra (even dynamic) items are arguments, not shell code."""
-    return (
-        isinstance(node, (ast.List, ast.Tuple))
-        and bool(node.elts)
-        and _is_const(node.elts[0], scope)
-    )
+    return isinstance(node, (ast.List, ast.Tuple)) and bool(node.elts) and _is_const(node.elts[0], scope)
 
 
 def _shell_true(call: ast.Call) -> bool:
-    return any(
-        kw.arg == "shell"
-        and isinstance(kw.value, ast.Constant)
-        and kw.value.value is True
-        for kw in call.keywords
-    )
+    return any(kw.arg == "shell" and isinstance(kw.value, ast.Constant) and kw.value.value is True for kw in call.keywords)
 
 
-def _finding(
-    path: Path, node: ast.Call, rule: str, message: str, severity: str
-) -> Finding:
+def _finding(path: Path, node: ast.Call, rule: str, message: str, severity: str) -> Finding:
     return Finding(path, node.lineno, rule, message, severity=severity)
 
 
-def _check_call(
-    path: Path, node: ast.Call, aliases: dict[str, str], scope: _Scope
-) -> list[Finding]:
+def _check_call(path: Path, node: ast.Call, aliases: dict[str, str], scope: _Scope) -> list[Finding]:
     name = _dotted(node.func, aliases)
     last = name.rsplit(".", 1)[-1]
-    first_arg = (
-        node.args[0]
-        if node.args
-        else next(
-            (kw.value for kw in node.keywords if kw.arg in _FIRST_ARG_KEYWORDS), None
-        )
-    )
+    first_arg = node.args[0] if node.args else next((kw.value for kw in node.keywords if kw.arg in _FIRST_ARG_KEYWORDS), None)
     dynamic = first_arg is not None and not _is_const(first_arg, scope)
 
     if name in ("eval", "exec") and dynamic:
@@ -324,11 +269,7 @@ def _check_call(
                 "error",
             )
         ]
-    if (
-        name.startswith("subprocess.")
-        and _shell_true(node)
-        and not _is_arg_list(first_arg, scope)
-    ):
+    if name.startswith("subprocess.") and _shell_true(node) and not _is_arg_list(first_arg, scope):
         if dynamic:
             return [
                 _finding(
@@ -370,11 +311,7 @@ def _check_call(
         loader = next((kw.value for kw in node.keywords if kw.arg == "Loader"), None)
         if loader is None and len(node.args) > 1:
             loader = node.args[1]
-        if (
-            name == "yaml.unsafe_load"
-            or loader is None
-            or _dotted(loader, aliases).rsplit(".", 1)[-1] not in _SAFE_YAML_LOADERS
-        ):
+        if name == "yaml.unsafe_load" or loader is None or _dotted(loader, aliases).rsplit(".", 1)[-1] not in _SAFE_YAML_LOADERS:
             return [
                 _finding(
                     path,
@@ -395,10 +332,7 @@ def _check_call(
             )
         ]
     if last in ("Environment", "Jinja2Templates") and any(
-        kw.arg == "autoescape"
-        and isinstance(kw.value, ast.Constant)
-        and kw.value.value is False
-        for kw in node.keywords
+        kw.arg == "autoescape" and isinstance(kw.value, ast.Constant) and kw.value.value is False for kw in node.keywords
     ):
         return [
             _finding(

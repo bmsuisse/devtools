@@ -23,21 +23,14 @@ TAKEN_PREFIX = "Taken by"
 
 
 def fetch_github(gh: str, number: int) -> tuple[str, str]:
-    result = subprocess.run(
-        [gh, "issue", "view", str(number), "--json", "title,body"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = subprocess.run([gh, "issue", "view", str(number), "--json", "title,body"], capture_output=True, text=True, check=False)
     if result.returncode != 0:
         sys.exit(f"gh issue view {number} failed:\n{result.stderr.strip()}")
     data = json.loads(result.stdout)
     return data["title"], data.get("body") or ""
 
 
-def fetch_ado(
-    session: requests.Session, remote: AdoRemote, number: int
-) -> tuple[str, str]:
+def fetch_ado(session: requests.Session, remote: AdoRemote, number: int) -> tuple[str, str]:
     r = session.get(
         f"{_base_url(remote)}/_apis/wit/workitems/{number}",
         params={"fields": "System.Title,System.Description", "api-version": "7.1"},
@@ -45,12 +38,7 @@ def fetch_ado(
     r.raise_for_status()
     fields = r.json()["fields"]
     # ADO descriptions are HTML; the agent only needs the text.
-    description = _HTML_TAG_RE.sub(
-        "",
-        (fields.get("System.Description") or "")
-        .replace("<br>", "\n")
-        .replace("</div>", "\n"),
-    )
+    description = _HTML_TAG_RE.sub("", (fields.get("System.Description") or "").replace("<br>", "\n").replace("</div>", "\n"))
     return fields["System.Title"], description.strip()
 
 
@@ -78,9 +66,7 @@ def claimant(text: str | None) -> str:
     if not is_take_comment(text):
         return ""
     # ADO stores HTML: keep block boundaries as line breaks so only the claim's own line is read
-    plain = _HTML_TAG_RE.sub(
-        "", re.sub(r"(?i)<br\s*/?>|</(?:div|p)>", "\n", text or "")
-    )
+    plain = _HTML_TAG_RE.sub("", re.sub(r"(?i)<br\s*/?>|</(?:div|p)>", "\n", text or ""))
     first = next(line for line in plain.splitlines() if line.strip())
     name = first.strip().removeprefix(TAKEN_PREFIX).strip()
     return re.sub(r"\s*\(via [^)]*\)$", "", name).strip()
@@ -95,40 +81,16 @@ def take_message(user: str, agent: str, session_id: str | None) -> str:
     return f"{TAKEN_PREFIX} {user}\n\nClaude Session: {session_id} (resume with `claude --resume {session_id}`)"
 
 
-def build_command(
-    agent: str,
-    number: int,
-    title: str,
-    body: str,
-    extra: list[str],
-    session_id: str | None = None,
-) -> list[str]:
+def build_command(agent: str, number: int, title: str, body: str, extra: list[str], session_id: str | None = None) -> list[str]:
     prompt = build_prompt(number, title, body)
     if agent == "claude":
         session = ["--session-id", session_id] if session_id else []
-        return [
-            agent,
-            "-p",
-            prompt,
-            "--name",
-            session_name(number, title),
-            *session,
-            *extra,
-        ]
+        return [agent, "-p", prompt, "--name", session_name(number, title), *session, *extra]
     # Other agents: no known naming flag, so just hand over the prompt.
     return [agent, *extra, prompt]
 
 
-def run(
-    number: int,
-    title: str,
-    body: str,
-    *,
-    agent: str,
-    extra: list[str],
-    dry_run: bool,
-    session_id: str | None = None,
-) -> None:
+def run(number: int, title: str, body: str, *, agent: str, extra: list[str], dry_run: bool, session_id: str | None = None) -> None:
     cmd = build_command(agent, number, title, body, extra, session_id)
     if dry_run:
         print(" ".join(json.dumps(c) if " " in c or "\n" in c else c for c in cmd))

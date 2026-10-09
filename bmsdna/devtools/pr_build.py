@@ -11,20 +11,9 @@ from urllib.parse import quote
 import requests
 
 from .ado_auth import auth_header
-from .cli_tools import (
-    EXIT_NEEDS_APPROVAL,
-    HTTP_TIMEOUT_SECS,
-    PollHeartbeat,
-    detect_agent_session,
-    ensure_agent_session_note,
-    is_claude_code,
-)
+from .cli_tools import EXIT_NEEDS_APPROVAL, HTTP_TIMEOUT_SECS, PollHeartbeat, detect_agent_session, ensure_agent_session_note, is_claude_code
 from .gitrepo import AdoRemote, current_branch
-from .pr_markdown import (
-    build_attachments_section,
-    build_comment_content,
-    build_screenshots_section,
-)
+from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 # Matches an ISO 8601 timestamp at the start of a log line, e.g. 2024-03-21T15:01:23.1234567Z
 TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*")
@@ -81,9 +70,7 @@ def pr_web_url(remote: AdoRemote, pr_id: int) -> str:
 BUILD_POLICY_TYPE_ID = "0609b952-1397-4640-95ec-e00a01b2c241"
 
 
-def _scope_matches(
-    scope: dict, repo_id: str, target_ref: str, default_branch: str | None
-) -> bool:
+def _scope_matches(scope: dict, repo_id: str, target_ref: str, default_branch: str | None) -> bool:
     if scope.get("repositoryId") not in (None, repo_id):
         return False
     if scope.get("matchKind") == "DefaultBranch":
@@ -91,9 +78,7 @@ def _scope_matches(
     return scope.get("refName") in (None, target_ref)
 
 
-def policy_configs_include_branch(
-    configs: list, repo_id: str, branch: str, default_branch: str | None
-) -> bool:
+def policy_configs_include_branch(configs: list, repo_id: str, branch: str, default_branch: str | None) -> bool:
     """True if any enabled, non-deleted Build-type policy configuration's scope covers `branch`."""
     target_ref = f"refs/heads/{branch}"
     for config in configs:
@@ -102,10 +87,7 @@ def policy_configs_include_branch(
         if config.get("type", {}).get("id") != BUILD_POLICY_TYPE_ID:
             continue
         scopes = config.get("settings", {}).get("scope", [])
-        if any(
-            _scope_matches(scope, repo_id, target_ref, default_branch)
-            for scope in scopes
-        ):
+        if any(_scope_matches(scope, repo_id, target_ref, default_branch) for scope in scopes):
             return True
     return False
 
@@ -126,19 +108,13 @@ def has_build_policy(session: requests.Session, remote: AdoRemote, branch: str) 
         r.raise_for_status()
         repo = r.json()
 
-        r = session.get(
-            f"{_base_url(remote)}/_apis/policy/configurations",
-            params={"api-version": "7.1"},
-            timeout=HTTP_TIMEOUT_SECS,
-        )
+        r = session.get(f"{_base_url(remote)}/_apis/policy/configurations", params={"api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS)
         r.raise_for_status()
         configs = r.json().get("value", [])
-    except requests.RequestException, SystemExit:
+    except (requests.RequestException, SystemExit):
         return False
 
-    return policy_configs_include_branch(
-        configs, repo.get("id"), branch, repo.get("defaultBranch")
-    )
+    return policy_configs_include_branch(configs, repo.get("id"), branch, repo.get("defaultBranch"))
 
 
 def merge_conflict_message(pr: dict) -> str | None:
@@ -175,12 +151,7 @@ def retry_hint() -> str:
     return "Hint: to retry just the failed stage(s)/job(s) instead of queuing a full rerun, run: `bdt pr retry`"
 
 
-def get_pr(
-    session: requests.Session,
-    remote: AdoRemote,
-    source_branch: str,
-    target_branch: str | None,
-) -> dict:
+def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, target_branch: str | None) -> dict:
     """The PR from `source_branch` (active first, else completed). `target_branch=None` doesn't filter on the target."""
     url = f"{_base_url(remote)}/_apis/git/repositories/{remote.repo}/pullrequests"
     for status in ["active", "completed"]:
@@ -188,11 +159,7 @@ def get_pr(
             url,
             params={
                 "searchCriteria.sourceRefName": f"refs/heads/{source_branch}",
-                **(
-                    {"searchCriteria.targetRefName": f"refs/heads/{target_branch}"}
-                    if target_branch
-                    else {}
-                ),
+                **({"searchCriteria.targetRefName": f"refs/heads/{target_branch}"} if target_branch else {}),
                 "searchCriteria.status": status,
                 "$top": 1,
                 "api-version": "7.1",
@@ -208,10 +175,7 @@ def get_pr(
                 sys.exit(conflict)
             return pr
 
-    print(
-        f"No PR found from '{source_branch}'"
-        + (f" → '{target_branch}'" if target_branch else "")
-    )
+    print(f"No PR found from '{source_branch}'" + (f" → '{target_branch}'" if target_branch else ""))
     sys.exit(1)
 
 
@@ -233,13 +197,7 @@ def get_pr_by_id(session: requests.Session, remote: AdoRemote, pr_id: int) -> di
     return pr
 
 
-def upload_attachment(
-    session: requests.Session,
-    remote: AdoRemote,
-    pr_id: int,
-    attachment_name: str,
-    file_path: str,
-) -> str:
+def upload_attachment(session: requests.Session, remote: AdoRemote, pr_id: int, attachment_name: str, file_path: str) -> str:
     """Upload `file_path` as a pull request attachment named `attachment_name`; returns its download URL.
 
     Embedding that URL in the PR description works because the browser
@@ -258,28 +216,19 @@ def upload_attachment(
     return r.json()["url"]
 
 
-def _upload_attachments(
-    session: requests.Session, remote: AdoRemote, pr_id: int, paths: list[str]
-) -> list[tuple[str, str]]:
+def _upload_attachments(session: requests.Session, remote: AdoRemote, pr_id: int, paths: list[str]) -> list[tuple[str, str]]:
     """Upload each path as a PR attachment (screenshot or arbitrary file); returns (display name, url) pairs.
 
     Attachment names are index-prefixed so two paths sharing a basename (e.g. two 'before.png'
     from different folders) don't overwrite each other.
     """
     return [
-        (
-            Path(path).name,
-            upload_attachment(
-                session, remote, pr_id, f"{i:02d}-{Path(path).name}", path
-            ),
-        )
+        (Path(path).name, upload_attachment(session, remote, pr_id, f"{i:02d}-{Path(path).name}", path))
         for i, path in enumerate(paths)
     ]
 
 
-def _patch_pr(
-    session: requests.Session, remote: AdoRemote, pr_id: int, fields: dict
-) -> None:
+def _patch_pr(session: requests.Session, remote: AdoRemote, pr_id: int, fields: dict) -> None:
     r = session.patch(
         f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}/pullRequests/{pr_id}",
         params={"api-version": "7.1"},
@@ -306,18 +255,11 @@ def add_attachments(
     pr_id = pr["pullRequestId"]
     new_description = pr.get("description")
     if screenshot_paths:
-        new_description = build_screenshots_section(
-            new_description,
-            _upload_attachments(session, remote, pr_id, screenshot_paths),
-        )
+        new_description = build_screenshots_section(new_description, _upload_attachments(session, remote, pr_id, screenshot_paths))
     if file_paths:
-        new_description = build_attachments_section(
-            new_description, _upload_attachments(session, remote, pr_id, file_paths)
-        )
+        new_description = build_attachments_section(new_description, _upload_attachments(session, remote, pr_id, file_paths))
     _patch_pr(session, remote, pr_id, {"description": new_description})
-    print(
-        f"Attached {len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s) to PR #{pr_id}"
-    )
+    print(f"Attached {len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s) to PR #{pr_id}")
     return {**pr, "description": new_description}
 
 
@@ -341,20 +283,16 @@ def ensure_session_note(session: requests.Session, remote: AdoRemote, pr: dict) 
         noted = ensure_agent_session_note(body, also_check=pr.get("title"))
         if noted != body:
             _patch_pr(session, remote, pr_id, {"description": noted})
-    except requests.RequestException, SystemExit, KeyError:
+    except (requests.RequestException, SystemExit, KeyError):
         pass
 
 
-def add_screenshots(
-    session: requests.Session, remote: AdoRemote, pr: dict, screenshot_paths: list[str]
-) -> None:
+def add_screenshots(session: requests.Session, remote: AdoRemote, pr: dict, screenshot_paths: list[str]) -> None:
     """Upload each screenshot as a PR attachment and append them to the PR description."""
     add_attachments(session, remote, pr, screenshot_paths=screenshot_paths)
 
 
-def add_files(
-    session: requests.Session, remote: AdoRemote, pr: dict, file_paths: list[str]
-) -> None:
+def add_files(session: requests.Session, remote: AdoRemote, pr: dict, file_paths: list[str]) -> None:
     """Upload each file as a PR attachment and append them as linked attachments to the PR description."""
     add_attachments(session, remote, pr, file_paths=file_paths)
 
@@ -374,30 +312,19 @@ def update(
     if title:
         fields["title"] = title
     if description is not None or screenshot_paths or file_paths:
-        new_description = (
-            description if description is not None else pr.get("description")
-        )
+        new_description = description if description is not None else pr.get("description")
         if screenshot_paths:
-            new_description = build_screenshots_section(
-                new_description,
-                _upload_attachments(session, remote, pr_id, screenshot_paths),
-            )
+            new_description = build_screenshots_section(new_description, _upload_attachments(session, remote, pr_id, screenshot_paths))
         if file_paths:
-            new_description = build_attachments_section(
-                new_description, _upload_attachments(session, remote, pr_id, file_paths)
-            )
-        fields["description"] = ensure_agent_session_note(
-            new_description, also_check=title or pr.get("title")
-        )
+            new_description = build_attachments_section(new_description, _upload_attachments(session, remote, pr_id, file_paths))
+        fields["description"] = ensure_agent_session_note(new_description, also_check=title or pr.get("title"))
     if not fields:
         return
     _patch_pr(session, remote, pr_id, fields)
     print(f"Updated PR #{pr_id}")
 
 
-def link_work_item(
-    session: requests.Session, remote: AdoRemote, pr_id: int, work_item_id: int
-) -> None:
+def link_work_item(session: requests.Session, remote: AdoRemote, pr_id: int, work_item_id: int) -> None:
     """Link work item `work_item_id` to PR `pr_id`, so it shows up in the PR's "Work Items" tab
     (and the work item's own "Development" links) -- the Azure DevOps equivalent of GitHub's
     closing-keyword PR<->issue link, via the dedicated Pull Request Work Items REST resource
@@ -433,17 +360,12 @@ def set_draft(session: requests.Session, remote: AdoRemote, pr: dict) -> bool:
     return True
 
 
-def add_comment(
-    session: requests.Session, remote: AdoRemote, pr_id: int, content: str
-) -> None:
+def add_comment(session: requests.Session, remote: AdoRemote, pr_id: int, content: str) -> None:
     """Post a new top-level comment thread on the PR."""
     r = session.post(
         f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}/pullRequests/{pr_id}/threads",
         params={"api-version": "7.1"},
-        json={
-            "comments": [{"parentCommentId": 0, "content": content, "commentType": 1}],
-            "status": 1,
-        },
+        json={"comments": [{"parentCommentId": 0, "content": content, "commentType": 1}], "status": 1},
         timeout=HTTP_TIMEOUT_SECS,
     )
     r.raise_for_status()
@@ -459,34 +381,18 @@ def comment_with_screenshots(
 ) -> None:
     """Post a comment, with a message and/or screenshots/files, on the PR."""
     file_paths = file_paths or []
-    images = (
-        _upload_attachments(session, remote, pr_id, screenshot_paths)
-        if screenshot_paths
-        else []
-    )
-    files = (
-        _upload_attachments(session, remote, pr_id, file_paths) if file_paths else []
-    )
-    content = (
-        ensure_agent_session_note(build_comment_content(message, images, files)) or ""
-    )
+    images = _upload_attachments(session, remote, pr_id, screenshot_paths) if screenshot_paths else []
+    files = _upload_attachments(session, remote, pr_id, file_paths) if file_paths else []
+    content = ensure_agent_session_note(build_comment_content(message, images, files)) or ""
     add_comment(session, remote, pr_id, content)
-    print(
-        f"Added comment ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) to PR #{pr_id}"
-    )
+    print(f"Added comment ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) to PR #{pr_id}")
 
 
-def get_builds_for_pr(
-    session: requests.Session, remote: AdoRemote, source_branch: str, pr_id: int
-) -> list:
+def get_builds_for_pr(session: requests.Session, remote: AdoRemote, source_branch: str, pr_id: int) -> list:
     builds = []
     for ref in [f"refs/pull/{pr_id}/merge", f"refs/heads/{source_branch}"]:
         url = f"{_base_url(remote)}/_apis/build/builds"
-        r = session.get(
-            url,
-            params={"branchName": ref, "$top": 5, "api-version": "7.1"},
-            timeout=HTTP_TIMEOUT_SECS,
-        )
+        r = session.get(url, params={"branchName": ref, "$top": 5, "api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS)
         r.raise_for_status()
         builds.extend(r.json().get("value", []))
 
@@ -495,33 +401,21 @@ def get_builds_for_pr(
     return builds
 
 
-def get_builds_for_branch(
-    session: requests.Session, remote: AdoRemote, branch: str, top: int = 5
-) -> list:
+def get_builds_for_branch(session: requests.Session, remote: AdoRemote, branch: str, top: int = 5) -> list:
     """Builds triggered directly on `branch` -- e.g. a post-merge/deployment pipeline that
     only runs on the target branch once a PR merges into it -- as opposed to
     `get_builds_for_pr`, which looks at the PR's own merge/source refs. Same shape of call,
     just a different `branchName` ref.
     """
     url = f"{_base_url(remote)}/_apis/build/builds"
-    r = session.get(
-        url,
-        params={
-            "branchName": f"refs/heads/{branch}",
-            "$top": top,
-            "api-version": "7.1",
-        },
-        timeout=HTTP_TIMEOUT_SECS,
-    )
+    r = session.get(url, params={"branchName": f"refs/heads/{branch}", "$top": top, "api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS)
     r.raise_for_status()
     builds = r.json().get("value", [])
     builds.sort(key=lambda b: b["id"], reverse=True)
     return builds
 
 
-def deploy_build_hint(
-    session: requests.Session, remote: AdoRemote, target_branch: str | None
-) -> str | None:
+def deploy_build_hint(session: requests.Session, remote: AdoRemote, target_branch: str | None) -> str | None:
     """Best-effort: None unless a build has already been triggered directly on `target_branch`
     (as opposed to this PR's own merge/source refs) -- e.g. a post-merge pipeline that deploys.
     When one exists, a hint suggesting `bdt pr watch-deploy` to watch it.
@@ -561,26 +455,15 @@ def build_web_url(remote: AdoRemote, build_id: int) -> str:
     return f"{_base_url(remote)}/_build/results?buildId={build_id}&view=results"
 
 
-def get_timeline_records(
-    session: requests.Session, remote: AdoRemote, build_id: int
-) -> list:
-    r = session.get(
-        f"{_base_url(remote)}/_apis/build/builds/{build_id}/timeline",
-        params={"api-version": "7.1"},
-        timeout=HTTP_TIMEOUT_SECS,
-    )
+def get_timeline_records(session: requests.Session, remote: AdoRemote, build_id: int) -> list:
+    r = session.get(f"{_base_url(remote)}/_apis/build/builds/{build_id}/timeline", params={"api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS)
     r.raise_for_status()
     return r.json().get("records") or []
 
 
 def pending_approval_records(records: list) -> list:
     """Timeline records for still-open `Checkpoint.Approval` gates (manual stage approvals)."""
-    return [
-        rec
-        for rec in records
-        if rec.get("state") == "inProgress"
-        and rec.get("name") == CHECKPOINT_APPROVAL_NAME
-    ]
+    return [rec for rec in records if rec.get("state") == "inProgress" and rec.get("name") == CHECKPOINT_APPROVAL_NAME]
 
 
 def approval_stage_name(records: list, approval_record: dict) -> str:
@@ -595,9 +478,7 @@ def approval_stage_name(records: list, approval_record: dict) -> str:
     return (stage or {}).get("name") or approval_record.get("name") or "?"
 
 
-def find_pending_approvals(
-    session: requests.Session, remote: AdoRemote, builds: list
-) -> list:
+def find_pending_approvals(session: requests.Session, remote: AdoRemote, builds: list) -> list:
     """(build, timeline records, pending approval records) for each build that's actually
     blocked on a stage approval, not just still running.
 
@@ -622,24 +503,12 @@ def find_pending_approvals(
     return result
 
 
-def get_failed_step_logs(
-    session: requests.Session, remote: AdoRemote, build_id: int
-) -> None:
-    r = session.get(
-        f"{_base_url(remote)}/_apis/build/builds/{build_id}/timeline",
-        params={"api-version": "7.1"},
-        timeout=HTTP_TIMEOUT_SECS,
-    )
+def get_failed_step_logs(session: requests.Session, remote: AdoRemote, build_id: int) -> None:
+    r = session.get(f"{_base_url(remote)}/_apis/build/builds/{build_id}/timeline", params={"api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS)
     r.raise_for_status()
     records = r.json().get("records", [])
 
-    failed = [
-        rec
-        for rec in records
-        if rec.get("result") == "failed"
-        and rec.get("type") == "Task"
-        and rec.get("log")
-    ]
+    failed = [rec for rec in records if rec.get("result") == "failed" and rec.get("type") == "Task" and rec.get("log")]
 
     if not failed:
         print("  (no failed steps with logs)")
@@ -650,17 +519,13 @@ def get_failed_step_logs(
         name = rec.get("name", "?")
         log_url = rec["log"]["url"]
         print(f"\n  [FAILED] {name}")
-        r2 = session.get(
-            log_url, params={"api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS
-        )
+        r2 = session.get(log_url, params={"api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS)
         r2.raise_for_status()
         for line in r2.text.splitlines():
             print(f"    {TIMESTAMP_RE.sub('', line)}")
 
 
-def retry_failed_build(
-    session: requests.Session, remote: AdoRemote, build_id: int
-) -> None:
+def retry_failed_build(session: requests.Session, remote: AdoRemote, build_id: int) -> None:
     """Retry only the failed stage(s)/job(s) of a completed build, in place -- distinct
     from queuing a brand new build via `Builds - Queue`.
 
@@ -681,11 +546,7 @@ def retry_failed_build(
 
 
 def _resolve_pr_and_branch(
-    session: requests.Session,
-    remote: AdoRemote,
-    target_branch: str | None,
-    source_branch: str | None,
-    pr_id: int | None,
+    session: requests.Session, remote: AdoRemote, target_branch: str | None, source_branch: str | None, pr_id: int | None
 ) -> tuple[dict, str]:
     """(pr, source_branch) -- shared by `retry()` and `run()`: resolves the PR by `pr_id`
     directly if given, deriving `source_branch` from the PR's own `sourceRefName` (since
@@ -701,11 +562,7 @@ def _resolve_pr_and_branch(
 
 
 def retry(
-    remote: AdoRemote,
-    pat: str | None,
-    target_branch: str | None,
-    source_branch: str | None = None,
-    pr_id: int | None = None,
+    remote: AdoRemote, pat: str | None, target_branch: str | None, source_branch: str | None = None, pr_id: int | None = None
 ) -> None:
     """Retry the failed stage(s)/job(s) of the most recent build(s) for the PR opened
     from the current branch, or for `pr_id` directly if given -- one retry call per
@@ -714,18 +571,12 @@ def retry(
     session = requests.Session()
     session.headers.update(auth_header(pat))
 
-    pr, source_branch = _resolve_pr_and_branch(
-        session, remote, target_branch, source_branch, pr_id
-    )
+    pr, source_branch = _resolve_pr_and_branch(session, remote, target_branch, source_branch, pr_id)
     builds = get_builds_for_pr(session, remote, source_branch, pr["pullRequestId"])
     if not builds:
         sys.exit(f"No builds found for PR #{pr['pullRequestId']} -- nothing to retry.")
 
-    failed = [
-        b
-        for b in latest_per_pipeline(builds)
-        if b.get("status") == "completed" and b.get("result") == "failed"
-    ]
+    failed = [b for b in latest_per_pipeline(builds) if b.get("status") == "completed" and b.get("result") == "failed"]
     if not failed:
         sys.exit(f"No failed builds to retry for PR #{pr['pullRequestId']}.")
 
@@ -794,9 +645,7 @@ def exit_if_blocked_on_approval(
     A no-op (returns normally) if nothing is blocked.
     """
     already_failed = any(b.get("result") == "failed" for b in pipeline_builds)
-    pending_approvals = (
-        find_pending_approvals(session, remote, pipeline_builds) if wait else []
-    )
+    pending_approvals = find_pending_approvals(session, remote, pipeline_builds) if wait else []
     if not pending_approvals:
         return
     print(msg)
@@ -807,9 +656,7 @@ def exit_if_blocked_on_approval(
         pipeline_name = build.get("definition", {}).get("name", "?")
         for rec in approvals:
             stage = approval_stage_name(records, rec)
-            print(
-                f"  {pipeline_name} #{build['id']}: stage '{stage}' needs approval — {build_web_url(remote, build['id'])}"
-            )
+            print(f"  {pipeline_name} #{build['id']}: stage '{stage}' needs approval — {build_web_url(remote, build['id'])}")
     if already_failed:
         print("\nDetails:")
         for b in pipeline_builds:
@@ -838,15 +685,9 @@ def run(
         below needs it and there may be no matching branch checked out locally at all.
         """
         nonlocal source_branch, target_branch
-        pr, source_branch = _resolve_pr_and_branch(
-            session, remote, target_branch, source_branch, pr_id
-        )
-        if (
-            target_branch is None
-        ):  # unfiltered lookup: the deploy-build hint needs the PR's actual target
-            target_branch = (
-                pr.get("targetRefName", "").removeprefix("refs/heads/") or None
-            )
+        pr, source_branch = _resolve_pr_and_branch(session, remote, target_branch, source_branch, pr_id)
+        if target_branch is None:  # unfiltered lookup: the deploy-build hint needs the PR's actual target
+            target_branch = pr.get("targetRefName", "").removeprefix("refs/heads/") or None
         return pr
 
     # When waiting, a pipeline's "latest" build may already be a *completed* run from before
@@ -861,15 +702,11 @@ def run(
     baseline_completed_ids: dict[int, int] = {}
     if wait:
         pr = _poll_or_exit(fetch_pr)
-        for b in _poll_or_exit(
-            get_builds_for_pr, session, remote, source_branch, pr["pullRequestId"]
-        ):
+        for b in _poll_or_exit(get_builds_for_pr, session, remote, source_branch, pr["pullRequestId"]):
             if b.get("status") != "completed":
                 continue
             def_id = b.get("definition", {}).get("id")
-            baseline_completed_ids[def_id] = max(
-                baseline_completed_ids.get(def_id, 0), b["id"]
-            )
+            baseline_completed_ids[def_id] = max(baseline_completed_ids.get(def_id, 0), b["id"])
 
     draft_notice_shown = False
     heartbeat = PollHeartbeat()
@@ -886,18 +723,11 @@ def run(
 
         msg = f"\rPR #{pr_number}: {pr_title} ({pr_status})"
 
-        builds = _poll_or_exit(
-            get_builds_for_pr, session, remote, source_branch, pr_number
-        )
+        builds = _poll_or_exit(get_builds_for_pr, session, remote, source_branch, pr_number)
         if builds:
             pipeline_builds = latest_per_pipeline(builds)
             if wait:
-                stale = [
-                    b
-                    for b in pipeline_builds
-                    if b["id"]
-                    <= baseline_completed_ids.get(b.get("definition", {}).get("id"), 0)
-                ]
+                stale = [b for b in pipeline_builds if b["id"] <= baseline_completed_ids.get(b.get("definition", {}).get("id"), 0)]
                 if stale:
                     msg += " | waiting for new build(s) to start: " + ", ".join(
                         b.get("definition", {}).get("name", "?") for b in stale
@@ -910,15 +740,7 @@ def run(
                 for b in pipeline_builds
             )
 
-            exit_if_blocked_on_approval(
-                session,
-                remote,
-                msg,
-                pipeline_builds,
-                wait,
-                "bdt pr status --wait",
-                show_retry_hint=True,
-            )
+            exit_if_blocked_on_approval(session, remote, msg, pipeline_builds, wait, "bdt pr status --wait", show_retry_hint=True)
 
             all_done = all(b.get("status") == "completed" for b in pipeline_builds)
             if all_done or not wait:
@@ -928,9 +750,7 @@ def run(
                     print_build(session, remote, b)
 
                 if not all_done and not wait:
-                    print(
-                        "\nTip: Use --wait to poll until all pipelines are completed."
-                    )
+                    print("\nTip: Use --wait to poll until all pipelines are completed.")
 
                 if any(b.get("result") == "failed" for b in pipeline_builds):
                     print(f"\n{retry_hint()}")
@@ -963,9 +783,7 @@ def run(
             time.sleep(30)
 
 
-def run_watch_deploy(
-    remote: AdoRemote, pat: str | None, target_branch: str, wait: bool
-) -> None:
+def run_watch_deploy(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool) -> None:
     """Watch the most recent build(s) triggered directly on `target_branch` -- e.g. a
     post-merge pipeline that only runs on the target branch once a PR merges into it, and
     usually does the actual deployment -- until they complete.
@@ -990,9 +808,7 @@ def run_watch_deploy(
             for b in pipeline_builds
         )
 
-        exit_if_blocked_on_approval(
-            session, remote, msg, pipeline_builds, wait, "bdt pr watch-deploy --wait"
-        )
+        exit_if_blocked_on_approval(session, remote, msg, pipeline_builds, wait, "bdt pr watch-deploy --wait")
 
         all_done = all(b.get("status") == "completed" for b in pipeline_builds)
         if all_done or not wait:

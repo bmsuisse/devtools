@@ -132,8 +132,8 @@ vendor a git submodule under that path.
 
 ## Environment variables
 
-`bdt env get-keys [--search TEXT]` lists the variable **names** (never values) from `.env`, `*.env` and `.env.*`
-files in the current directory and `~`. Use it instead of `cat .env` / `printenv` to find out which variables exist;
+`bdt env get-keys [--search TEXT] [--no-home]` lists the variable **names** (never values) from `.env`, `*.env` and `.env.*`
+files under the current directory (recursive; skips node_modules/.git/.venv/.worktrees/.claude) and in `~` (`--no-home` skips those). Use it instead of `cat .env` / `printenv` to find out which variables exist;
 files in `~` (and ones using `export VAR=...`) are bash syntax, so the output says to `source` them.
 
 ## Application Insights logs

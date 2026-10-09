@@ -17,17 +17,8 @@ def _write(root: Path, rel: str, text: str = "") -> Path:
 
 def _check(root: Path, *, sql_root: str = "backend", **kwargs) -> list[str]:
     sql_files = sorted((root / sql_root).rglob("*.sql"))
-    findings = check_unreferenced_sql_files(
-        repo_root=root,
-        sql_files=sql_files,
-        python_files=sorted(root.rglob("*.py")),
-        **kwargs,
-    )
-    return [
-        f.path.relative_to(root).as_posix()
-        for f in findings
-        if f.rule == "sql-file-unreferenced"
-    ]
+    findings = check_unreferenced_sql_files(repo_root=root, sql_files=sql_files, python_files=sorted(root.rglob("*.py")), **kwargs)
+    return [f.path.relative_to(root).as_posix() for f in findings if f.rule == "sql-file-unreferenced"]
 
 
 def test_literal_load_sql_call_references_file(tmp_path: Path) -> None:
@@ -139,11 +130,7 @@ def test_path_literal_must_match_whole_trailing_segments(tmp_path: Path) -> None
     _write(tmp_path, "backend/sql/a.sql")
     _write(tmp_path, "backend/sql/init.sql")
     _write(tmp_path, "backend/sql/reinit.sql")
-    _write(
-        tmp_path,
-        "backend/use.py",
-        'a = open("backend/sql/a.sql")\nb = open("./sql/init.sql")\nc = base + "/reinit.sql"\n',
-    )
+    _write(tmp_path, "backend/use.py", 'a = open("backend/sql/a.sql")\nb = open("./sql/init.sql")\nc = base + "/reinit.sql"\n')
     assert _check(tmp_path) == ["backend/sql/reinit.sql", "backend/xsql/a.sql"]
 
 
@@ -153,28 +140,19 @@ def test_windows_separators_in_path_literals(tmp_path: Path) -> None:
     assert _check(tmp_path) == []
 
 
-def test_bare_filename_in_unrelated_file_does_not_count_for_top_level_sql_folder(
-    tmp_path: Path,
-) -> None:
+def test_bare_filename_in_unrelated_file_does_not_count_for_top_level_sql_folder(tmp_path: Path) -> None:
     _write(tmp_path, "sql/a.sql")
     _write(tmp_path, "tests/t.py", 'x = "a.sql"\n')
     assert _check(tmp_path, sql_root="sql") == ["sql/a.sql"]
 
 
-def test_unparseable_python_file_is_reported_not_silently_skipped(
-    tmp_path: Path,
-) -> None:
+def test_unparseable_python_file_is_reported_not_silently_skipped(tmp_path: Path) -> None:
     _write(tmp_path, "backend/q/t/a.sql")
     _write(tmp_path, "backend/broken.py", 'load_sql("t", "a")\ndef (:\n')
     findings = check_unreferenced_sql_files(
-        repo_root=tmp_path,
-        sql_files=[tmp_path / "backend/q/t/a.sql"],
-        python_files=sorted(tmp_path.rglob("*.py")),
+        repo_root=tmp_path, sql_files=[tmp_path / "backend/q/t/a.sql"], python_files=sorted(tmp_path.rglob("*.py"))
     )
-    assert sorted(f.rule for f in findings) == [
-        "sql-check-python-unparseable",
-        "sql-file-unreferenced",
-    ]
+    assert sorted(f.rule for f in findings) == ["sql-check-python-unparseable", "sql-file-unreferenced"]
 
 
 def _project(root: Path, config: str) -> None:
@@ -182,9 +160,7 @@ def _project(root: Path, config: str) -> None:
     _write(root, "backend/q/t/dead.sql")
     _write(root, "backend/repo.py", 'load_sql("t", "a")\n')
     _write(root, "backend/other.py", "x = 1\n")
-    _write(
-        root, "pyproject.toml", f"[project]\nname='x'\n[tool.bdt.dead_code]\n{config}\n"
-    )
+    _write(root, "pyproject.toml", f"[project]\nname='x'\n[tool.bdt.dead_code]\n{config}\n")
 
 
 def _run(root: Path, **kwargs) -> list:
@@ -205,13 +181,8 @@ def test_sql_check_scans_whole_repo_for_references(tmp_path: Path) -> None:
     assert findings[0].rule == "sql-file-unreferenced"
 
 
-def test_sql_check_reads_loader_and_ignore_config_from_pyproject(
-    tmp_path: Path,
-) -> None:
-    _project(
-        tmp_path,
-        "sql_roots=['backend/q']\nsql_loader_functions=['get_query']\nsql_unreferenced_ignore=['backend/q/t/*.sql']",
-    )
+def test_sql_check_reads_loader_and_ignore_config_from_pyproject(tmp_path: Path) -> None:
+    _project(tmp_path, "sql_roots=['backend/q']\nsql_loader_functions=['get_query']\nsql_unreferenced_ignore=['backend/q/t/*.sql']")
     assert _run(tmp_path) == []  # everything ignored
     _project(tmp_path, "sql_roots=['backend/q']\nsql_loader_functions=['get_query']")
     # load_sql is no longer the loader name, so both files are unreferenced
@@ -225,10 +196,7 @@ def test_sql_check_accepts_bare_string_for_list_settings(tmp_path: Path) -> None
 
 def test_sql_check_reports_missing_or_escaping_sql_root(tmp_path: Path) -> None:
     _project(tmp_path, "sql_roots=['nope', '../outside']")
-    assert [f.rule for f in _run(tmp_path)] == [
-        "lint-path-not-found",
-        "lint-path-not-found",
-    ]
+    assert [f.rule for f in _run(tmp_path)] == ["lint-path-not-found", "lint-path-not-found"]
 
 
 def test_sql_check_honours_exclude_dirs(tmp_path: Path) -> None:

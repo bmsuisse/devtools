@@ -47,15 +47,11 @@ def test_resolve_board_none_when_no_pyproject(tmp_path) -> None:
 
 
 def test_build_create_ops_title_only() -> None:
-    assert build_create_ops("Sample task") == [
-        {"op": "add", "path": "/fields/System.Title", "value": "Sample task"}
-    ]
+    assert build_create_ops("Sample task") == [{"op": "add", "path": "/fields/System.Title", "value": "Sample task"}]
 
 
 def test_build_create_ops_includes_optional_fields() -> None:
-    ops = build_create_ops(
-        "Title", description="Body", area_path="Proj\\Team", tags=["a", "b"]
-    )
+    ops = build_create_ops("Title", description="Body", area_path="Proj\\Team", tags=["a", "b"])
     paths = {op["path"]: op["value"] for op in ops}
     assert paths["/fields/System.Title"] == "Title"
     assert paths["/fields/System.Description"] == "Body"
@@ -72,29 +68,16 @@ def test_build_create_ops_opts_description_into_markdown_formatting() -> None:
     # Description defaults to HTML formatting via the REST API — without this op, Markdown
     # syntax passed to --description (##, **bold**, `code`, - lists) renders as literal text.
     ops = build_create_ops("Title", description="## Heading\n\n- one\n- two")
-    assert {
-        "op": "add",
-        "path": "/multilineFieldsFormat/System.Description",
-        "value": "Markdown",
-    } in ops
+    assert {"op": "add", "path": "/multilineFieldsFormat/System.Description", "value": "Markdown"} in ops
 
 
 def test_build_create_ops_no_markdown_format_op_without_description() -> None:
     ops = build_create_ops("Title")
-    assert not any(
-        op["path"] == "/multilineFieldsFormat/System.Description" for op in ops
-    )
+    assert not any(op["path"] == "/multilineFieldsFormat/System.Description" for op in ops)
 
 
 def test_build_attach_ops_shape() -> None:
-    ops = build_attach_ops(
-        [
-            (
-                "shot.png",
-                "https://dev.azure.com/x/_apis/wit/attachments/1?fileName=shot.png",
-            )
-        ]
-    )
+    ops = build_attach_ops([("shot.png", "https://dev.azure.com/x/_apis/wit/attachments/1?fileName=shot.png")])
     assert ops == [
         {
             "op": "add",
@@ -127,15 +110,10 @@ def test_upload_attachment_appends_filename_query_if_missing(tmp_path) -> None:
     attachment_id, url = upload_attachment(session, REMOTE, "shot.png", str(shot))
 
     assert attachment_id == "abc-123"
-    assert (
-        url
-        == "https://dev.azure.com/myorg/MyProj/_apis/wit/attachments/abc-123?fileName=shot.png"
-    )
+    assert url == "https://dev.azure.com/myorg/MyProj/_apis/wit/attachments/abc-123?fileName=shot.png"
 
 
-def test_upload_attachment_url_encodes_filename_with_special_characters(
-    tmp_path,
-) -> None:
+def test_upload_attachment_url_encodes_filename_with_special_characters(tmp_path) -> None:
     shot = tmp_path / "shot.png"
     shot.write_bytes(b"fake-png-bytes")
     session = MagicMock()
@@ -149,9 +127,7 @@ def test_upload_attachment_url_encodes_filename_with_special_characters(
     assert url.endswith("?fileName=00-my%20screenshot.png")
 
 
-def test_upload_attachment_does_not_double_append_when_already_present(
-    tmp_path,
-) -> None:
+def test_upload_attachment_does_not_double_append_when_already_present(tmp_path) -> None:
     # The real API echoes the fileName query param it was given back in `url` — must not
     # append a second one on top (that would produce a malformed `?fileName=x?fileName=x`).
     shot = tmp_path / "shot.png"
@@ -164,10 +140,7 @@ def test_upload_attachment_does_not_double_append_when_already_present(
 
     _, url = upload_attachment(session, REMOTE, "shot.png", str(shot))
 
-    assert (
-        url
-        == "https://dev.azure.com/myorg/MyProj/_apis/wit/attachments/abc-123?fileName=shot.png"
-    )
+    assert url == "https://dev.azure.com/myorg/MyProj/_apis/wit/attachments/abc-123?fileName=shot.png"
 
 
 def test_build_update_ops_empty_when_nothing_given() -> None:
@@ -180,13 +153,7 @@ def test_build_update_ops_only_touches_given_fields() -> None:
 
 
 def test_build_update_ops_all_fields() -> None:
-    ops = build_update_ops(
-        title="T",
-        description="D",
-        area_path="Proj\\Team",
-        tags=["a", "b"],
-        state="Resolved",
-    )
+    ops = build_update_ops(title="T", description="D", area_path="Proj\\Team", tags=["a", "b"], state="Resolved")
     paths = {op["path"]: op["value"] for op in ops}
     assert paths == {
         "/fields/System.Title": "T",
@@ -206,24 +173,16 @@ def test_build_update_ops_empty_tags_list_clears_tags() -> None:
 
 def test_build_update_ops_opts_description_into_markdown_formatting() -> None:
     ops = build_update_ops(description="## Heading")
-    assert {
-        "op": "add",
-        "path": "/multilineFieldsFormat/System.Description",
-        "value": "Markdown",
-    } in ops
+    assert {"op": "add", "path": "/multilineFieldsFormat/System.Description", "value": "Markdown"} in ops
 
 
 def test_build_update_ops_no_markdown_format_op_without_description() -> None:
     ops = build_update_ops(title="New title")
-    assert not any(
-        op["path"] == "/multilineFieldsFormat/System.Description" for op in ops
-    )
+    assert not any(op["path"] == "/multilineFieldsFormat/System.Description" for op in ops)
 
 
 def test_html_url_present() -> None:
-    work_item = {
-        "_links": {"html": {"href": "https://dev.azure.com/org/web/wi.aspx?id=12"}}
-    }
+    work_item = {"_links": {"html": {"href": "https://dev.azure.com/org/web/wi.aspx?id=12"}}}
     assert html_url(work_item) == "https://dev.azure.com/org/web/wi.aspx?id=12"
 
 
@@ -232,10 +191,7 @@ def test_html_url_missing() -> None:
 
 
 def test_edit_url() -> None:
-    assert (
-        edit_url(AdoRemote(org="myorg", project="MyProj", repo="myrepo"), 42)
-        == "https://dev.azure.com/myorg/MyProj/_workitems/edit/42"
-    )
+    assert edit_url(AdoRemote(org="myorg", project="MyProj", repo="myrepo"), 42) == "https://dev.azure.com/myorg/MyProj/_workitems/edit/42"
 
 
 def test_build_search_wiql_keywords_only() -> None:
@@ -249,10 +205,7 @@ def test_build_search_wiql_keywords_only() -> None:
 
 def test_build_search_wiql_no_keywords_lists_without_text_filter() -> None:
     wiql = build_search_wiql([], state="all")
-    assert (
-        wiql
-        == "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project ORDER BY [System.ChangedDate] DESC"
-    )
+    assert wiql == "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project ORDER BY [System.ChangedDate] DESC"
 
 
 def test_build_search_wiql_defaults_to_open_state() -> None:
@@ -306,16 +259,11 @@ def test_build_search_wiql_org_wide_drops_team_project_clause() -> None:
 
 
 def test_build_search_wiql_org_wide_with_no_other_clauses_has_no_where() -> None:
-    assert (
-        build_search_wiql([], state="all", org_wide=True)
-        == "SELECT [System.Id] FROM WorkItems ORDER BY [System.ChangedDate] DESC"
-    )
+    assert build_search_wiql([], state="all", org_wide=True) == "SELECT [System.Id] FROM WorkItems ORDER BY [System.ChangedDate] DESC"
 
 
 def test_build_search_wiql_not_org_wide_still_scopes_to_project() -> None:
-    assert "[System.TeamProject] = @project" in build_search_wiql(
-        ["auth"], org_wide=False
-    )
+    assert "[System.TeamProject] = @project" in build_search_wiql(["auth"], org_wide=False)
 
 
 def test_edit_url_org_wide_uses_given_project_not_remote_project() -> None:
@@ -347,9 +295,7 @@ def test_run_wiql_project_scoped_by_default() -> None:
 
 def test_get_work_items_org_wide_requests_team_project_field() -> None:
     session = MagicMock()
-    session.get.return_value.json.return_value = {
-        "value": [{"id": 1, "fields": {"System.TeamProject": "OtherProj"}}]
-    }
+    session.get.return_value.json.return_value = {"value": [{"id": 1, "fields": {"System.TeamProject": "OtherProj"}}]}
 
     get_work_items(session, REMOTE, [1], org_wide=True)
 
@@ -369,16 +315,7 @@ def test_search_org_wide_prints_project_prefix(capsys) -> None:
     session = MagicMock()
     session.post.return_value.json.return_value = {"workItems": [{"id": 1}]}
     session.get.return_value.json.return_value = {
-        "value": [
-            {
-                "id": 1,
-                "fields": {
-                    "System.Title": "Some bug",
-                    "System.State": "Active",
-                    "System.TeamProject": "OtherProj",
-                },
-            }
-        ]
+        "value": [{"id": 1, "fields": {"System.Title": "Some bug", "System.State": "Active", "System.TeamProject": "OtherProj"}}]
     }
 
     items = search(session, REMOTE, [], org_wide=True)
@@ -395,9 +332,7 @@ def test_search_org_wide_prints_project_prefix(capsys) -> None:
 def test_get_work_item_tags_parses_semicolon_separated_field() -> None:
     session = MagicMock()
     session.get.return_value.status_code = 200
-    session.get.return_value.json.return_value = {
-        "fields": {"System.Tags": "one; two; three"}
-    }
+    session.get.return_value.json.return_value = {"fields": {"System.Tags": "one; two; three"}}
 
     assert get_work_item_tags(session, REMOTE, 123) == ["one", "two", "three"]
 
@@ -426,9 +361,7 @@ def test_add_tag_merges_with_existing_tags() -> None:
 def test_add_tag_is_noop_when_tag_already_present_case_insensitively() -> None:
     session = MagicMock()
     session.get.return_value.status_code = 200
-    session.get.return_value.json.return_value = {
-        "fields": {"System.Tags": "PR-Available; other"}
-    }
+    session.get.return_value.json.return_value = {"fields": {"System.Tags": "PR-Available; other"}}
 
     add_tag(session, REMOTE, 123, "pr-available")
 

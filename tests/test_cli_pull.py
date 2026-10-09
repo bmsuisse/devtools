@@ -7,9 +7,7 @@ runner = CliRunner()
 
 def test_pull_cli_defaults(monkeypatch) -> None:
     captured: dict = {}
-    monkeypatch.setattr(
-        "bmsdna.devtools.cli.pull_mod.run", lambda **kwargs: captured.update(kwargs)
-    )
+    monkeypatch.setattr("bmsdna.devtools.cli.pull_mod.run", lambda **kwargs: captured.update(kwargs))
 
     result = runner.invoke(app, ["pull"])
 
@@ -24,13 +22,9 @@ def test_pull_cli_defaults(monkeypatch) -> None:
 
 def test_pull_cli_passes_options_through(monkeypatch) -> None:
     captured: dict = {}
-    monkeypatch.setattr(
-        "bmsdna.devtools.cli.pull_mod.run", lambda **kwargs: captured.update(kwargs)
-    )
+    monkeypatch.setattr("bmsdna.devtools.cli.pull_mod.run", lambda **kwargs: captured.update(kwargs))
 
-    result = runner.invoke(
-        app, ["pull", "--remote", "upstream", "--no-default", "--dry-run"]
-    )
+    result = runner.invoke(app, ["pull", "--remote", "upstream", "--no-default", "--dry-run"])
 
     assert result.exit_code == 0, result.output
     assert captured == {
@@ -41,13 +35,9 @@ def test_pull_cli_passes_options_through(monkeypatch) -> None:
     }
 
 
-def test_pull_cli_passes_through_extra_git_pull_flags_after_double_dash(
-    monkeypatch,
-) -> None:
+def test_pull_cli_passes_through_extra_git_pull_flags_after_double_dash(monkeypatch) -> None:
     captured: dict = {}
-    monkeypatch.setattr(
-        "bmsdna.devtools.cli.pull_mod.run", lambda **kwargs: captured.update(kwargs)
-    )
+    monkeypatch.setattr("bmsdna.devtools.cli.pull_mod.run", lambda **kwargs: captured.update(kwargs))
 
     result = runner.invoke(app, ["pull", "--", "--rebase", "--ff-only"])
 

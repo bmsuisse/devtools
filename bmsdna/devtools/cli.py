@@ -15,13 +15,7 @@ import requests
 import typer
 from pgdevkit.testdb import constants as pgdevkit_constants
 
-from . import (
-    ado_issue,
-    api_usage as api_usage_mod,
-    app_service_logs,
-    commit as commit_mod,
-    dead_code as dead_code_mod,
-)
+from . import ado_issue, api_usage as api_usage_mod, app_service_logs, commit as commit_mod, dead_code as dead_code_mod
 from . import env_config
 from . import env_files as env_files_mod
 from . import find_repo as find_repo_mod
@@ -31,25 +25,11 @@ from . import find_injection as find_injection_mod
 from . import lint as lint_mod
 from . import logs as logs_mod
 from . import translate as translate_mod
-from . import (
-    pr_build,
-    pr_info as pr_info_mod,
-    pr_issue_link,
-    pr_labels,
-    pull as pull_mod,
-    worktree as worktree_mod,
-)
+from . import pr_build, pr_info as pr_info_mod, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
 from .bdt_config import find_pyproject, load_bdt_table
 from .cli_tools import CLI_TIMEOUT_SECS, detect_agent_session, require_az, require_gh
-from .gitrepo import (
-    AdoRemote,
-    GitHubRemote,
-    UnknownRemoteError,
-    current_branch,
-    current_remote,
-    head_commit_subject,
-)
+from .gitrepo import AdoRemote, GitHubRemote, UnknownRemoteError, current_branch, current_remote, head_commit_subject
 from .lint_findings import render_findings
 
 # Non-ASCII output (checkmarks, en-dashes in ADO project names, etc.) needs a
@@ -89,26 +69,16 @@ def main(
     pass
 
 
-pr_app = typer.Typer(
-    name="pr",
-    help="Pull request commands (Azure DevOps or GitHub, auto-detected from the git remote)",
-)
+pr_app = typer.Typer(name="pr", help="Pull request commands (Azure DevOps or GitHub, auto-detected from the git remote)")
 app.add_typer(pr_app, name="pr")
 
-translate_app = typer.Typer(
-    name="translate", help="Generate <lng>.json files from translations.toml"
-)
+translate_app = typer.Typer(name="translate", help="Generate <lng>.json files from translations.toml")
 app.add_typer(translate_app, name="translate")
 
-env_app = typer.Typer(
-    name="env", help="Inspect .env files without exposing their values"
-)
+env_app = typer.Typer(name="env", help="Inspect .env files without exposing their values")
 app.add_typer(env_app, name="env")
 
-issue_app = typer.Typer(
-    name="issue",
-    help="Issue / work item commands (Azure DevOps or GitHub, auto-detected from the git remote)",
-)
+issue_app = typer.Typer(name="issue", help="Issue / work item commands (Azure DevOps or GitHub, auto-detected from the git remote)")
 app.add_typer(issue_app, name="issue")
 
 issue_comment_app = typer.Typer(name="comment", help="Comment on an issue / work item")
@@ -130,16 +100,10 @@ app.add_typer(cleanup_app, name="cleanup")
 # docstring -- so defaulting to anything else would make the two halves of
 # `bdt cleanup orphaned-dbs` silently target different Postgres instances).
 _PG_HOST_OPTION = typer.Option(
-    pgdevkit_constants.HOST,
-    "--pg-host",
-    envvar="PGHOST",
-    help="Postgres host to connect to (default: pgdevkit's own test-container host)",
+    pgdevkit_constants.HOST, "--pg-host", envvar="PGHOST", help="Postgres host to connect to (default: pgdevkit's own test-container host)"
 )
 _PG_PORT_OPTION = typer.Option(
-    pgdevkit_constants.PORT,
-    "--pg-port",
-    envvar="PGPORT",
-    help="Postgres port to connect to (default: pgdevkit's own test-container port)",
+    pgdevkit_constants.PORT, "--pg-port", envvar="PGPORT", help="Postgres port to connect to (default: pgdevkit's own test-container port)"
 )
 _PG_USER_OPTION = typer.Option(
     None,
@@ -153,9 +117,7 @@ _PG_USER_OPTION = typer.Option(
 )
 
 
-def _resolve_ado_pr(
-    pat: str | None, remote: AdoRemote, target: str | None, pr_id: int | None = None
-) -> tuple[requests.Session, dict]:
+def _resolve_ado_pr(pat: str | None, remote: AdoRemote, target: str | None, pr_id: int | None = None) -> tuple[requests.Session, dict]:
     """Resolve the PR to act on -- by `pr_id` directly if given (no branch involved at all,
     so this works even without that PR's branch checked out locally), else by searching for
     the current branch's PR into `target`, as before.
@@ -169,14 +131,10 @@ def _resolve_ado_pr(
     return session, pr
 
 
-def _current_pr_info(
-    pr_id: int | None, target_branch: str | None, pat: str | None
-) -> pr_info_mod.PrInfo:
+def _current_pr_info(pr_id: int | None, target_branch: str | None, pat: str | None) -> pr_info_mod.PrInfo:
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        return pr_info_mod.github_info(
-            gh_pr.get_pr(require_gh(), pr_id, fields=gh_pr.PR_INFO_FIELDS), remote
-        )
+        return pr_info_mod.github_info(gh_pr.get_pr(require_gh(), pr_id, fields=gh_pr.PR_INFO_FIELDS), remote)
     session, pr = _resolve_ado_pr(pat, remote, target_branch, pr_id=pr_id)
     return pr_info_mod.ado_info(session, pr, remote)
 
@@ -214,9 +172,7 @@ def _after_create(step: Callable[[], None], label: str) -> None:
         print(f"Warning: PR created, but {label} failed: {e}")
 
 
-def _merge_tags_and_labels(
-    tag: list[str] | None, label: list[str] | None
-) -> list[str] | None:
+def _merge_tags_and_labels(tag: list[str] | None, label: list[str] | None) -> list[str] | None:
     """`--tag` (Azure DevOps' term) and `--label` (GitHub's) are aliases of each other -- each
     should route to whichever backend is actually active instead of being silently ignored by
     the other one. Merges the two (deduplicated, case-insensitively, first occurrence wins) into
@@ -238,9 +194,7 @@ def _merge_tags_and_labels(
     return merged
 
 
-def _link_and_label_github(
-    gh: str, remote: GitHubRemote, issue_numbers: list[int]
-) -> None:
+def _link_and_label_github(gh: str, remote: GitHubRemote, issue_numbers: list[int]) -> None:
     """Link every issue in `issue_numbers`, plus every issue `find_issue_refs_in_body` finds in
     the PR's actual body, to the current branch's PR, and label each `pr-available`.
 
@@ -250,11 +204,7 @@ def _link_and_label_github(
     A no-op (no `gh` calls at all) when there's nothing to link.
     """
     pr_number, body = gh_pr.get_pr_body(gh)
-    all_numbers = list(
-        dict.fromkeys(
-            [*issue_numbers, *pr_issue_link.find_issue_refs_in_body(body, remote)]
-        )
-    )
+    all_numbers = list(dict.fromkeys([*issue_numbers, *pr_issue_link.find_issue_refs_in_body(body, remote)]))
     if not all_numbers:
         return
     gh_issue.ensure_pr_available_label(gh)
@@ -269,13 +219,7 @@ def _link_and_label_github(
         raise RuntimeError("; ".join(errors))
 
 
-def _link_and_label_ado(
-    session: requests.Session,
-    remote: AdoRemote,
-    pr_id: int,
-    description: str,
-    issue_numbers: list[int],
-) -> None:
+def _link_and_label_ado(session: requests.Session, remote: AdoRemote, pr_id: int, description: str, issue_numbers: list[int]) -> None:
     """Azure DevOps equivalent of `_link_and_label_github`: link every issue in `issue_numbers`,
     plus every work item `find_issue_refs_in_body` finds in the PR's description, to PR `pr_id`,
     and tag each `pr-available`.
@@ -285,14 +229,7 @@ def _link_and_label_ado(
     collected and surfaced together to the caller (which wraps this in `_after_create`, so they're
     reported as a warning, not a failed `pr create`).
     """
-    all_numbers = list(
-        dict.fromkeys(
-            [
-                *issue_numbers,
-                *pr_issue_link.find_issue_refs_in_body(description, remote),
-            ]
-        )
-    )
+    all_numbers = list(dict.fromkeys([*issue_numbers, *pr_issue_link.find_issue_refs_in_body(description, remote)]))
     errors: list[str] = []
     for number in all_numbers:
         try:
@@ -306,9 +243,7 @@ def _link_and_label_ado(
 
 @pr_app.command("create")
 def pr_create(
-    target: str = typer.Option(
-        DEFAULT_TARGET_BRANCH, "--target", help="Target branch (e.g. dev, main, test)"
-    ),
+    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch (e.g. dev, main, test)"),
     draft: bool = typer.Option(
         True,
         "--draft/--no-draft",
@@ -324,14 +259,10 @@ def pr_create(
         "on the HEAD commit's conventional-commit scope (e.g. `feat(customers): ...` -> a configured label).",
     ),
     screenshot: list[str] = typer.Option(
-        [],
-        "--screenshot",
-        help="Path to an image to attach to the PR description (repeatable)",
+        [], "--screenshot", help="Path to an image to attach to the PR description (repeatable)"
     ),
     file: list[str] = typer.Option(
-        [],
-        "--file",
-        help="Path to an arbitrary file to attach to the PR description as a linked attachment (repeatable)",
+        [], "--file", help="Path to an arbitrary file to attach to the PR description as a linked attachment (repeatable)"
     ),
     issue: list[str] = typer.Option(
         [],
@@ -347,16 +278,12 @@ def pr_create(
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
         help="Azure DevOps PAT (else falls back to `az` login)",
     ),
-    args: list[str] = typer.Argument(
-        None, help="Extra args passed through to `az repos pr create` / `gh pr create`"
-    ),
+    args: list[str] = typer.Argument(None, help="Extra args passed through to `az repos pr create` / `gh pr create`"),
 ) -> None:
     """Create a PR from the current branch into --target (Azure DevOps or GitHub, auto-detected)."""
     for path in screenshot:
         if not Path(path).is_file():
-            raise typer.BadParameter(
-                f"Screenshot not found: {path}", param_hint="--screenshot"
-            )
+            raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
     for path in file:
         if not Path(path).is_file():
             raise typer.BadParameter(f"File not found: {path}", param_hint="--file")
@@ -365,21 +292,13 @@ def pr_create(
     if scope_label_map:
         scope = commit_mod.conventional_commit_scope(head_commit_subject())
         auto_label = pr_labels.label_for_scope(scope_label_map, scope)
-        if auto_label and auto_label.lower() not in {
-            existing.lower() for existing in label
-        }:
-            print(
-                f"Auto-applying label '{auto_label}' for scope '{scope}' ([tool.bdt.pr.scope_labels])"
-            )
+        if auto_label and auto_label.lower() not in {existing.lower() for existing in label}:
+            print(f"Auto-applying label '{auto_label}' for scope '{scope}' ([tool.bdt.pr.scope_labels])")
             label = [*label, auto_label]
 
-    missing_groups = pr_labels.missing_label_groups(
-        pr_labels.required_label_groups(), label
-    )
+    missing_groups = pr_labels.missing_label_groups(pr_labels.required_label_groups(), label)
     if missing_groups:
-        raise typer.BadParameter(
-            pr_labels.format_missing_groups_error(missing_groups), param_hint="--label"
-        )
+        raise typer.BadParameter(pr_labels.format_missing_groups_error(missing_groups), param_hint="--label")
 
     remote = current_remote()
 
@@ -396,43 +315,23 @@ def pr_create(
     pr_url: str | None = None
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
-        returncode, pr_url = gh_pr.create(
-            gh, target, args or [], draft=draft, labels=label
-        )
+        returncode, pr_url = gh_pr.create(gh, target, args or [], draft=draft, labels=label)
         build_policy = gh_pr.has_build_policy(gh, target)
         if returncode == 0 and (screenshot or file):
-            _after_create(
-                lambda: gh_pr.add_attachments(
-                    gh, remote.owner, remote.repo, source_branch, screenshot, file
-                ),
-                "attaching screenshots/files",
-            )
+            _after_create(lambda: gh_pr.add_attachments(gh, remote.owner, remote.repo, source_branch, screenshot, file), "attaching screenshots/files")
         if returncode == 0:
-            _after_create(
-                lambda: _link_and_label_github(gh, remote, issue_numbers),
-                "linking issue(s) / setting 'pr-available' label",
-            )
+            _after_create(lambda: _link_and_label_github(gh, remote, issue_numbers), "linking issue(s) / setting 'pr-available' label")
     else:
         az = require_az()
         cmd = [
-            az,
-            "repos",
-            "pr",
-            "create",
-            "--organization",
-            f"https://dev.azure.com/{remote.org}",
-            "--project",
-            remote.project,
-            "--repository",
-            remote.repo,
-            "--target-branch",
-            target,
-            "--source-branch",
-            source_branch,
-            "--auto-complete",
-            "false",
-            "--output",
-            "json",
+            az, "repos", "pr", "create",
+            "--organization", f"https://dev.azure.com/{remote.org}",
+            "--project", remote.project,
+            "--repository", remote.repo,
+            "--target-branch", target,
+            "--source-branch", source_branch,
+            "--auto-complete", "false",
+            "--output", "json",
             *(["--draft", "true"] if draft else []),
             *(["--labels", *label] if label else []),
             *(args or []),
@@ -452,31 +351,24 @@ def pr_create(
         if pr_json is not None:
             # Concise summary instead of the raw `az` JSON blob — the web
             # link printed below is the part a human actually needs.
-            print(
-                f"PR #{pr_json.get('pullRequestId', '?')}: {pr_json.get('title', '?')}"
-            )
+            print(f"PR #{pr_json.get('pullRequestId', '?')}: {pr_json.get('title', '?')}")
             try:
                 pr_url = pr_build.pr_web_url(remote, pr_json["pullRequestId"])
-            except KeyError, TypeError:
+            except (KeyError, TypeError):
                 pr_url = None
         elif isinstance(r.stdout, str) and r.stdout.strip():
             print(r.stdout.rstrip())
         session = requests.Session()
         session.headers.update(auth_header(pat))
         build_policy = pr_build.has_build_policy(session, remote, target)
-        if returncode == 0 and (
-            detect_agent_session() is not None or screenshot or file
-        ):
-
+        if returncode == 0 and (detect_agent_session() is not None or screenshot or file):
             def _finish() -> None:
                 pr = pr_build.get_pr(session, remote, source_branch, target)
                 if screenshot or file:
                     pr = pr_build.add_attachments(session, remote, pr, screenshot, file)
                 pr_build.ensure_session_note(session, remote, pr)
 
-            _after_create(
-                _finish, "attaching screenshots/files and/or noting the agent session"
-            )
+            _after_create(_finish, "attaching screenshots/files and/or noting the agent session")
         if returncode == 0:
             # Fetches the PR fresh via `pr_build.get_pr` rather than trusting `pr_json` -- `az`
             # can exit 0 with stdout that isn't clean JSON (e.g. a deprecation banner ahead of
@@ -485,25 +377,15 @@ def pr_create(
             # best-effort step here.
             def _link_issues() -> None:
                 pr = pr_build.get_pr(session, remote, source_branch, target)
-                _link_and_label_ado(
-                    session,
-                    remote,
-                    pr["pullRequestId"],
-                    pr.get("description") or "",
-                    issue_numbers,
-                )
+                _link_and_label_ado(session, remote, pr["pullRequestId"], pr.get("description") or "", issue_numbers)
 
-            _after_create(
-                _link_issues, "linking work item(s) / setting 'pr-available' tag"
-            )
+            _after_create(_link_issues, "linking work item(s) / setting 'pr-available' tag")
 
     if returncode == 0 and pr_url:
         print(f"\n{pr_url}")
 
     if returncode == 0 and draft:
-        print(
-            "\nCreated as a draft PR. Run `bdt pr publish` to mark it ready for review."
-        )
+        print("\nCreated as a draft PR. Run `bdt pr publish` to mark it ready for review.")
 
     if returncode == 0 and build_policy:
         print("\nRun `bdt pr status` to check whether the CI build passes.")
@@ -513,11 +395,7 @@ def pr_create(
 
 @pr_app.command("publish")
 def pr_publish(
-    target: str = typer.Option(
-        DEFAULT_TARGET_BRANCH,
-        "--target",
-        help="Target branch of the PR (Azure DevOps only)",
-    ),
+    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch of the PR (Azure DevOps only)"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -539,23 +417,10 @@ def pr_publish(
 
 @pr_app.command("status")
 def pr_status(
-    target_branch: str | None = typer.Option(
-        None,
-        "--target-branch",
-        help="Only consider PRs into this target branch (Azure DevOps only; default: any target — gh has no such filter, it always resolves the PR for the current branch)",
-    ),
-    wait: bool = typer.Option(
-        False,
-        "--wait",
-        help="Poll until all pipelines/checks are completed; stops early and reports status if one needs manual approval",
-    ),
+    target_branch: str | None = typer.Option(None, "--target-branch", help="Only consider PRs into this target branch (Azure DevOps only; default: any target — gh has no such filter, it always resolves the PR for the current branch)"),
+    wait: bool = typer.Option(False, "--wait", help="Poll until all pipelines/checks are completed; stops early and reports status if one needs manual approval"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
-    pat: str | None = typer.Option(
-        None,
-        "--pat",
-        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
-        help="Azure DevOps PAT (else falls back to `az` login)",
-    ),
+    pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
 ) -> None:
     """Show build/check status for the PR opened from the current branch, or for --pr-id
     directly (Azure DevOps or GitHub, auto-detected).
@@ -569,23 +434,10 @@ def pr_status(
 
 @pr_app.command("info")
 def pr_info(
-    as_json: bool = typer.Option(
-        False,
-        "--json",
-        help="Print machine-readable JSON (for status integrations that poll it)",
-    ),
-    target_branch: str | None = typer.Option(
-        None,
-        "--target-branch",
-        help="Only consider PRs into this target branch (Azure DevOps only; default: any target)",
-    ),
+    as_json: bool = typer.Option(False, "--json", help="Print machine-readable JSON (for status integrations that poll it)"),
+    target_branch: str | None = typer.Option(None, "--target-branch", help="Only consider PRs into this target branch (Azure DevOps only; default: any target)"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
-    pat: str | None = typer.Option(
-        None,
-        "--pat",
-        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
-        help="Azure DevOps PAT (else falls back to `az` login)",
-    ),
+    pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
 ) -> None:
     """One-shot summary of the PR opened from the current branch, or --pr-id directly: link, state,
     aggregate build state, and the issue(s)/work item(s) it closes. Exits 1 if there is no such PR.
@@ -595,9 +447,7 @@ def pr_info(
     if as_json:
         typer.echo(json.dumps(info.to_json_dict()))
         return
-    flags = ", ".join(
-        [info.state, *(["draft"] if info.draft else []), f"build: {info.build}"]
-    )
+    flags = ", ".join([info.state, *(["draft"] if info.draft else []), f"build: {info.build}"])
     typer.echo(f"PR #{info.number}: {info.title} ({flags})\n{info.url}")
     for issue in info.issues:
         typer.echo(f"Issue #{issue.number}: {issue.url}")
@@ -605,11 +455,7 @@ def pr_info(
 
 @pr_app.command("retry")
 def pr_retry(
-    target_branch: str = typer.Option(
-        DEFAULT_TARGET_BRANCH,
-        "--target-branch",
-        help="Target branch of the PR (Azure DevOps only)",
-    ),
+    target_branch: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target-branch", help="Target branch of the PR (Azure DevOps only)"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -631,16 +477,8 @@ def pr_retry(
 
 @pr_app.command("watch-deploy")
 def pr_watch_deploy(
-    target_branch: str = typer.Option(
-        DEFAULT_TARGET_BRANCH,
-        "--target-branch",
-        help="Branch to watch for a directly-triggered build/workflow run (e.g. a post-merge deployment pipeline)",
-    ),
-    wait: bool = typer.Option(
-        False,
-        "--wait",
-        help="Poll until the build/workflow run(s) are completed; stops early and reports status if one needs manual approval",
-    ),
+    target_branch: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target-branch", help="Branch to watch for a directly-triggered build/workflow run (e.g. a post-merge deployment pipeline)"),
+    wait: bool = typer.Option(False, "--wait", help="Poll until the build/workflow run(s) are completed; stops early and reports status if one needs manual approval"),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -669,20 +507,12 @@ def pr_update(
         None, "--description", help="New PR description (replaces the existing one)"
     ),
     screenshot: list[str] = typer.Option(
-        [],
-        "--screenshot",
-        help="Path to an image to append to the PR description (repeatable)",
+        [], "--screenshot", help="Path to an image to append to the PR description (repeatable)"
     ),
     file: list[str] = typer.Option(
-        [],
-        "--file",
-        help="Path to an arbitrary file to append to the PR description as a linked attachment (repeatable)",
+        [], "--file", help="Path to an arbitrary file to append to the PR description as a linked attachment (repeatable)"
     ),
-    target: str = typer.Option(
-        DEFAULT_TARGET_BRANCH,
-        "--target",
-        help="Target branch of the PR (Azure DevOps only)",
-    ),
+    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch of the PR (Azure DevOps only)"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -696,16 +526,12 @@ def pr_update(
     """
     for path in screenshot:
         if not Path(path).is_file():
-            raise typer.BadParameter(
-                f"Screenshot not found: {path}", param_hint="--screenshot"
-            )
+            raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
     for path in file:
         if not Path(path).is_file():
             raise typer.BadParameter(f"File not found: {path}", param_hint="--file")
     if title is None and description is None and not screenshot and not file:
-        raise typer.BadParameter(
-            "Provide at least one of --title, --description, --screenshot, --file"
-        )
+        raise typer.BadParameter("Provide at least one of --title, --description, --screenshot, --file")
 
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
@@ -714,17 +540,7 @@ def pr_update(
         # PR anyway, to fetch its current title/body) -- passing `_gh_branch_for` here would
         # just be a second, redundant `gh pr view` round-trip for the same PR.
         branch = current_branch() if pr_id is None else ""
-        gh_pr.update(
-            gh,
-            remote.owner,
-            remote.repo,
-            branch,
-            title,
-            description,
-            screenshot,
-            file,
-            pr_id=pr_id,
-        )
+        gh_pr.update(gh, remote.owner, remote.repo, branch, title, description, screenshot, file, pr_id=pr_id)
     else:
         session, pr = _resolve_ado_pr(pat, remote, target, pr_id=pr_id)
         pr_build.update(session, remote, pr, title, description, screenshot, file)
@@ -737,15 +553,9 @@ def pr_comment(
         [], "--screenshot", help="Path to an image to embed in the comment (repeatable)"
     ),
     file: list[str] = typer.Option(
-        [],
-        "--file",
-        help="Path to an arbitrary file to link in the comment as an attachment (repeatable)",
+        [], "--file", help="Path to an arbitrary file to link in the comment as an attachment (repeatable)"
     ),
-    target: str = typer.Option(
-        DEFAULT_TARGET_BRANCH,
-        "--target",
-        help="Target branch of the PR (Azure DevOps only)",
-    ),
+    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch of the PR (Azure DevOps only)"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -759,49 +569,28 @@ def pr_comment(
     """
     for path in screenshot:
         if not Path(path).is_file():
-            raise typer.BadParameter(
-                f"Screenshot not found: {path}", param_hint="--screenshot"
-            )
+            raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
     for path in file:
         if not Path(path).is_file():
             raise typer.BadParameter(f"File not found: {path}", param_hint="--file")
     if not message and not screenshot and not file:
-        raise typer.BadParameter(
-            "Provide at least one of --message, --screenshot, --file"
-        )
+        raise typer.BadParameter("Provide at least one of --message, --screenshot, --file")
 
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
         branch = _gh_branch_for(gh, pr_id, needed=bool(screenshot or file))
-        gh_pr.comment_with_screenshots(
-            gh,
-            remote.owner,
-            remote.repo,
-            branch,
-            message,
-            screenshot,
-            file,
-            pr_id=pr_id,
-        )
+        gh_pr.comment_with_screenshots(gh, remote.owner, remote.repo, branch, message, screenshot, file, pr_id=pr_id)
     else:
         session, pr = _resolve_ado_pr(pat, remote, target, pr_id=pr_id)
-        pr_build.comment_with_screenshots(
-            session, remote, pr["pullRequestId"], message, screenshot, file
-        )
+        pr_build.comment_with_screenshots(session, remote, pr["pullRequestId"], message, screenshot, file)
 
 
 @issue_app.command("create")
 def issue_create(
     title: str = typer.Option(..., "--title", help="Issue / work item title"),
-    description: str | None = typer.Option(
-        None, "--description", help="Issue / work item description body"
-    ),
-    type_: str = typer.Option(
-        "Bug",
-        "--type",
-        help="Work item type, e.g. Bug, Task, User Story (Azure DevOps only)",
-    ),
+    description: str | None = typer.Option(None, "--description", help="Issue / work item description body"),
+    type_: str = typer.Option("Bug", "--type", help="Work item type, e.g. Bug, Task, User Story (Azure DevOps only)"),
     board: str | None = typer.Option(
         None,
         "--board",
@@ -810,24 +599,16 @@ def issue_create(
         r"(v2) board by title (overrides \[tool.bdt.github].board)",
     ),
     label: list[str] = typer.Option(
-        [],
-        "--label",
-        help="Label/tag to apply (repeatable). Alias for --tag -- routes to labels on GitHub, tags on Azure DevOps.",
+        [], "--label", help="Label/tag to apply (repeatable). Alias for --tag -- routes to labels on GitHub, tags on Azure DevOps."
     ),
     tag: list[str] = typer.Option(
-        [],
-        "--tag",
-        help="Label/tag to apply (repeatable). Alias for --label -- routes to tags on Azure DevOps, labels on GitHub.",
+        [], "--tag", help="Label/tag to apply (repeatable). Alias for --label -- routes to tags on Azure DevOps, labels on GitHub."
     ),
     screenshot: list[str] = typer.Option(
-        [],
-        "--screenshot",
-        help="Path to an image to attach to the issue / work item (repeatable)",
+        [], "--screenshot", help="Path to an image to attach to the issue / work item (repeatable)"
     ),
     file: list[str] = typer.Option(
-        [],
-        "--file",
-        help="Path to an arbitrary file to attach to the issue / work item as a linked attachment (repeatable)",
+        [], "--file", help="Path to an arbitrary file to attach to the issue / work item as a linked attachment (repeatable)"
     ),
     pat: str | None = typer.Option(
         None,
@@ -835,16 +616,12 @@ def issue_create(
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
         help="Azure DevOps PAT (else falls back to `az` login)",
     ),
-    args: list[str] = typer.Argument(
-        None, help="Extra args passed through to `gh issue create` (GitHub only)"
-    ),
+    args: list[str] = typer.Argument(None, help="Extra args passed through to `gh issue create` (GitHub only)"),
 ) -> None:
     """Create a new issue / work item (Azure DevOps or GitHub, auto-detected)."""
     for path in screenshot:
         if not Path(path).is_file():
-            raise typer.BadParameter(
-                f"Screenshot not found: {path}", param_hint="--screenshot"
-            )
+            raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
     for path in file:
         if not Path(path).is_file():
             raise typer.BadParameter(f"File not found: {path}", param_hint="--file")
@@ -854,48 +631,24 @@ def issue_create(
     if isinstance(remote, GitHubRemote):
         resolved_board = gh_issue.resolve_board(board)
         gh_issue.create(
-            require_gh(),
-            remote.owner,
-            remote.repo,
-            title,
-            description,
-            tags_or_labels,
-            screenshot,
-            args or [],
-            file_paths=file,
-            board=resolved_board,
+            require_gh(), remote.owner, remote.repo, title, description, tags_or_labels, screenshot, args or [], file_paths=file, board=resolved_board
         )
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
         resolved_board = ado_issue.resolve_board(board)
-        ado_issue.create(
-            session,
-            remote,
-            type_,
-            title,
-            description,
-            resolved_board,
-            tags_or_labels,
-            screenshot,
-            file,
-        )
+        ado_issue.create(session, remote, type_, title, description, resolved_board, tags_or_labels, screenshot, file)
 
 
 @issue_app.command("search")
 def issue_search(
     keywords: list[str] = typer.Argument(
-        None,
-        help="Keywords to search for (ANDed together); omit to just list issues/work items",
+        None, help="Keywords to search for (ANDed together); omit to just list issues/work items"
     ),
     since_days: int = typer.Option(
-        30,
-        "--since-days",
-        help="Only include issues/work items updated within this many days (0 = no date filter)",
+        30, "--since-days", help="Only include issues/work items updated within this many days (0 = no date filter)"
     ),
-    state: str = typer.Option(
-        "open", "--state", help="Filter by state: 'open', 'closed', or 'all'"
-    ),
+    state: str = typer.Option("open", "--state", help="Filter by state: 'open', 'closed', or 'all'"),
     board: str | None = typer.Option(
         None,
         "--board",
@@ -930,14 +683,10 @@ def issue_search(
         "`issue search`.",
     ),
     label: list[str] = typer.Option(
-        [],
-        "--label",
-        help="Only issues/work items carrying this label/tag, ANDed (repeatable). Alias for --tag.",
+        [], "--label", help="Only issues/work items carrying this label/tag, ANDed (repeatable). Alias for --tag."
     ),
     tag: list[str] = typer.Option(
-        [],
-        "--tag",
-        help="Only issues/work items carrying this label/tag, ANDed (repeatable). Alias for --label.",
+        [], "--tag", help="Only issues/work items carrying this label/tag, ANDed (repeatable). Alias for --label."
     ),
     pat: str | None = typer.Option(
         None,
@@ -950,14 +699,8 @@ def issue_search(
     from the last 30 days (Azure DevOps or GitHub, auto-detected).
     """
     if state not in ("open", "closed", "all"):
-        raise typer.BadParameter(
-            "Must be one of: open, closed, all", param_hint="--state"
-        )
-    since = (
-        (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%Y-%m-%d")
-        if since_days > 0
-        else None
-    )
+        raise typer.BadParameter("Must be one of: open, closed, all", param_hint="--state")
+    since = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%Y-%m-%d") if since_days > 0 else None
     tags_or_labels = _merge_tags_and_labels(tag, label) or []
 
     # --org/--github-org are only ever consulted as a *fallback*, when `current_remote()` itself
@@ -971,11 +714,9 @@ def issue_search(
     if org_wide:
         try:
             remote: AdoRemote | GitHubRemote = current_remote()
-        except SystemExit, UnknownRemoteError:
+        except (SystemExit, UnknownRemoteError):
             if org and github_org:
-                raise typer.BadParameter(
-                    "Pass only one of --org or --github-org", param_hint="--org"
-                ) from None
+                raise typer.BadParameter("Pass only one of --org or --github-org", param_hint="--org") from None
             if github_org:
                 remote = GitHubRemote(github_org, "")
             elif org:
@@ -988,55 +729,24 @@ def issue_search(
     if isinstance(remote, GitHubRemote):
         resolved_board = gh_issue.resolve_board(board)
         gh_issue.search(
-            require_gh(),
-            remote.owner,
-            remote.repo,
-            keywords or [],
-            since,
-            limit,
-            state,
-            board=resolved_board,
-            org_wide=org_wide,
-            labels=tags_or_labels,
+            require_gh(), remote.owner, remote.repo, keywords or [], since, limit, state, board=resolved_board, org_wide=org_wide, labels=tags_or_labels
         )
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
         resolved_board = ado_issue.resolve_board(board)
         ado_issue.search(
-            session,
-            remote,
-            keywords or [],
-            since=since,
-            board=resolved_board,
-            top=limit,
-            state=state,
-            org_wide=org_wide,
-            tags=tags_or_labels,
+            session, remote, keywords or [], since=since, board=resolved_board, top=limit, state=state, org_wide=org_wide, tags=tags_or_labels
         )
 
 
-@issue_app.command(
-    "do", context_settings={"allow_extra_args": True, "ignore_unknown_options": True}
-)
+@issue_app.command("do", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def issue_do(
     ctx: typer.Context,
-    number: int = typer.Argument(
-        ..., help="Issue number (GitHub) or work item ID (Azure DevOps)"
-    ),
-    agent: str = typer.Option(
-        "claude",
-        "--agent",
-        help="Agent executable to start (claude runs headless: `claude -p ... --name '<number>: <title>'`)",
-    ),
-    dry_run: bool = typer.Option(
-        False, "--dry-run", help="Print the agent command instead of running it"
-    ),
-    force: bool = typer.Option(
-        False,
-        "--force",
-        help="Start even if someone else already holds the claim (comments 'Taken by' anyway)",
-    ),
+    number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
+    agent: str = typer.Option("claude", "--agent", help="Agent executable to start (claude runs headless: `claude -p ... --name '<number>: <title>'`)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print the agent command instead of running it"),
+    force: bool = typer.Option(False, "--force", help="Start even if someone else already holds the claim (comments 'Taken by' anyway)"),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -1055,56 +765,22 @@ def issue_do(
         title, body = issue_do_mod.fetch_ado(session, remote, number)
     extra = list(ctx.args)
     # claude can be given the session id up front, so the "Taken by" comment can link the session that will exist
-    session_id = (
-        str(uuid.uuid4()) if agent == "claude" and "--session-id" not in extra else None
-    )
+    session_id = str(uuid.uuid4()) if agent == "claude" and "--session-id" not in extra else None
     if dry_run:
-        typer.echo(
-            f"(dry run: would comment 'Taken by ...' on #{number} first)", err=True
-        )
+        typer.echo(f"(dry run: would comment 'Taken by ...' on #{number} first)", err=True)
     else:
         user = _current_user(remote)
-        if not _take(
-            remote,
-            number,
-            issue_do_mod.take_message(user, agent, session_id),
-            pat,
-            user=user,
-            force=force,
-            agent_note=False,
-        ):
+        if not _take(remote, number, issue_do_mod.take_message(user, agent, session_id), pat, user=user, force=force, agent_note=False):
             raise typer.Exit(1)
-    issue_do_mod.run(
-        number,
-        title,
-        body,
-        agent=agent,
-        extra=extra,
-        dry_run=dry_run,
-        session_id=session_id,
-    )
+    issue_do_mod.run(number, title, body, agent=agent, extra=extra, dry_run=dry_run, session_id=session_id)
 
 
 @issue_app.command("take")
 def issue_take(
-    number: int | None = typer.Argument(
-        None,
-        help="Issue number (GitHub) or work item ID (Azure DevOps). Default: the issue the current branch's PR closes",
-    ),
-    target_branch: str | None = typer.Option(
-        None,
-        "--target-branch",
-        help="Only consider PRs into this target branch (Azure DevOps only; default: any target; only used to find the issue when no number is given)",
-    ),
-    force: bool = typer.Option(
-        False, "--force", help="Comment even if someone else already holds the claim"
-    ),
-    pat: str | None = typer.Option(
-        None,
-        "--pat",
-        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
-        help="Azure DevOps PAT (else falls back to `az` login)",
-    ),
+    number: int | None = typer.Argument(None, help="Issue number (GitHub) or work item ID (Azure DevOps). Default: the issue the current branch's PR closes"),
+    target_branch: str | None = typer.Option(None, "--target-branch", help="Only consider PRs into this target branch (Azure DevOps only; default: any target; only used to find the issue when no number is given)"),
+    force: bool = typer.Option(False, "--force", help="Comment even if someone else already holds the claim"),
+    pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
 ) -> None:
     """Claim an issue / work item: comment "Taken by <you>" on it, with this coding agent's
     session link (detected automatically) so others can see who is working on it and find the session.
@@ -1120,14 +796,7 @@ def issue_take(
             )
         number = issues[0].number
     user = _current_user(remote)
-    if not _take(
-        remote,
-        number,
-        f"{issue_do_mod.TAKEN_PREFIX} {user}",
-        pat,
-        user=user,
-        force=force,
-    ):
+    if not _take(remote, number, f"{issue_do_mod.TAKEN_PREFIX} {user}", pat, user=user, force=force):
         raise typer.Exit(1)
 
 
@@ -1149,28 +818,18 @@ def _take(
     if issue_do_mod.is_take_comment(last):
         claimant = issue_do_mod.claimant(last)
         if claimant.casefold() == user.casefold():
-            typer.echo(
-                f"{kind.capitalize()} #{number} is already taken by you (its last comment says so) -- not commenting again"
-            )
+            typer.echo(f"{kind.capitalize()} #{number} is already taken by you (its last comment says so) -- not commenting again")
             return True
         if not force:
-            typer.echo(
-                f"{kind.capitalize()} #{number} is already taken by {claimant} -- pass --force to take it anyway",
-                err=True,
-            )
+            typer.echo(f"{kind.capitalize()} #{number} is already taken by {claimant} -- pass --force to take it anyway", err=True)
             return False
-        typer.echo(
-            f"{kind.capitalize()} #{number} was taken by {claimant} -- taking it anyway (--force)",
-            err=True,
-        )
+        typer.echo(f"{kind.capitalize()} #{number} was taken by {claimant} -- taking it anyway (--force)", err=True)
     typer.echo(f"Taking {kind} #{number}")
     _comment_on_issue(remote, number, message, pat, agent_note=agent_note)
     return True
 
 
-def _last_comment(
-    remote: AdoRemote | GitHubRemote, number: int, pat: str | None
-) -> str | None:
+def _last_comment(remote: AdoRemote | GitHubRemote, number: int, pat: str | None) -> str | None:
     if isinstance(remote, GitHubRemote):
         return gh_issue.last_comment(require_gh(), remote.owner, remote.repo, number)
     session = requests.Session()
@@ -1178,30 +837,13 @@ def _last_comment(
     return ado_issue.last_comment(session, remote, number)
 
 
-def _comment_on_issue(
-    remote: AdoRemote | GitHubRemote,
-    number: int,
-    message: str,
-    pat: str | None,
-    *,
-    agent_note: bool = True,
-) -> None:
+def _comment_on_issue(remote: AdoRemote | GitHubRemote, number: int, message: str, pat: str | None, *, agent_note: bool = True) -> None:
     if isinstance(remote, GitHubRemote):
-        gh_issue.comment(
-            require_gh(),
-            remote.owner,
-            remote.repo,
-            number,
-            message,
-            [],
-            agent_note=agent_note,
-        )
+        gh_issue.comment(require_gh(), remote.owner, remote.repo, number, message, [], agent_note=agent_note)
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
-        ado_issue.comment_with_screenshots(
-            session, remote, number, message, [], [], agent_note=agent_note
-        )
+        ado_issue.comment_with_screenshots(session, remote, number, message, [], [], agent_note=agent_note)
 
 
 def _current_user(remote: AdoRemote | GitHubRemote) -> str:
@@ -1221,26 +863,16 @@ def _capture(cmd: list[str]) -> subprocess.CompletedProcess | None:
     """Run `cmd` for its UTF-8 output, bounded so a stalled `gh` (expired login prompting) can't hang the
     caller; None on timeout."""
     try:
-        return subprocess.run(
-            cmd,
-            capture_output=True,
-            encoding="utf-8",
-            timeout=CLI_TIMEOUT_SECS,
-            check=False,
-        )
+        return subprocess.run(cmd, capture_output=True, encoding="utf-8", timeout=CLI_TIMEOUT_SECS, check=False)
     except subprocess.TimeoutExpired:
         return None
 
 
 @issue_app.command("update")
 def issue_update(
-    number: int = typer.Argument(
-        ..., help="Issue number (GitHub) or work item ID (Azure DevOps)"
-    ),
+    number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
     title: str | None = typer.Option(None, "--title", help="New title"),
-    description: str | None = typer.Option(
-        None, "--description", help="New description body (replaces the existing one)"
-    ),
+    description: str | None = typer.Option(None, "--description", help="New description body (replaces the existing one)"),
     board: str | None = typer.Option(
         None,
         "--board",
@@ -1264,9 +896,7 @@ def issue_update(
         "combined with --remove-tag/--remove-label if also given).",
     ),
     label: list[str] | None = typer.Option(
-        None,
-        "--label",
-        help="Tag/label to add (repeatable); omit to leave unchanged. Alias for --tag.",
+        None, "--label", help="Tag/label to add (repeatable); omit to leave unchanged. Alias for --tag."
     ),
     remove_tag: list[str] | None = typer.Option(
         None,
@@ -1275,9 +905,7 @@ def issue_update(
         "the named tag(s), leaving the rest untouched (unlike --tag/--label, which replace the whole set).",
     ),
     remove_label: list[str] | None = typer.Option(
-        None,
-        "--remove-label",
-        help="Tag/label to remove (repeatable). Alias for --remove-tag.",
+        None, "--remove-label", help="Tag/label to remove (repeatable). Alias for --remove-tag."
     ),
     pat: str | None = typer.Option(
         None,
@@ -1291,30 +919,16 @@ def issue_update(
     removals = _merge_tags_and_labels(remove_tag, remove_label)
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_issue.update(
-            require_gh(), number, title, description, tags_or_labels, removals, state
-        )
+        gh_issue.update(require_gh(), number, title, description, tags_or_labels, removals, state)
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
-        ado_issue.update(
-            session,
-            remote,
-            number,
-            title,
-            description,
-            board,
-            tags_or_labels,
-            removals,
-            state,
-        )
+        ado_issue.update(session, remote, number, title, description, board, tags_or_labels, removals, state)
 
 
 @issue_app.command("delete")
 def issue_delete(
-    number: int = typer.Argument(
-        ..., help="Issue number (GitHub) or work item ID (Azure DevOps)"
-    ),
+    number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
     yes: bool = typer.Option(False, "--yes", help="Confirm deletion without prompting"),
     pat: str | None = typer.Option(
         None,
@@ -1342,17 +956,13 @@ def issue_delete(
 
 @issue_comment_app.command("add")
 def issue_comment_add(
-    number: int = typer.Argument(
-        ..., help="Issue number (GitHub) or work item ID (Azure DevOps)"
-    ),
+    number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
     message: str | None = typer.Option(None, "--message", help="Comment text"),
     screenshot: list[str] = typer.Option(
         [], "--screenshot", help="Path to an image to embed in the comment (repeatable)"
     ),
     file: list[str] = typer.Option(
-        [],
-        "--file",
-        help="Path to an arbitrary file to link in the comment as an attachment (repeatable)",
+        [], "--file", help="Path to an arbitrary file to link in the comment as an attachment (repeatable)"
     ),
     pat: str | None = typer.Option(
         None,
@@ -1364,38 +974,26 @@ def issue_comment_add(
     """Post a comment on an issue / work item (Azure DevOps or GitHub, auto-detected)."""
     for path in screenshot:
         if not Path(path).is_file():
-            raise typer.BadParameter(
-                f"Screenshot not found: {path}", param_hint="--screenshot"
-            )
+            raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
     for path in file:
         if not Path(path).is_file():
             raise typer.BadParameter(f"File not found: {path}", param_hint="--file")
     if not message and not screenshot and not file:
-        raise typer.BadParameter(
-            "Provide at least one of --message, --screenshot, --file"
-        )
+        raise typer.BadParameter("Provide at least one of --message, --screenshot, --file")
 
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_issue.comment(
-            require_gh(), remote.owner, remote.repo, number, message, screenshot, file
-        )
+        gh_issue.comment(require_gh(), remote.owner, remote.repo, number, message, screenshot, file)
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
-        ado_issue.comment_with_screenshots(
-            session, remote, number, message, screenshot, file
-        )
+        ado_issue.comment_with_screenshots(session, remote, number, message, screenshot, file)
 
 
 @issue_comment_app.command("update")
 def issue_comment_update(
-    number: int = typer.Argument(
-        ..., help="Issue number (GitHub) or work item ID (Azure DevOps)"
-    ),
-    comment_id: int = typer.Argument(
-        ..., help="Comment ID, as printed by `issue comment add`"
-    ),
+    number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
+    comment_id: int = typer.Argument(..., help="Comment ID, as printed by `issue comment add`"),
     message: str = typer.Option(..., "--message", help="New comment text"),
     pat: str | None = typer.Option(
         None,
@@ -1407,9 +1005,7 @@ def issue_comment_update(
     """Edit an existing comment on an issue / work item (Azure DevOps or GitHub, auto-detected)."""
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_issue.update_comment(
-            require_gh(), remote.owner, remote.repo, str(comment_id), message
-        )
+        gh_issue.update_comment(require_gh(), remote.owner, remote.repo, str(comment_id), message)
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
@@ -1418,12 +1014,8 @@ def issue_comment_update(
 
 @issue_comment_app.command("delete")
 def issue_comment_delete(
-    number: int = typer.Argument(
-        ..., help="Issue number (GitHub) or work item ID (Azure DevOps)"
-    ),
-    comment_id: int = typer.Argument(
-        ..., help="Comment ID, as printed by `issue comment add`"
-    ),
+    number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
+    comment_id: int = typer.Argument(..., help="Comment ID, as printed by `issue comment add`"),
     yes: bool = typer.Option(False, "--yes", help="Confirm deletion without prompting"),
     pat: str | None = typer.Option(
         None,
@@ -1438,9 +1030,7 @@ def issue_comment_delete(
 
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_issue.delete_comment(
-            require_gh(), remote.owner, remote.repo, str(comment_id)
-        )
+        gh_issue.delete_comment(require_gh(), remote.owner, remote.repo, str(comment_id))
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
@@ -1450,34 +1040,14 @@ def issue_comment_delete(
 @app.command()
 def worktree(
     name: str,
-    base: str = typer.Option(
-        "dev", "--base", help="Branch to base the new worktree on"
-    ),
-    env_file: str | None = typer.Option(
-        None,
-        "--env-file",
-        help="File to copy into the worktree as .env (default: auto-detect .local_env then .env)",
-    ),
-    submodules: bool = typer.Option(
-        True,
-        "--submodules/--no-submodules",
-        help="Run `git submodule update --init` in the new worktree",
-    ),
-    install: str | None = typer.Option(
-        None,
-        "--install",
-        help="Shell command to run inside the new worktree after creation, e.g. 'just install'",
-    ),
+    base: str = typer.Option("dev", "--base", help="Branch to base the new worktree on"),
+    env_file: str | None = typer.Option(None, "--env-file", help="File to copy into the worktree as .env (default: auto-detect .local_env then .env)"),
+    submodules: bool = typer.Option(True, "--submodules/--no-submodules", help="Run `git submodule update --init` in the new worktree"),
+    install: str | None = typer.Option(None, "--install", help="Shell command to run inside the new worktree after creation, e.g. 'just install'"),
 ) -> None:
     """Create a git worktree under .worktrees/<name>, mirroring the `just worktree` recipe."""
     install_cmd = install.split() if install else None
-    worktree_mod.create(
-        name,
-        base=base,
-        env_file=env_file,
-        submodules=submodules,
-        install_cmd=install_cmd,
-    )
+    worktree_mod.create(name, base=base, env_file=env_file, submodules=submodules, install_cmd=install_cmd)
 
 
 @app.command()
@@ -1494,9 +1064,7 @@ def pull(
         help="Don't also pull the repo's DEFAULT branch -- skip this when the current branch was already "
         "branched from main/master, since pulling it again would be redundant",
     ),
-    dry_run: bool = typer.Option(
-        False, "--dry-run", help="Print what would be pulled, without doing it"
-    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print what would be pulled, without doing it"),
     pull_args: list[str] = typer.Argument(
         None,
         help="Extra flags passed through to every `git pull` step, e.g. `-- --rebase --ff-only` (put them after `--`)",
@@ -1507,9 +1075,7 @@ def pull(
     separate `git pull`, stopping with a clear error (and the exact command to re-run) if any step
     hits a merge conflict.
     """
-    pull_mod.run(
-        remote=remote, no_default=no_default, dry_run=dry_run, pull_args=pull_args or []
-    )
+    pull_mod.run(remote=remote, no_default=no_default, dry_run=dry_run, pull_args=pull_args or [])
 
 
 @app.command("lint")
@@ -1560,12 +1126,7 @@ def dead_code(
     pyproject = find_pyproject(root)
     repo_root = pyproject.parent if pyproject else root
     try:
-        findings = dead_code_mod.run(
-            load_bdt_table("dead_code", root),
-            repo_root=repo_root,
-            only=only or [],
-            update_baseline=update_baseline,
-        )
+        findings = dead_code_mod.run(load_bdt_table("dead_code", root), repo_root=repo_root, only=only or [], update_baseline=update_baseline)
     except (api_usage_mod.ApiUsageError, tomllib.TOMLDecodeError) as exc:
         typer.echo(f"bdt dead-code: {exc}", err=True)
         raise typer.Exit(2) from exc
@@ -1582,49 +1143,24 @@ def dead_code(
 
 @app.command("find-injection")
 def find_injection_cmd(
-    paths: list[str] = typer.Argument(
-        None,
-        help="Files and/or directories to scan (default: current directory, recursive).",
-    ),
-    diff: bool = typer.Option(
-        False,
-        "--diff",
-        help="Scan only files changed on this branch vs --base, plus uncommitted and untracked files.",
-    ),
-    base: str = typer.Option(
-        None,
-        "--base",
-        help="Branch/ref to diff against with --diff (default: origin's default branch).",
-    ),
-    strict: bool = typer.Option(
-        False,
-        "--strict",
-        help="Also exit 1 when there are items to review (default: only definite errors fail).",
-    ),
+    paths: list[str] = typer.Argument(None, help="Files and/or directories to scan (default: current directory, recursive)."),
+    diff: bool = typer.Option(False, "--diff", help="Scan only files changed on this branch vs --base, plus uncommitted and untracked files."),
+    base: str = typer.Option(None, "--base", help="Branch/ref to diff against with --diff (default: origin's default branch)."),
+    strict: bool = typer.Option(False, "--strict", help="Also exit 1 when there are items to review (default: only definite errors fail)."),
     exclude: list[str] = typer.Option(
         None,
         "--exclude",
         help="Directory name (any depth), root-relative path, or glob to skip (repeatable), e.g. --exclude vendor --exclude 'assets/**/*.js'. "
         "Also configurable via [tool.bdt.lint] exclude_dirs in pyproject.toml.",
     ),
-    no_gitignore: bool = typer.Option(
-        False,
-        "--no-gitignore",
-        help="Also scan files ignored by .gitignore (default: they are skipped).",
-    ),
+    no_gitignore: bool = typer.Option(False, "--no-gitignore", help="Also scan files ignored by .gitignore (default: they are skipped)."),
 ) -> None:
     """Find injection risks (bmsuisse/devtools#54) in backend and frontend code: SQL built from f-strings/
     concatenation or from an unverifiable function call, eval/exec/shell/unsafe deserialization in Python,
     innerHTML/dangerouslySetInnerHTML/eval/new Function/un-sandboxed iframes in the frontend, and a missing
     or weakened Content-Security-Policy. Definite problems are errors; the rest are listed for a human/AI to verify.
     """
-    result = find_injection_mod.run(
-        paths or [],
-        diff=diff,
-        base=base,
-        exclude=exclude or [],
-        respect_gitignore=not no_gitignore,
-    )
+    result = find_injection_mod.run(paths or [], diff=diff, base=base, exclude=exclude or [], respect_gitignore=not no_gitignore)
     raise typer.Exit(find_injection_mod.print_report(result, strict=strict))
 
 
@@ -1632,14 +1168,10 @@ def find_injection_cmd(
 def translate_cmd(
     ctx: typer.Context,
     check: bool = typer.Option(
-        False,
-        "--check",
-        help="Don't write anything; exit 1 if code uses keys missing from translations.toml or generated files are stale",
+        False, "--check", help="Don't write anything; exit 1 if code uses keys missing from translations.toml or generated files are stale"
     ),
     import_json: bool = typer.Option(
-        False,
-        "--import",
-        help="One-time migration: merge existing <lng>.json files into translations.toml first",
+        False, "--import", help="One-time migration: merge existing <lng>.json files into translations.toml first"
     ),
 ) -> None:
     """Generate <lng>.json files from the single translations.toml (configured in `[tool.bdt.translate]`).
@@ -1652,10 +1184,7 @@ def translate_cmd(
         return
     cfg = translate_mod.load_config()
     if not cfg.output and not check:
-        typer.echo(
-            "No `output` configured under [tool.bdt.translate] in pyproject.toml",
-            err=True,
-        )
+        typer.echo("No `output` configured under [tool.bdt.translate] in pyproject.toml", err=True)
         raise typer.Exit(2)
     try:
         res = translate_mod.run(cfg, check=check, import_json=import_json)
@@ -1667,9 +1196,7 @@ def translate_cmd(
     for key in res.new_keys:
         typer.echo(f"{'missing' if check else 'added'}: {key}", err=True)
     for key, langs in res.incomplete.items():
-        typer.echo(
-            f"warning: {key} has no {', '.join(langs)} (falls back to de/en)", err=True
-        )
+        typer.echo(f"warning: {key} has no {', '.join(langs)} (falls back to de/en)", err=True)
     for p in res.stale:
         typer.echo(f"stale: {p} (run `bdt translate`)", err=True)
     if res.stale:
@@ -1688,30 +1215,27 @@ def translate_cmd(
 
 @env_app.command("get-keys")
 def env_get_keys(
-    search: str | None = typer.Option(
-        None, "--search", "-s", help="Only keys containing this text (case-insensitive)"
-    ),
+    search: str | None = typer.Option(None, "--search", "-s", help="Only keys containing this text (case-insensitive)"),
+    no_home: bool = typer.Option(False, "--no-home", help="Don't also list the env files directly in ~"),
 ) -> None:
-    """List variable names (never values) from .env, *.env and .env.* files in the current directory and in ~."""
-    home = Path.home()
-    files = env_files_mod.get_keys(Path.cwd(), home, search)
+    """List variable names (never values) from .env, *.env and .env.* files under the current directory (and in ~).
+
+    Skips node_modules, .git, .venv, .worktrees and .claude.
+    """
+    home = None if no_home else Path.home()
+    cwd = Path.cwd()
+    files = env_files_mod.get_keys(cwd, home, search)
     if not files:
         typer.echo("No matching env files/keys found.", err=True)
         raise typer.Exit(1)
-    typer.echo(env_files_mod.format_keys(files, home))
+    typer.echo(env_files_mod.format_keys(files, home, cwd))
 
 
 @translate_app.command("add")
 def translate_add(
     key: str = typer.Argument(..., help="Translation key, e.g. ADD_BUTTON"),
-    texts: list[str] = typer.Argument(
-        ...,
-        metavar="LANG=TEXT...",
-        help="Translations, e.g. en=Add de=Hinzufügen fr=Ajouter it=Aggiungi",
-    ),
-    force: bool = typer.Option(
-        False, "--force", help="Overwrite the key if it already exists"
-    ),
+    texts: list[str] = typer.Argument(..., metavar="LANG=TEXT...", help="Translations, e.g. en=Add de=Hinzufügen fr=Ajouter it=Aggiungi"),
+    force: bool = typer.Option(False, "--force", help="Overwrite the key if it already exists"),
 ) -> None:
     """Add KEY with its translations to translations.toml and regenerate all <lng>.json files."""
     values: dict[str, str] = {}
@@ -1729,10 +1253,7 @@ def translate_add(
         raise typer.Exit(1)
     missing = [lng for lng in cfg.languages if lng not in values]
     if missing:
-        typer.echo(
-            f"warning: no {', '.join(missing)} translation given (falls back to de/en)",
-            err=True,
-        )
+        typer.echo(f"warning: no {', '.join(missing)} translation given (falls back to de/en)", err=True)
     for k in res.new_keys:
         typer.echo(f"added placeholder for key used in code: {k}", err=True)
     typer.echo(f"Added {key}; wrote {len(res.written)} file(s)")
@@ -1747,10 +1268,7 @@ def find_repo_cmd(
         help="Local work dir to search (default: $AZDO_WORK_DIR/$BMS_WORK_DIR, falling back to ~/projects, or C:/Projects on Windows)",
     ),
     org: str | None = typer.Option(
-        None,
-        "--org",
-        envvar=["AZDO_ORG", "BMS_ORG"],
-        help="Azure DevOps org to search when there's no local match",
+        None, "--org", envvar=["AZDO_ORG", "BMS_ORG"], help="Azure DevOps org to search when there's no local match"
     ),
     github_org: str | None = typer.Option(
         None,
@@ -1758,11 +1276,7 @@ def find_repo_cmd(
         envvar=["GITHUB_ORG", "BMS_GITHUB_ORG"],
         help="GitHub org to search when there's no local match",
     ),
-    yes: bool = typer.Option(
-        False,
-        "--yes",
-        help="Clone a remote-only match without an interactive confirmation prompt",
-    ),
+    yes: bool = typer.Option(False, "--yes", help="Clone a remote-only match without an interactive confirmation prompt"),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -1783,79 +1297,41 @@ def find_repo_cmd(
 
 @cleanup_app.command("worktrees")
 def cleanup_worktrees(
-    root: Path = typer.Argument(
-        Path("."), help="Root folder to scan for git repositories (recursively)"
-    ),
-    remote: str = typer.Option(
-        "origin",
-        "--remote",
-        help="Remote name whose main/test branches count as 'merged into' (falls back to local main/test if no such remote refs exist)",
-    ),
-    keep_dbs: bool = typer.Option(
-        False,
-        "--keep-dbs",
-        help="Don't drop a removed worktree's pgdevkit test DB(s) along with it",
-    ),
-    yes: bool = typer.Option(
-        False,
-        "--yes",
-        help="Actually remove; without this, only prints what would be removed",
-    ),
+    root: Path = typer.Argument(Path("."), help="Root folder to scan for git repositories (recursively)"),
+    remote: str = typer.Option("origin", "--remote", help="Remote name whose main/test branches count as 'merged into' (falls back to local main/test if no such remote refs exist)"),
+    keep_dbs: bool = typer.Option(False, "--keep-dbs", help="Don't drop a removed worktree's pgdevkit test DB(s) along with it"),
+    yes: bool = typer.Option(False, "--yes", help="Actually remove; without this, only prints what would be removed"),
     pg_host: str = _PG_HOST_OPTION,
     pg_port: int = _PG_PORT_OPTION,
     pg_user: str | None = _PG_USER_OPTION,
 ) -> None:
     """Find and remove git worktrees fully merged into main/test (and their pgdevkit test DB(s)), across every repo under root."""
     worktree_mod.clean_worktrees(
-        root,
-        remote=remote,
-        keep_dbs=keep_dbs,
-        yes=yes,
-        pg_host=pg_host,
-        pg_port=pg_port,
-        pg_user=pg_user or pgdevkit_constants.USER,
+        root, remote=remote, keep_dbs=keep_dbs, yes=yes, pg_host=pg_host, pg_port=pg_port, pg_user=pg_user or pgdevkit_constants.USER
     )
 
 
 @cleanup_app.command("orphaned-dbs")
 def cleanup_orphaned_dbs(
-    root: Path = typer.Argument(
-        Path("."), help="Root folder to scan for git repositories (recursively)"
-    ),
+    root: Path = typer.Argument(Path("."), help="Root folder to scan for git repositories (recursively)"),
     include_caution: bool = typer.Option(
-        False,
-        "--include-caution",
-        help="Also drop DBs flagged as possibly a standing reference DB (verify those first!)",
+        False, "--include-caution", help="Also drop DBs flagged as possibly a standing reference DB (verify those first!)"
     ),
-    yes: bool = typer.Option(
-        False,
-        "--yes",
-        help="Actually drop; without this, only prints what would be dropped",
-    ),
+    yes: bool = typer.Option(False, "--yes", help="Actually drop; without this, only prints what would be dropped"),
     pg_host: str = _PG_HOST_OPTION,
     pg_port: int = _PG_PORT_OPTION,
     pg_user: str | None = _PG_USER_OPTION,
 ) -> None:
     """Find and drop pgdevkit test DBs whose worktree is already gone (e.g. removed by hand before this command existed)."""
     worktree_mod.clean_orphaned_dbs(
-        root,
-        include_caution=include_caution,
-        yes=yes,
-        pg_host=pg_host,
-        pg_port=pg_port,
-        pg_user=pg_user or pgdevkit_constants.USER,
+        root, include_caution=include_caution, yes=yes, pg_host=pg_host, pg_port=pg_port, pg_user=pg_user or pgdevkit_constants.USER
     )
 
 
 @cleanup_app.command("db")
 def cleanup_db(
-    root: Path = typer.Argument(
-        Path("."),
-        help="Worktree/repo whose own pgdevkit test DB(s) to drop (default: current directory)",
-    ),
-    confirm: bool = typer.Option(
-        False, "--confirm", help="Drop without an interactive confirmation prompt"
-    ),
+    root: Path = typer.Argument(Path("."), help="Worktree/repo whose own pgdevkit test DB(s) to drop (default: current directory)"),
+    confirm: bool = typer.Option(False, "--confirm", help="Drop without an interactive confirmation prompt"),
     pg_host: str = _PG_HOST_OPTION,
     pg_port: int = _PG_PORT_OPTION,
     pg_user: str | None = _PG_USER_OPTION,
@@ -1866,27 +1342,15 @@ def cleanup_db(
     explicit confirmation -- pass --confirm to skip the interactive prompt.
     """
     worktree_mod.clean_current_db(
-        root.resolve(),
-        confirm=confirm,
-        pg_host=pg_host,
-        pg_port=pg_port,
-        pg_user=pg_user or pgdevkit_constants.USER,
+        root.resolve(), confirm=confirm, pg_host=pg_host, pg_port=pg_port, pg_user=pg_user or pgdevkit_constants.USER
     )
 
 
 @cleanup_app.command("worktree")
 def cleanup_worktree(
-    path: Path = typer.Argument(
-        Path("."), help="Worktree to remove (default: current directory)"
-    ),
-    keep_db: bool = typer.Option(
-        False,
-        "--keep-db",
-        help="Don't drop this worktree's pgdevkit test DB(s) along with it",
-    ),
-    confirm: bool = typer.Option(
-        False, "--confirm", help="Remove without an interactive confirmation prompt"
-    ),
+    path: Path = typer.Argument(Path("."), help="Worktree to remove (default: current directory)"),
+    keep_db: bool = typer.Option(False, "--keep-db", help="Don't drop this worktree's pgdevkit test DB(s) along with it"),
+    confirm: bool = typer.Option(False, "--confirm", help="Remove without an interactive confirmation prompt"),
     pg_host: str = _PG_HOST_OPTION,
     pg_port: int = _PG_PORT_OPTION,
     pg_user: str | None = _PG_USER_OPTION,
@@ -1898,12 +1362,7 @@ def cleanup_worktree(
     requires an explicit confirmation -- pass --confirm to skip the interactive prompt.
     """
     worktree_mod.clean_current_worktree(
-        path,
-        confirm=confirm,
-        keep_db=keep_db,
-        pg_host=pg_host,
-        pg_port=pg_port,
-        pg_user=pg_user or pgdevkit_constants.USER,
+        path, confirm=confirm, keep_db=keep_db, pg_host=pg_host, pg_port=pg_port, pg_user=pg_user or pgdevkit_constants.USER
     )
 
 
@@ -1925,44 +1384,22 @@ def _draft_feat_pr(target: str, pat: str | None) -> None:
             session.headers.update(auth_header(pat))
             pr = pr_build.get_pr(session, remote, current_branch(), target)
             converted = pr_build.set_draft(session, remote, pr)
-    except Exception, SystemExit:
+    except (Exception, SystemExit):
         return
     if converted:
-        print(
-            "\n'feat' commit pushed -- PR converted back to draft (needs review before CI runs). Run `bdt pr publish` when ready."
-        )
+        print("\n'feat' commit pushed -- PR converted back to draft (needs review before CI runs). Run `bdt pr publish` when ready.")
 
 
 @app.command()
 def commit(
     message: str,
     files: list[str],
-    json_output: bool = typer.Option(
-        False, "--json", help="Structured JSON output for AI-agent callers"
-    ),
-    no_verify: bool = typer.Option(
-        False,
-        "--no-verify",
-        help="Skip pre-commit hooks (not intended for regular use; prints a warning)",
-    ),
-    subrepo: list[str] = typer.Option(
-        [],
-        "--subrepo",
-        help="Submodule directory name to split matching files into (repeatable)",
-    ),
-    skip_message_check: bool = typer.Option(
-        False,
-        "--skip-message-check",
-        help="Don't require a conventional-commit-style message",
-    ),
-    allow_main: bool = typer.Option(
-        False, "--allow-main", help="Allow committing directly on main/master"
-    ),
-    target: str = typer.Option(
-        DEFAULT_TARGET_BRANCH,
-        "--target",
-        help="Target branch of the PR to draft on a 'feat' commit (Azure DevOps only)",
-    ),
+    json_output: bool = typer.Option(False, "--json", help="Structured JSON output for AI-agent callers"),
+    no_verify: bool = typer.Option(False, "--no-verify", help="Skip pre-commit hooks (not intended for regular use; prints a warning)"),
+    subrepo: list[str] = typer.Option([], "--subrepo", help="Submodule directory name to split matching files into (repeatable)"),
+    skip_message_check: bool = typer.Option(False, "--skip-message-check", help="Don't require a conventional-commit-style message"),
+    allow_main: bool = typer.Option(False, "--allow-main", help="Allow committing directly on main/master"),
+    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch of the PR to draft on a 'feat' commit (Azure DevOps only)"),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -1986,12 +1423,8 @@ def commit(
 
 @logs_app.command("roles")
 def logs_roles(
-    resource_group: str = typer.Option(
-        ..., "--resource-group", envvar="AZURE_RESOURCE_GROUP"
-    ),
-    app_insights: str = typer.Option(
-        ..., "--app-insights", envvar="AZURE_APP_INSIGHTS"
-    ),
+    resource_group: str = typer.Option(..., "--resource-group", envvar="AZURE_RESOURCE_GROUP"),
+    app_insights: str = typer.Option(..., "--app-insights", envvar="AZURE_APP_INSIGHTS"),
     minutes: int = typer.Option(30, "--minutes"),
 ) -> None:
     """List cloud_RoleName values seen in the last N minutes (to pick a --role for `logs tail`)."""
@@ -2000,21 +1433,11 @@ def logs_roles(
 
 @logs_app.command("tail")
 def logs_tail(
-    role: str = typer.Option(
-        ..., "--role", help="cloud_RoleName to filter; 'all' for no filter"
-    ),
-    resource_group: str = typer.Option(
-        ..., "--resource-group", envvar="AZURE_RESOURCE_GROUP"
-    ),
-    app_insights: str = typer.Option(
-        ..., "--app-insights", envvar="AZURE_APP_INSIGHTS"
-    ),
+    role: str = typer.Option(..., "--role", help="cloud_RoleName to filter; 'all' for no filter"),
+    resource_group: str = typer.Option(..., "--resource-group", envvar="AZURE_RESOURCE_GROUP"),
+    app_insights: str = typer.Option(..., "--app-insights", envvar="AZURE_APP_INSIGHTS"),
     minutes: int = typer.Option(30, "--minutes"),
-    level: str = typer.Option(
-        "verbose",
-        "--level",
-        help=f"Minimum severity: {', '.join(logs_mod.SEVERITY_MAP)}",
-    ),
+    level: str = typer.Option("verbose", "--level", help=f"Minimum severity: {', '.join(logs_mod.SEVERITY_MAP)}"),
     no_color: bool = typer.Option(False, "--no-color"),
 ) -> None:
     """Fetch recent traces/exceptions for a role from Application Insights."""
@@ -2023,27 +1446,13 @@ def logs_tail(
 
 @logs_app.command("fetch")
 def logs_fetch(
-    env: str = typer.Option(
-        ...,
-        "--env",
-        help="Named environment configured under tool.bdt.envs in pyproject.toml",
-    ),
-    out: Path = typer.Option(
-        Path("logs"), "--out", help="Output directory for the extracted error log"
-    ),
-    keep_archive: bool = typer.Option(
-        False, "--keep-archive", help="Keep the downloaded .zip instead of deleting it"
-    ),
+    env: str = typer.Option(..., "--env", help="Named environment configured under tool.bdt.envs in pyproject.toml"),
+    out: Path = typer.Option(Path("logs"), "--out", help="Output directory for the extracted error log"),
+    keep_archive: bool = typer.Option(False, "--keep-archive", help="Keep the downloaded .zip instead of deleting it"),
 ) -> None:
     """Download an App Service log archive and extract error/warning lines."""
     cfg = env_config.resolve_env(env)
-    app_service_logs.fetch(
-        cfg["webapp"],
-        cfg["resource_group"],
-        cfg.get("slot"),
-        out,
-        keep_archive=keep_archive,
-    )
+    app_service_logs.fetch(cfg["webapp"], cfg["resource_group"], cfg.get("slot"), out, keep_archive=keep_archive)
 
 
 if __name__ == "__main__":

@@ -34,12 +34,7 @@ def test_no_pyproject_is_flagged(tmp_path: Path, monkeypatch) -> None:
 def test_missing_dependencies_are_each_flagged(tmp_path: Path) -> None:
     _write_pyproject(tmp_path, "[project]\nname = 'x'\n")
     rules = {f.rule for f in check_tooling(tmp_path)}
-    assert rules == {
-        "tooling-missing-ty",
-        "tooling-missing-ruff",
-        "tooling-missing-pytest",
-        "tooling-missing-prek",
-    }
+    assert rules == {"tooling-missing-ty", "tooling-missing-ruff", "tooling-missing-pytest", "tooling-missing-prek"}
 
 
 def test_pytest_declared_but_not_configured_is_flagged(tmp_path: Path) -> None:

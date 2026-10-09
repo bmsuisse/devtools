@@ -41,14 +41,7 @@ def _declared_dependencies(data: dict) -> set[str]:
 def check_tooling(root: Path) -> list[Finding]:
     pyproject_path = find_pyproject(root)
     if pyproject_path is None:
-        return [
-            Finding(
-                root,
-                0,
-                "tooling-missing-pyproject",
-                "No pyproject.toml found -- can't verify ty/ruff/pytest are declared/configured.",
-            )
-        ]
+        return [Finding(root, 0, "tooling-missing-pyproject", "No pyproject.toml found -- can't verify ty/ruff/pytest are declared/configured.")]
 
     with pyproject_path.open("rb") as f:
         data = tomllib.load(f)
@@ -59,12 +52,7 @@ def check_tooling(root: Path) -> list[Finding]:
     for tool in _REQUIRED_DEPENDENCIES:
         if tool not in declared:
             findings.append(
-                Finding(
-                    pyproject_path,
-                    0,
-                    f"tooling-missing-{tool}",
-                    f"'{tool}' isn't declared as a dependency in pyproject.toml.",
-                )
+                Finding(pyproject_path, 0, f"tooling-missing-{tool}", f"'{tool}' isn't declared as a dependency in pyproject.toml.")
             )
 
     if "pytest" in declared:

@@ -24,9 +24,7 @@ def test_get_az_devops_token_returns_stripped_stdout(monkeypatch) -> None:
 
     def fake_run(cmd, **kwargs):
         assert kwargs.get("timeout") == CLI_TIMEOUT_SECS
-        return type(
-            "Result", (), {"returncode": 0, "stdout": "tokenvalue\n", "stderr": ""}
-        )()
+        return type("Result", (), {"returncode": 0, "stdout": "tokenvalue\n", "stderr": ""})()
 
     monkeypatch.setattr("bmsdna.devtools.ado_auth.subprocess.run", fake_run)
 
@@ -37,9 +35,7 @@ def test_get_az_devops_token_exits_on_failed_login(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.ado_auth.require_az", lambda: "az")
 
     def fake_run(cmd, **kwargs):
-        return type(
-            "Result", (), {"returncode": 1, "stdout": "", "stderr": "not logged in"}
-        )()
+        return type("Result", (), {"returncode": 1, "stdout": "", "stderr": "not logged in"})()
 
     monkeypatch.setattr("bmsdna.devtools.ado_auth.subprocess.run", fake_run)
 
@@ -49,9 +45,7 @@ def test_get_az_devops_token_exits_on_failed_login(monkeypatch) -> None:
     assert "az login required" in str(exc_info.value)
 
 
-def test_get_az_devops_token_times_out_with_clear_message_not_a_hang(
-    monkeypatch,
-) -> None:
+def test_get_az_devops_token_times_out_with_clear_message_not_a_hang(monkeypatch) -> None:
     """Regression: `az` blocking on an interactive re-auth prompt (an expired cached login)
     must exit with a clear message within CLI_TIMEOUT_SECS, not hang forever.
     """

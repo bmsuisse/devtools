@@ -99,18 +99,12 @@ def test_iframe_sandbox_rules(tmp_path: Path) -> None:
     assert _fe(tmp_path, '<iframe src="/x" sandbox />') == set()
     assert _fe(tmp_path, '<iframe src="/x" sandbox="allow-forms" />') == set()
     assert _fe(tmp_path, "<iframe onLoad={() => a > b} />") == {"fe-iframe-no-sandbox"}
-    assert _fe(tmp_path, '<iframe sandbox="allow-scripts allow-same-origin" />') == {
-        "fe-iframe-sandbox-escape"
-    }
-    assert _fe(tmp_path, '<iframe src="https://x.test/a"></iframe>', "i.html") == {
-        "fe-iframe-no-sandbox"
-    }
+    assert _fe(tmp_path, '<iframe sandbox="allow-scripts allow-same-origin" />') == {"fe-iframe-sandbox-escape"}
+    assert _fe(tmp_path, '<iframe src="https://x.test/a"></iframe>', "i.html") == {"fe-iframe-no-sandbox"}
 
 
 def test_vue_v_html_and_javascript_url(tmp_path: Path) -> None:
-    src = (
-        '<template><div v-html="x"></div><a href="javascript:void(0)">x</a></template>'
-    )
+    src = '<template><div v-html="x"></div><a href="javascript:void(0)">x</a></template>'
     assert _fe(tmp_path, src, "a.vue") == {"fe-v-html", "fe-javascript-url"}
 
 
@@ -121,9 +115,7 @@ def _run(tmp_path: Path, **kwargs):
 def test_csp_missing_for_web_project(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n")
     assert [f.rule for f in _run(tmp_path).findings] == ["csp-missing"]
-    (tmp_path / "web.config").write_text(
-        '<add name="Content-Security-Policy" value="default-src \'self\'" />'
-    )
+    (tmp_path / "web.config").write_text('<add name="Content-Security-Policy" value="default-src \'self\'" />')
     assert _run(tmp_path).findings == []
 
 
@@ -133,9 +125,7 @@ def test_csp_not_required_for_non_web_project(tmp_path: Path) -> None:
 
 
 def test_csp_weakened_is_reported(tmp_path: Path) -> None:
-    (tmp_path / "index.html").write_text(
-        "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'self' 'unsafe-inline'\"><p>hi</p>"
-    )
+    (tmp_path / "index.html").write_text("<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'self' 'unsafe-inline'\"><p>hi</p>")
     assert [f.rule for f in _run(tmp_path).findings] == ["csp-weakened"]
 
 
@@ -146,9 +136,7 @@ def test_pragma_ignore_and_severity_exit_codes(tmp_path: Path) -> None:
     assert [f.rule for f in result.reviews] == ["fe-inner-html"]
     assert find_injection.print_report(result) == 0
     assert find_injection.print_report(result, strict=True) == 1
-    (tmp_path / "a.ts").write_text(
-        "// bdt-lint: ignore fe-inner-html -- static markup\nel.innerHTML = x;\n"
-    )
+    (tmp_path / "a.ts").write_text("// bdt-lint: ignore fe-inner-html -- static markup\nel.innerHTML = x;\n")
     assert _run(tmp_path).findings == []
     (tmp_path / "a.ts").write_text("eval(x);\n")
     assert find_injection.print_report(_run(tmp_path)) == 1
@@ -173,12 +161,7 @@ def test_tests_and_missing_paths(tmp_path: Path) -> None:
 
 def test_diff_mode_scans_changed_and_untracked_files(tmp_path: Path) -> None:
     def git(*args: str) -> None:
-        subprocess.run(
-            ["git", "-c", "user.email=a@b.c", "-c", "user.name=t", *args],
-            cwd=tmp_path,
-            check=True,
-            capture_output=True,
-        )
+        subprocess.run(["git", "-c", "user.email=a@b.c", "-c", "user.name=t", *args], cwd=tmp_path, check=True, capture_output=True)
 
     git("init", "-b", "main")
     (tmp_path / "old.py").write_text("eval(x)\n")
@@ -194,9 +177,7 @@ def test_diff_mode_scans_changed_and_untracked_files(tmp_path: Path) -> None:
 
 
 def test_diff_mode_without_base_branch_exits(tmp_path: Path) -> None:
-    subprocess.run(
-        ["git", "init", "-b", "odd"], cwd=tmp_path, check=True, capture_output=True
-    )
+    subprocess.run(["git", "init", "-b", "odd"], cwd=tmp_path, check=True, capture_output=True)
     with pytest.raises(SystemExit):
         find_injection.run([], root=tmp_path, diff=True)
 
@@ -222,34 +203,21 @@ load(data)
 
 
 def test_frontend_regex_edge_cases(tmp_path: Path) -> None:
-    assert "fe-post-message-star" in _fe(
-        tmp_path, "win.postMessage(JSON.stringify(payload), '*');", "a.ts"
-    )
-    assert _fe(
-        tmp_path, '<iframe src="https://host/sandbox/embed" data-sandbox="x" />'
-    ) == {"fe-iframe-no-sandbox"}
-    assert (
-        _fe(tmp_path, "<p>JavaScript: disabled</p><!-- javascript: x -->", "a.html")
-        == set()
-    )
-    assert _fe(tmp_path, '<a href="javascript:alert(1)">x</a>', "a.html") == {
-        "fe-javascript-url"
-    }
+    assert "fe-post-message-star" in _fe(tmp_path, "win.postMessage(JSON.stringify(payload), '*');", "a.ts")
+    assert _fe(tmp_path, '<iframe src="https://host/sandbox/embed" data-sandbox="x" />') == {"fe-iframe-no-sandbox"}
+    assert _fe(tmp_path, "<p>JavaScript: disabled</p><!-- javascript: x -->", "a.html") == set()
+    assert _fe(tmp_path, '<a href="javascript:alert(1)">x</a>', "a.html") == {"fe-javascript-url"}
 
 
 def test_csp_wildcard_after_quoted_source(tmp_path: Path) -> None:
-    (tmp_path / "staticwebapp.config.json").write_text(
-        '{"globalHeaders": {"Content-Security-Policy": "script-src \'self\' *; img-src *"}}'
-    )
+    (tmp_path / "staticwebapp.config.json").write_text('{"globalHeaders": {"Content-Security-Policy": "script-src \'self\' *; img-src *"}}')
     (tmp_path / "app.py").write_text("from fastapi import FastAPI\n")
     result = _run(tmp_path)
     assert [f.rule for f in result.findings] == ["csp-weakened"]
     assert result.findings[0].path.name == "staticwebapp.config.json"
 
 
-def test_relative_paths_still_skip_test_dirs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_relative_paths_still_skip_test_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "helpers.py").write_text("eval(x)\n")
     monkeypatch.chdir(tmp_path)
@@ -258,12 +226,7 @@ def test_relative_paths_still_skip_test_dirs(
 
 def test_diff_mode_from_subdirectory_finds_untracked_files(tmp_path: Path) -> None:
     def git(*args: str) -> None:
-        subprocess.run(
-            ["git", "-c", "user.email=a@b.c", "-c", "user.name=t", *args],
-            cwd=tmp_path,
-            check=True,
-            capture_output=True,
-        )
+        subprocess.run(["git", "-c", "user.email=a@b.c", "-c", "user.name=t", *args], cwd=tmp_path, check=True, capture_output=True)
 
     git("init", "-b", "main")
     (tmp_path / "backend").mkdir()
@@ -287,64 +250,35 @@ def test_exclude_dir_name_path_and_glob(tmp_path: Path) -> None:
     (tmp_path / "web.config").write_text("Content-Security-Policy: default-src 'self'")
     assert len(find_injection.run([], root=tmp_path).findings) == 4
     assert len(find_injection.run([], root=tmp_path, exclude=["vendor"]).findings) == 3
-    assert (
-        len(find_injection.run([], root=tmp_path, exclude=["lib/generated"]).findings)
-        == 3
-    )
-    assert (
-        len(
-            find_injection.run(
-                [], root=tmp_path, exclude=["web/*.js", "vendor/"]
-            ).findings
-        )
-        == 2
-    )
-    assert [
-        f.path.name
-        for f in find_injection.run(
-            [], root=tmp_path, exclude=["vendor", "lib", "web/*.js"]
-        ).findings
-    ] == ["bad.py"]
+    assert len(find_injection.run([], root=tmp_path, exclude=["lib/generated"]).findings) == 3
+    assert len(find_injection.run([], root=tmp_path, exclude=["web/*.js", "vendor/"]).findings) == 2
+    assert [f.path.name for f in find_injection.run([], root=tmp_path, exclude=["vendor", "lib", "web/*.js"]).findings] == ["bad.py"]
 
 
 def test_exclude_dirs_from_pyproject(tmp_path: Path) -> None:
-    (tmp_path / "pyproject.toml").write_text(
-        '[tool.bdt.lint]\nexclude_dirs = ["legacy"]\n'
-    )
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.lint]\nexclude_dirs = ["legacy"]\n')
     (tmp_path / "legacy").mkdir()
     (tmp_path / "legacy" / "bad.py").write_text("eval(x)\n")
     assert find_injection.run([], root=tmp_path).findings == []
 
 
 def test_gitignored_files_are_skipped_unless_disabled(tmp_path: Path) -> None:
-    subprocess.run(
-        ["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True
-    )
+    subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True)
     (tmp_path / ".gitignore").write_text("built/\n")
     (tmp_path / "built").mkdir()
     (tmp_path / "built" / "bad.py").write_text("eval(x)\n")
     (tmp_path / "src.py").write_text("eval(y)\n")
-    assert [f.path.name for f in find_injection.run([], root=tmp_path).findings] == [
-        "src.py"
-    ]
-    assert (
-        len(find_injection.run([], root=tmp_path, respect_gitignore=False).findings)
-        == 2
-    )
+    assert [f.path.name for f in find_injection.run([], root=tmp_path).findings] == ["src.py"]
+    assert len(find_injection.run([], root=tmp_path, respect_gitignore=False).findings) == 2
 
 
-def test_min_js_is_skipped_long_lines_are_not_and_findings_deduplicated(
-    tmp_path: Path,
-) -> None:
+def test_min_js_is_skipped_long_lines_are_not_and_findings_deduplicated(tmp_path: Path) -> None:
     (tmp_path / "app.min.js").write_text("eval(x);")
     (tmp_path / "bundle.js").write_text("a=1;" * 400 + "eval(x);\n")
     (tmp_path / "dup.js").write_text("el.innerHTML = a; el.innerHTML = b;\n")
     (tmp_path / "web.config").write_text("Content-Security-Policy: default-src 'self'")
     result = find_injection.run([], root=tmp_path)
-    assert [(f.path.name, f.rule) for f in result.findings] == [
-        ("bundle.js", "fe-eval"),
-        ("dup.js", "fe-inner-html"),
-    ]
+    assert [(f.path.name, f.rule) for f in result.findings] == [("bundle.js", "fe-eval"), ("dup.js", "fe-inner-html")]
 
 
 def test_sqlglot_expression_sql_is_not_flagged(tmp_path: Path) -> None:
@@ -388,18 +322,13 @@ def run(cmd, target):
 """
     )
     result = find_injection.run([], root=tmp_path)
-    assert [(f.path.name, f.line, f.rule) for f in result.findings] == [
-        ("bad.py", 5, "py-shell-command"),
-        ("bad.py", 6, "py-shell-command"),
-    ]
+    assert [(f.path.name, f.line, f.rule) for f in result.findings] == [("bad.py", 5, "py-shell-command"), ("bad.py", 6, "py-shell-command")]
 
 
 def test_csp_weakening_in_test_files_is_ignored(tmp_path: Path) -> None:
     (tmp_path / "app.js").write_text("run();\n")
     (tmp_path / "web.config").write_text("Content-Security-Policy: default-src 'self'")
-    (tmp_path / "test_headers.py").write_text(
-        "H = \"Content-Security-Policy: script-src 'unsafe-eval'\"\n"
-    )
+    (tmp_path / "test_headers.py").write_text("H = \"Content-Security-Policy: script-src 'unsafe-eval'\"\n")
     assert find_injection.run([], root=tmp_path).findings == []
 
 

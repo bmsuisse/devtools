@@ -27,18 +27,7 @@ RULE_MODEL = "ts-handwired-model"
 TS_SUFFIXES = (".ts", ".tsx", ".mts")
 
 DEFAULT_TS_EXCLUDE_DIR_NAMES = frozenset(
-    {
-        "generated",
-        "__generated__",
-        "__tests__",
-        "__mocks__",
-        "tests",
-        "test",
-        "e2e",
-        "coverage",
-        ".next",
-        "storybook-static",
-    }
+    {"generated", "__generated__", "__tests__", "__mocks__", "tests", "test", "e2e", "coverage", ".next", "storybook-static"}
 )
 _EXCLUDE_FILE_RE = re.compile(r"\.(?:gen|generated|test|spec)\.m?tsx?$|\.d\.m?ts$")
 _EXCLUDE_FILE_NAMES = frozenset({"api-types.ts", "openapi-ts.config.ts"})
@@ -88,20 +77,12 @@ _AXIOS_RE = re.compile(
     r"(?<![\w$.])axios\s*(?:\.\s*(?:get|post|put|patch|delete|head|options|request|create)\s*)?(?:<[^\n]*?>\s*)?\("
 )
 _XHR_RE = re.compile(r"(?<![\w$.])new\s+XMLHttpRequest\b")
-_JSON_CAST_RE = re.compile(
-    r"(?<![\w$])([\w$]+)\s*\.json\s*\(\s*\)\s*\)?\s*as\s+(?!unknown\b|const\b)"
-)
-_JSON_ANNOTATED_RE = re.compile(
-    r":\s*[\w$.<>\[\]| ]+?\s*=\s*await\s+(?:[\w$]+\.)*([\w$]+)\.json\s*\(\s*\)"
-)
-_REQUEST_RECEIVERS = frozenset(
-    {"req", "request"}
-)  # incoming request bodies, not API responses
+_JSON_CAST_RE = re.compile(r"(?<![\w$])([\w$]+)\s*\.json\s*\(\s*\)\s*\)?\s*as\s+(?!unknown\b|const\b)")
+_JSON_ANNOTATED_RE = re.compile(r":\s*[\w$.<>\[\]| ]+?\s*=\s*await\s+(?:[\w$]+\.)*([\w$]+)\.json\s*\(\s*\)")
+_REQUEST_RECEIVERS = frozenset({"req", "request"})  # incoming request bodies, not API responses
 _IGNORE_RE = re.compile(r"bdt-lint:\s*ignore\s+([\w-]+(?:\s*,\s*[\w-]+)*)")
 _EXTERNAL_URL_RE = re.compile(r"""^\s*[`'"](?:https?:)?//""")
-_RETURNS_TEXT_RE = re.compile(
-    r"(?:\breturn\s+(?:await\s+)?\(?|=>\s*)[\w$.]+\.text\s*\(\)"
-)
+_RETURNS_TEXT_RE = re.compile(r"(?:\breturn\s+(?:await\s+)?\(?|=>\s*)[\w$.]+\.text\s*\(\)")
 _BARE_IDENT_RE = re.compile(r"^\s*([A-Za-z_$][\w$]*)\s*(?:,|$)")
 
 _MAX_WINDOW_LINES = 40
@@ -199,9 +180,7 @@ def _matching_paren(skeleton: str, open_idx: int) -> int:
     return len(skeleton)
 
 
-_DECL_PREFIX_RE = re.compile(
-    r"(?:\bfunction\s*\*?|\basync|\bstatic|\bpublic|\bprivate|\bprotected)\s+$"
-)
+_DECL_PREFIX_RE = re.compile(r"(?:\bfunction\s*\*?|\basync|\bstatic|\bpublic|\bprivate|\bprotected)\s+$")
 
 
 def _is_declaration(skeleton: str, match: re.Match[str]) -> bool:
@@ -210,9 +189,7 @@ def _is_declaration(skeleton: str, match: re.Match[str]) -> bool:
         return True
     close = _matching_paren(skeleton, match.end() - 1)
     line_start = skeleton.rfind("\n", 0, match.start()) + 1
-    return skeleton[line_start : match.start()].strip() == "" and skeleton[
-        close + 1 :
-    ].lstrip().startswith("{")
+    return skeleton[line_start : match.start()].strip() == "" and skeleton[close + 1 :].lstrip().startswith("{")
 
 
 def _has_marker(window: str, markers: tuple[str, ...]) -> bool:
@@ -231,13 +208,7 @@ def _is_external(args: str, window: str) -> bool:
     ident = _BARE_IDENT_RE.match(args)
     if ident is None:
         return False
-    return (
-        re.search(
-            rf"\b{re.escape(ident.group(1))}\b\s*(?::[^=;]+)?=\s*[`'\"](?:https?:)?//",
-            window,
-        )
-        is not None
-    )
+    return re.search(rf"\b{re.escape(ident.group(1))}\b\s*(?::[^=;]+)?=\s*[`'\"](?:https?:)?//", window) is not None
 
 
 def _line_of(text: str, pos: int) -> int:
@@ -273,9 +244,7 @@ def _block_window(lines: list[str], call_line: int) -> tuple[int, int]:
 def _ignored(raw_lines: list[str], line: int, rule: str) -> bool:
     for candidate in (line, line - 1):
         if 1 <= candidate <= len(raw_lines):
-            if candidate != line and not raw_lines[candidate - 1].lstrip().startswith(
-                ("//", "/*", "*")
-            ):
+            if candidate != line and not raw_lines[candidate - 1].lstrip().startswith(("//", "/*", "*")):
                 continue  # a trailing pragma on a code line only covers that line
             match = _IGNORE_RE.search(raw_lines[candidate - 1])
             if match and rule in {r.strip() for r in match.group(1).split(",")}:
@@ -283,9 +252,7 @@ def _ignored(raw_lines: list[str], line: int, rule: str) -> bool:
     return False
 
 
-def is_excluded_ts_file(
-    path: Path, *, repo_root: Path, exclude_globs: list[str] | None = None
-) -> bool:
+def is_excluded_ts_file(path: Path, *, repo_root: Path, exclude_globs: list[str] | None = None) -> bool:
     """Generated code, tests, declaration files and user-configured globs are never scanned --
     this also applies to files passed explicitly (e.g. by a pre-commit hook's staged-file list)."""
     name = path.name
@@ -304,9 +271,7 @@ def is_excluded_ts_file(
 _MARKER_ONLY = "\0marker"  # sentinel: a package.json with no deps/scripts (e.g. just {"type": "module"})
 
 
-def find_generator(
-    path: Path, *, repo_root: Path, cache: dict[Path, str | None]
-) -> str | None:
+def find_generator(path: Path, *, repo_root: Path, cache: dict[Path, str | None]) -> str | None:
     """The API-client generator the nearest `package.json` above `path` declares (its dependencies
     or an `openapi` script), or None -- meaning there's no generated client to use instead."""
     try:
@@ -330,13 +295,11 @@ def find_generator(
 def _read_generator(package_json: Path) -> str | None:
     try:
         data = json.loads(package_json.read_text(encoding="utf-8"))
-    except OSError, UnicodeDecodeError, json.JSONDecodeError:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     if not isinstance(data, dict):
         return None
-    if not any(
-        k in data for k in ("dependencies", "devDependencies", "scripts", "workspaces")
-    ):
+    if not any(k in data for k in ("dependencies", "devDependencies", "scripts", "workspaces")):
         return _MARKER_ONLY
     names = set()
     for key in ("dependencies", "devDependencies"):
@@ -364,16 +327,14 @@ def check_typescript_file(
     else:
         try:
             text = path.read_text(encoding="utf-8")
-        except OSError, UnicodeDecodeError:
+        except (OSError, UnicodeDecodeError):
             return []
 
     masked = _mask(text)
     raw_lines = text.split("\n")
     code_lines = masked.code.split("\n")
     findings: list[Finding] = []
-    covered: list[
-        tuple[int, int]
-    ] = []  # line ranges of http call windows (model rule skips these)
+    covered: list[tuple[int, int]] = []  # line ranges of http call windows (model rule skips these)
 
     def consider(kind: str, call_start: int, args_start: int | None) -> None:
         line = _line_of(text, call_start)
@@ -418,9 +379,7 @@ def check_typescript_file(
             if match.group(1) in _REQUEST_RECEIVERS:
                 continue
             line = _line_of(text, match.start())
-            if any(lo <= line <= hi for lo, hi in covered) or _ignored(
-                raw_lines, line, RULE_MODEL
-            ):
+            if any(lo <= line <= hi for lo, hi in covered) or _ignored(raw_lines, line, RULE_MODEL):
                 continue
             findings.append(
                 Finding(

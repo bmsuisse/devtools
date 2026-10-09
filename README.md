@@ -331,9 +331,9 @@ says so and posts nothing, so it's safe to run repeatedly -- including before `b
 
 ## `bdt env get-keys`
 
-Lists the variable **names** (never the values) defined in `.env`, `*.env` and `.env.*` files in the
-current directory and in `~`, so you (or an agent) can see which variables exist without `cat .env`.
-`--search TEXT` filters by key name (case-insensitive). Files in `~` -- and any file using
+Lists the variable **names** (never the values) defined in `.env`, `*.env` and `.env.*` files under the
+current directory (recursively, skipping `node_modules`, `.git`, `.venv`, `.worktrees` and `.claude`) and directly in `~`, so you (or an agent) can see which variables exist without `cat .env`.
+`--search TEXT` filters by key name (case-insensitive); `--no-home` leaves out the files in `~`. Files in `~` -- and any file using
 `export VAR=VALUE` -- are bash syntax, so the output adds a `source <file>` hint. Exits 1 if nothing matches.
 
 ## `bdt translate`

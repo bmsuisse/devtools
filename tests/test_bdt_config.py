@@ -22,9 +22,7 @@ def test_load_bdt_table_returns_empty_when_no_pyproject(tmp_path) -> None:
 
 
 def test_load_bdt_table_returns_empty_when_key_absent(tmp_path) -> None:
-    write_pyproject(
-        tmp_path, "[tool.bdt.envs.prod]\nwebapp = 'x'\nresource_group = 'y'\n"
-    )
+    write_pyproject(tmp_path, "[tool.bdt.envs.prod]\nwebapp = 'x'\nresource_group = 'y'\n")
     assert load_bdt_table("ado", tmp_path) == {}
 
 

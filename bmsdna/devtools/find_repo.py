@@ -77,13 +77,8 @@ def _az(az: str, *args: str) -> tuple[bool, str]:
     per-project fan-out below, where one project failing (e.g. no access)
     must not abort the whole org search, and stdout has to stay pure JSON.
     """
-    result = subprocess.run(
-        [az, *args, "-o", "json"], capture_output=True, text=True, check=False
-    )
-    return (
-        result.returncode == 0,
-        result.stdout if result.returncode == 0 else result.stderr,
-    )
+    result = subprocess.run([az, *args, "-o", "json"], capture_output=True, text=True, check=False)
+    return result.returncode == 0, result.stdout if result.returncode == 0 else result.stderr
 
 
 def find_remote(az: str, org: str, name: str) -> list[RemoteRepo]:
@@ -95,33 +90,17 @@ def find_remote(az: str, org: str, name: str) -> list[RemoteRepo]:
     run concurrently (each is just an `az` subprocess waiting on network I/O)
     since with dozens of projects a serial fan-out is the dominant cost.
     """
-    ok, out = _az(
-        az, "devops", "project", "list", "--org", f"https://dev.azure.com/{org}"
-    )
+    ok, out = _az(az, "devops", "project", "list", "--org", f"https://dev.azure.com/{org}")
     if not ok:
         sys.exit(f"az devops project list failed (try `az login`?):\n{out.strip()}")
     projects = json.loads(out)["value"]
 
     def repos_for(project: dict) -> list[RemoteRepo]:
-        ok, out = _az(
-            az,
-            "repos",
-            "list",
-            "--org",
-            f"https://dev.azure.com/{org}",
-            "--project",
-            project["name"],
-        )
+        ok, out = _az(az, "repos", "list", "--org", f"https://dev.azure.com/{org}", "--project", project["name"])
         if not ok:
-            print(
-                f"warning: couldn't list repos for project '{project['name']}': {out.strip()}",
-                file=sys.stderr,
-            )
+            print(f"warning: couldn't list repos for project '{project['name']}': {out.strip()}", file=sys.stderr)
             return []
-        return [
-            RemoteRepo(project["name"], r["name"], r["remoteUrl"])
-            for r in json.loads(out)
-        ]
+        return [RemoteRepo(project["name"], r["name"], r["remoteUrl"]) for r in json.loads(out)]
 
     all_repos: list[RemoteRepo] = []
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -138,26 +117,16 @@ def find_github(gh: str, org: str, name: str) -> list[RemoteRepo]:
     (no per-project split), so `gh repo list` covers the whole org in one call.
     """
     result = subprocess.run(
-        [gh, "repo", "list", org, "--json", "name,url", "--limit", "1000"],
-        capture_output=True,
-        text=True,
-        check=False,
+        [gh, "repo", "list", org, "--json", "name,url", "--limit", "1000"], capture_output=True, text=True, check=False
     )
     if result.returncode != 0:
-        sys.exit(
-            f"gh repo list failed (try `gh auth login`?):\n{result.stderr.strip()}"
-        )
+        sys.exit(f"gh repo list failed (try `gh auth login`?):\n{result.stderr.strip()}")
 
-    all_repos = [
-        RemoteRepo(org, r["name"], r["url"], source="github")
-        for r in json.loads(result.stdout)
-    ]
+    all_repos = [RemoteRepo(org, r["name"], r["url"], source="github") for r in json.loads(result.stdout)]
     return _prefer_exact(all_repos, name, key=lambda r: r.name)
 
 
-def clone(
-    remote_url: str, dest: Path, auth: dict[str, str] | None = None
-) -> subprocess.CompletedProcess:
+def clone(remote_url: str, dest: Path, auth: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     """Clone `remote_url` (an HTTPS Azure DevOps URL) into `dest`.
 
     `auth` (from `ado_auth.auth_header`) is passed to git as an HTTP
@@ -171,9 +140,7 @@ def clone(
         env["GIT_CONFIG_KEY_0"] = "http.extraheader"
         env["GIT_CONFIG_VALUE_0"] = f"AUTHORIZATION: {auth['Authorization']}"
     try:
-        return subprocess.run(
-            ["git", "clone", remote_url, str(dest)], env=env, check=False
-        )
+        return subprocess.run(["git", "clone", remote_url, str(dest)], env=env, check=False)
     except FileNotFoundError:
         sys.exit("'git' is required for this command but wasn't found on PATH.")
 
@@ -193,13 +160,7 @@ def clone_github(gh: str, full_name: str, dest: Path) -> subprocess.CompletedPro
 
 
 def run(
-    name: str,
-    *,
-    root: Path | None,
-    org: str | None,
-    github_org: str | None = None,
-    yes: bool,
-    pat: str | None = None,
+    name: str, *, root: Path | None, org: str | None, github_org: str | None = None, yes: bool, pat: str | None = None
 ) -> None:
     """`bdt find-repo <name>`: search `root` (default `work_dir()`) for a local
     match, then -- if there isn't one -- `org`'s Azure DevOps repos and/or
@@ -250,11 +211,7 @@ def run(
             searched.append(f"the '{org}' Azure DevOps org")
         if github_org:
             searched.append(f"the '{github_org}' GitHub org")
-        sys.exit(
-            f"No repo matching '{name}' found locally under {search_root} or in "
-            + " or ".join(searched)
-            + "."
-        )
+        sys.exit(f"No repo matching '{name}' found locally under {search_root} or in " + " or ".join(searched) + ".")
 
     for r in remote_matches:
         print(f"{r.project}/{r.name}  {r.remote_url}")
@@ -263,11 +220,7 @@ def run(
         sys.exit("\nMultiple matches -- narrow the name or clone manually.")
 
     match = remote_matches[0]
-    dest = (
-        search_root / "github" / match.name
-        if match.source == "github"
-        else search_root / match.project / match.name
-    )
+    dest = search_root / "github" / match.name if match.source == "github" else search_root / match.project / match.name
     if dest.exists():
         sys.exit(f"{dest} already exists -- remove it or clone manually.")
 

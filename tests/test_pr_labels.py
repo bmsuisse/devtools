@@ -41,9 +41,7 @@ def test_missing_label_groups_none_missing_when_all_satisfied() -> None:
 
 def test_missing_label_groups_reports_unsatisfied_group() -> None:
     groups = {"type": ["bug", "feature"], "risk": ["breaking", "non-breaking"]}
-    assert missing_label_groups(groups, ["feature"]) == {
-        "risk": ["breaking", "non-breaking"]
-    }
+    assert missing_label_groups(groups, ["feature"]) == {"risk": ["breaking", "non-breaking"]}
 
 
 def test_missing_label_groups_matches_case_insensitively() -> None:
@@ -80,10 +78,7 @@ def test_scope_labels_reads_configured_mapping(tmp_path) -> None:
         'customers = "e2e-customers"\n'
         'billing = "e2e-billing"\n',
     )
-    assert scope_labels(tmp_path) == {
-        "customers": "e2e-customers",
-        "billing": "e2e-billing",
-    }
+    assert scope_labels(tmp_path) == {"customers": "e2e-customers", "billing": "e2e-billing"}
 
 
 def test_scope_labels_ignores_non_string_values(tmp_path) -> None:
@@ -91,7 +86,7 @@ def test_scope_labels_ignores_non_string_values(tmp_path) -> None:
         tmp_path,
         "[tool.bdt.pr.scope_labels]\n"
         'customers = "e2e-customers"\n'
-        'billing = ["not", "a", "string"]\n',
+        "billing = [\"not\", \"a\", \"string\"]\n",
     )
     assert scope_labels(tmp_path) == {"customers": "e2e-customers"}
 
@@ -105,12 +100,8 @@ def test_label_for_scope_returns_none_when_scope_unconfigured() -> None:
 
 
 def test_label_for_scope_returns_configured_label() -> None:
-    assert (
-        label_for_scope({"customers": "e2e-customers"}, "customers") == "e2e-customers"
-    )
+    assert label_for_scope({"customers": "e2e-customers"}, "customers") == "e2e-customers"
 
 
 def test_label_for_scope_matches_case_insensitively() -> None:
-    assert (
-        label_for_scope({"Customers": "e2e-customers"}, "CUSTOMERS") == "e2e-customers"
-    )
+    assert label_for_scope({"Customers": "e2e-customers"}, "CUSTOMERS") == "e2e-customers"

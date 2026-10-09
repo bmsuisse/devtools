@@ -28,11 +28,7 @@ from .bdt_config import load_bdt_table
 from .cli_tools import ensure_agent_session_note
 from .gh_pr import push_assets
 from .pr_issue_link import PR_AVAILABLE_LABEL
-from .pr_markdown import (
-    build_attachments_section,
-    build_comment_content,
-    build_screenshots_section,
-)
+from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 _COMMENT_ID_RE = re.compile(r"#issuecomment-(\d+)")
 
@@ -54,16 +50,12 @@ def _run_gh(gh: str, args: list[str]) -> str:
     return r.stdout.strip()
 
 
-def _screenshot_images(
-    owner: str, repo: str, key: str, screenshot_paths: list[str]
-) -> list[tuple[str, str]]:
+def _screenshot_images(owner: str, repo: str, key: str, screenshot_paths: list[str]) -> list[tuple[str, str]]:
     urls = push_assets(owner, repo, key, screenshot_paths)
     return list(zip((Path(p).name for p in screenshot_paths), urls))
 
 
-def _file_links(
-    owner: str, repo: str, key: str, file_paths: list[str]
-) -> list[tuple[str, str]]:
+def _file_links(owner: str, repo: str, key: str, file_paths: list[str]) -> list[tuple[str, str]]:
     urls = push_assets(owner, repo, key, file_paths)
     return list(zip((Path(p).name for p in file_paths), urls))
 
@@ -97,26 +89,11 @@ def resolve_project_number(gh: str, owner: str, board: str) -> int:
     """The GitHub Projects (v2) board `board` (a number or a title) as its project number."""
     if board.isdigit():
         return int(board)
-    out = _run_gh(
-        gh,
-        [
-            "project",
-            "list",
-            "--owner",
-            owner,
-            "--format",
-            "json",
-            "--closed",
-            "--limit",
-            str(_BOARD_ITEM_LIMIT),
-        ],
-    )
+    out = _run_gh(gh, ["project", "list", "--owner", owner, "--format", "json", "--closed", "--limit", str(_BOARD_ITEM_LIMIT)])
     projects = json.loads(out).get("projects", []) if out else []
     number = _find_project_number(projects, board)
     if number is None:
-        sys.exit(
-            f"GitHub Project board '{board}' not found for owner '{owner}'. Pass its number instead, or check the name."
-        )
+        sys.exit(f"GitHub Project board '{board}' not found for owner '{owner}'. Pass its number instead, or check the name.")
     return number
 
 
@@ -137,33 +114,14 @@ def _extract_issue_numbers(items: list[dict], owner: str, repo: str) -> set[int]
         if not url:
             continue
         match = _ISSUE_URL_RE.search(url)
-        if (
-            match
-            and match.group(1).casefold() == owner.casefold()
-            and match.group(2).casefold() == repo.casefold()
-        ):
+        if match and match.group(1).casefold() == owner.casefold() and match.group(2).casefold() == repo.casefold():
             numbers.add(int(match.group(3)))
     return numbers
 
 
-def board_issue_numbers(
-    gh: str, owner: str, repo: str, project_number: int
-) -> set[int]:
+def board_issue_numbers(gh: str, owner: str, repo: str, project_number: int) -> set[int]:
     """Issue numbers on `owner`'s Projects (v2) board `project_number` that belong to `owner/repo`."""
-    out = _run_gh(
-        gh,
-        [
-            "project",
-            "item-list",
-            str(project_number),
-            "--owner",
-            owner,
-            "--format",
-            "json",
-            "--limit",
-            str(_BOARD_ITEM_LIMIT),
-        ],
-    )
+    out = _run_gh(gh, ["project", "item-list", str(project_number), "--owner", owner, "--format", "json", "--limit", str(_BOARD_ITEM_LIMIT)])
     items = json.loads(out).get("items", []) if out else []
     return _extract_issue_numbers(items, owner, repo)
 
@@ -202,18 +160,11 @@ def create(
     if screenshot_paths or file_paths:
         new_body: str = body or ""
         if screenshot_paths:
-            new_body = build_screenshots_section(
-                new_body,
-                _screenshot_images(owner, repo, f"issue-{number}", screenshot_paths),
-            )
+            new_body = build_screenshots_section(new_body, _screenshot_images(owner, repo, f"issue-{number}", screenshot_paths))
         if file_paths:
-            new_body = build_attachments_section(
-                new_body, _file_links(owner, repo, f"issue-{number}", file_paths)
-            )
+            new_body = build_attachments_section(new_body, _file_links(owner, repo, f"issue-{number}", file_paths))
         _run_gh(gh, ["issue", "edit", number, "--body", new_body])
-        print(
-            f"Attached {len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s) to issue #{number}"
-        )
+        print(f"Attached {len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s) to issue #{number}")
 
 
 def _label_exists(gh: str, name: str) -> bool:
@@ -236,13 +187,9 @@ def ensure_pr_available_label(gh: str) -> None:
         _run_gh(
             gh,
             [
-                "label",
-                "create",
-                PR_AVAILABLE_LABEL,
-                "--color",
-                "0E8A16",
-                "--description",
-                "A PR exists that addresses this issue",
+                "label", "create", PR_AVAILABLE_LABEL,
+                "--color", "0E8A16",
+                "--description", "A PR exists that addresses this issue",
             ],
         )
 
@@ -294,9 +241,7 @@ def search(
     `repo`, not every repo under `owner`.
     """
     if org_wide and board:
-        sys.exit(
-            "--board can't be combined with --org-wide (board membership is only resolved for the current repo)."
-        )
+        sys.exit("--board can't be combined with --org-wide (board membership is only resolved for the current repo).")
 
     query = build_search_query(keywords, since)
     label_args = [arg for label in labels or [] for arg in ("--label", label)]
@@ -313,24 +258,13 @@ def search(
         out = _run_gh(
             gh,
             [
-                "search",
-                "issues",
-                query,
-                "--owner",
-                owner,
-                *state_args,
-                *label_args,
-                "--limit",
-                str(limit),
-                "--json",
-                "number,title,url,state,repository",
+                "search", "issues", query, "--owner", owner, *state_args, *label_args,
+                "--limit", str(limit), "--json", "number,title,url,state,repository",
             ],
         )
         items = json.loads(out) if out else []
         for item in items:
-            print(
-                f"{item['repository']['nameWithOwner']}#{item['number']} [{item['state']}] {item['title']}"
-            )
+            print(f"{item['repository']['nameWithOwner']}#{item['number']} [{item['state']}] {item['title']}")
             print(item["url"])
         if not items:
             print("No matching issues found.")
@@ -339,19 +273,7 @@ def search(
     fetch_limit = limit * _BOARD_SEARCH_OVERFETCH if board else limit
     out = _run_gh(
         gh,
-        [
-            "issue",
-            "list",
-            "--search",
-            query,
-            "--state",
-            state,
-            *label_args,
-            "--limit",
-            str(fetch_limit),
-            "--json",
-            "number,title,url,state",
-        ],
+        ["issue", "list", "--search", query, "--state", state, *label_args, "--limit", str(fetch_limit), "--json", "number,title,url,state"],
     )
     items = json.loads(out) if out else []
 
@@ -421,9 +343,7 @@ def update(
     for label in remove_labels or []:
         args += ["--remove-label", label]
     if len(args) == 3 and state is None:
-        sys.exit(
-            "Nothing to update — provide at least one of --title, --description, --label, --remove-label, --state."
-        )
+        sys.exit("Nothing to update — provide at least one of --title, --description, --label, --remove-label, --state.")
 
     if len(args) > 3:
         _run_gh(gh, args)
@@ -454,23 +374,15 @@ def comment(
     is not itself the agent and writes the right session into `message` instead.
     """
     file_paths = file_paths or []
-    images = (
-        _screenshot_images(owner, repo, f"issue-{number}", screenshot_paths)
-        if screenshot_paths
-        else []
-    )
-    files = (
-        _file_links(owner, repo, f"issue-{number}", file_paths) if file_paths else []
-    )
+    images = _screenshot_images(owner, repo, f"issue-{number}", screenshot_paths) if screenshot_paths else []
+    files = _file_links(owner, repo, f"issue-{number}", file_paths) if file_paths else []
     content = build_comment_content(message, images, files) or ""
     if agent_note:
         content = ensure_agent_session_note(content) or ""
     url = _run_gh(gh, ["issue", "comment", str(number), "--body", content])
     comment_id = parse_comment_id(url)
     suffix = f" (comment #{comment_id})" if comment_id else ""
-    print(
-        f"Added comment ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) to issue #{number}{suffix}"
-    )
+    print(f"Added comment ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) to issue #{number}{suffix}")
     print(url)
 
 
@@ -482,48 +394,16 @@ _LAST_COMMENT_QUERY = (
 
 def last_comment(gh: str, owner: str, repo: str, number: int) -> str | None:
     """Text of the issue's newest comment, or None if it has none."""
-    out = _run_gh(
-        gh,
-        [
-            "api",
-            "graphql",
-            "-f",
-            f"query={_LAST_COMMENT_QUERY}",
-            "-f",
-            f"owner={owner}",
-            "-f",
-            f"repo={repo}",
-            "-F",
-            f"number={number}",
-        ],
-    )
+    out = _run_gh(gh, ["api", "graphql", "-f", f"query={_LAST_COMMENT_QUERY}", "-f", f"owner={owner}", "-f", f"repo={repo}", "-F", f"number={number}"])
     nodes = json.loads(out)["data"]["repository"]["issue"]["comments"]["nodes"]
     return nodes[-1]["body"] if nodes else None
 
 
 def update_comment(gh: str, owner: str, repo: str, comment_id: str, text: str) -> None:
-    _run_gh(
-        gh,
-        [
-            "api",
-            "--method",
-            "PATCH",
-            f"repos/{owner}/{repo}/issues/comments/{comment_id}",
-            "-f",
-            f"body={text}",
-        ],
-    )
+    _run_gh(gh, ["api", "--method", "PATCH", f"repos/{owner}/{repo}/issues/comments/{comment_id}", "-f", f"body={text}"])
     print(f"Updated comment #{comment_id}")
 
 
 def delete_comment(gh: str, owner: str, repo: str, comment_id: str) -> None:
-    _run_gh(
-        gh,
-        [
-            "api",
-            "--method",
-            "DELETE",
-            f"repos/{owner}/{repo}/issues/comments/{comment_id}",
-        ],
-    )
+    _run_gh(gh, ["api", "--method", "DELETE", f"repos/{owner}/{repo}/issues/comments/{comment_id}"])
     print(f"Deleted comment #{comment_id}")

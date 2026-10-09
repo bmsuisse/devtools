@@ -30,26 +30,15 @@ def _as_list(value: str | list[str] | None) -> list[str]:
 def check_sql_roots(config: dict, *, repo_root: Path) -> list[Finding]:
     """`sql-file-unreferenced` over `sql_roots`. Looks at every Python file of the repo: the caller of a query
     can live anywhere."""
-    exclude_dir_names = _DEFAULT_EXCLUDE_DIR_NAMES | set(
-        _as_list(config.get("exclude_dirs"))
-    )
+    exclude_dir_names = _DEFAULT_EXCLUDE_DIR_NAMES | set(_as_list(config.get("exclude_dirs")))
     findings: list[Finding] = []
     roots: list[Path] = []
     for root in _as_list(config.get("sql_roots")):
         candidate = repo_root / root
-        if candidate.is_dir() and candidate.resolve().is_relative_to(
-            repo_root.resolve()
-        ):
+        if candidate.is_dir() and candidate.resolve().is_relative_to(repo_root.resolve()):
             roots.append(candidate)
         else:
-            findings.append(
-                Finding(
-                    candidate,
-                    0,
-                    "lint-path-not-found",
-                    f"sql_roots entry '{root}' is not a directory inside {repo_root}.",
-                )
-            )
+            findings.append(Finding(candidate, 0, "lint-path-not-found", f"sql_roots entry '{root}' is not a directory inside {repo_root}."))
     sql_files, _ = _iter_files(roots, exclude_dir_names, (".sql",))
     python_files, _ = _iter_python_files([repo_root], exclude_dir_names)
     findings.extend(
@@ -57,29 +46,19 @@ def check_sql_roots(config: dict, *, repo_root: Path) -> list[Finding]:
             repo_root=repo_root,
             sql_files=sql_files,
             python_files=python_files,
-            loader_functions=_as_list(
-                config.get("sql_loader_functions", list(DEFAULT_LOADER_FUNCTIONS))
-            ),
+            loader_functions=_as_list(config.get("sql_loader_functions", list(DEFAULT_LOADER_FUNCTIONS))),
             ignore_globs=_as_list(config.get("sql_unreferenced_ignore")),
         )
     )
     return findings
 
 
-def run(
-    table: dict,
-    *,
-    repo_root: Path,
-    only: list[str] | None = None,
-    update_baseline: bool = False,
-) -> list[Finding]:
+def run(table: dict, *, repo_root: Path, only: list[str] | None = None, update_baseline: bool = False) -> list[Finding]:
     """Every configured check (or just those named in `only`). `update_baseline` concerns the routes check alone and
     skips the sql one."""
     unknown = [c for c in only or [] if c not in CHECKS]
     if unknown:
-        raise ApiUsageError(
-            f"unknown check {', '.join(unknown)} -- choose from: {', '.join(CHECKS)}"
-        )
+        raise ApiUsageError(f"unknown check {', '.join(unknown)} -- choose from: {', '.join(CHECKS)}")
     if update_baseline and only and "routes" not in only:
         raise ApiUsageError("--update-baseline only applies to the `routes` check")
     wanted = set(only or CHECKS)
@@ -99,7 +78,5 @@ def run(
     if run_sql:
         findings.extend(check_sql_roots(table, repo_root=repo_root))
     if run_routes:
-        findings.extend(
-            api_usage.run(table, repo_root=repo_root, update_baseline=update_baseline)
-        )
+        findings.extend(api_usage.run(table, repo_root=repo_root, update_baseline=update_baseline))
     return findings

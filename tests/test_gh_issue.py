@@ -40,23 +40,15 @@ def test_parse_comment_id_absent() -> None:
 
 
 def test_build_search_query_keywords_only() -> None:
-    assert (
-        build_search_query(["auth", "timeout"], None)
-        == "auth timeout sort:updated-desc"
-    )
+    assert build_search_query(["auth", "timeout"], None) == "auth timeout sort:updated-desc"
 
 
 def test_build_search_query_adds_updated_qualifier() -> None:
-    assert (
-        build_search_query(["auth"], "2026-08-10")
-        == "auth sort:updated-desc updated:>=2026-08-10"
-    )
+    assert build_search_query(["auth"], "2026-08-10") == "auth sort:updated-desc updated:>=2026-08-10"
 
 
 def test_build_search_query_no_keywords_still_scopes_by_date() -> None:
-    assert (
-        build_search_query([], "2026-08-10") == "sort:updated-desc updated:>=2026-08-10"
-    )
+    assert build_search_query([], "2026-08-10") == "sort:updated-desc updated:>=2026-08-10"
 
 
 def test_build_search_query_always_sorts_by_updated_desc() -> None:
@@ -98,36 +90,18 @@ def test_search_board_overfetches_then_filters_to_limit(monkeypatch) -> None:
 
     captured_cmds: list[list[str]] = []
 
-    issues = [
-        {
-            "number": i,
-            "title": f"issue {i}",
-            "url": f"https://github.com/owner/repo/issues/{i}",
-            "state": "OPEN",
-        }
-        for i in range(1, 21)
-    ]
+    issues = [{"number": i, "title": f"issue {i}", "url": f"https://github.com/owner/repo/issues/{i}", "state": "OPEN"} for i in range(1, 21)]
     # Board only has the even-numbered issues on it.
-    board_items = [
-        {"type": "Issue", "url": f"https://github.com/owner/repo/issues/{i}"}
-        for i in range(1, 21)
-        if i % 2 == 0
-    ]
+    board_items = [{"type": "Issue", "url": f"https://github.com/owner/repo/issues/{i}"} for i in range(1, 21) if i % 2 == 0]
 
     def fake_run(cmd, **kwargs):
         captured_cmds.append(cmd)
         if "list" in cmd and "issue" in cmd:
             return MagicMock(returncode=0, stdout=json.dumps(issues), stderr="")
         if "project" in cmd and "list" in cmd:
-            return MagicMock(
-                returncode=0,
-                stdout=json.dumps({"projects": [{"title": "Roadmap", "number": 7}]}),
-                stderr="",
-            )
+            return MagicMock(returncode=0, stdout=json.dumps({"projects": [{"title": "Roadmap", "number": 7}]}), stderr="")
         if "item-list" in cmd:
-            return MagicMock(
-                returncode=0, stdout=json.dumps({"items": board_items}), stderr=""
-            )
+            return MagicMock(returncode=0, stdout=json.dumps({"items": board_items}), stderr="")
         raise AssertionError(f"unexpected command: {cmd}")
 
     monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
@@ -135,9 +109,7 @@ def test_search_board_overfetches_then_filters_to_limit(monkeypatch) -> None:
     results = search("gh", "owner", "repo", [], None, 3, board="Roadmap")
 
     issue_list_cmd = captured_cmds[0]
-    assert (
-        issue_list_cmd[issue_list_cmd.index("--limit") + 1] == "30"
-    )  # limit * _BOARD_SEARCH_OVERFETCH
+    assert issue_list_cmd[issue_list_cmd.index("--limit") + 1] == "30"  # limit * _BOARD_SEARCH_OVERFETCH
     assert len(results) == 3
     assert all(item["number"] % 2 == 0 for item in results)
 
@@ -147,13 +119,7 @@ def test_search_org_wide_uses_gh_search_issues_with_owner(monkeypatch) -> None:
 
     captured_cmd: list[str] = []
     items = [
-        {
-            "number": 5,
-            "title": "org-wide bug",
-            "url": "https://github.com/owner/other-repo/issues/5",
-            "state": "open",
-            "repository": {"nameWithOwner": "owner/other-repo"},
-        }
+        {"number": 5, "title": "org-wide bug", "url": "https://github.com/owner/other-repo/issues/5", "state": "open", "repository": {"nameWithOwner": "owner/other-repo"}}
     ]
 
     def fake_run(cmd, **kwargs):
@@ -226,32 +192,19 @@ def test_search_org_wide_and_board_together_exits(monkeypatch) -> None:
         search("gh", "owner", "repo", [], None, 10, board="Roadmap", org_wide=True)
 
 
-def test_search_board_ignores_same_number_issue_from_a_different_repo(
-    monkeypatch,
-) -> None:
+def test_search_board_ignores_same_number_issue_from_a_different_repo(monkeypatch) -> None:
     import json
 
     # This repo's own #7, plus a same-numbered #7 from an unrelated repo that also happens to
     # be on the (org-wide) board -- only the former should count as a match.
-    issues = [
-        {
-            "number": 7,
-            "title": "our issue",
-            "url": "https://github.com/owner/repo/issues/7",
-            "state": "OPEN",
-        }
-    ]
-    board_items = [
-        {"type": "Issue", "url": "https://github.com/owner/other-repo/issues/7"}
-    ]
+    issues = [{"number": 7, "title": "our issue", "url": "https://github.com/owner/repo/issues/7", "state": "OPEN"}]
+    board_items = [{"type": "Issue", "url": "https://github.com/owner/other-repo/issues/7"}]
 
     def fake_run(cmd, **kwargs):
         if "list" in cmd and "issue" in cmd:
             return MagicMock(returncode=0, stdout=json.dumps(issues), stderr="")
         if "item-list" in cmd:
-            return MagicMock(
-                returncode=0, stdout=json.dumps({"items": board_items}), stderr=""
-            )
+            return MagicMock(returncode=0, stdout=json.dumps({"items": board_items}), stderr="")
         raise AssertionError(f"unexpected command: {cmd}")
 
     monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
@@ -268,11 +221,7 @@ def test_resolve_project_number_list_call_includes_a_limit(monkeypatch) -> None:
 
     def fake_run(cmd, **kwargs):
         captured_cmd[:] = cmd
-        return MagicMock(
-            returncode=0,
-            stdout=json.dumps({"projects": [{"title": "Roadmap", "number": 7}]}),
-            stderr="",
-        )
+        return MagicMock(returncode=0, stdout=json.dumps({"projects": [{"title": "Roadmap", "number": 7}]}), stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
 
@@ -283,17 +232,13 @@ def test_resolve_project_number_list_call_includes_a_limit(monkeypatch) -> None:
 
 
 def test_resolve_board_prefers_explicit_over_config(tmp_path, monkeypatch) -> None:
-    (tmp_path / "pyproject.toml").write_text(
-        '[tool.bdt.github]\nboard = "Config Board"\n'
-    )
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.github]\nboard = "Config Board"\n')
     monkeypatch.chdir(tmp_path)
     assert resolve_board("Explicit Board") == "Explicit Board"
 
 
 def test_resolve_board_falls_back_to_config(tmp_path, monkeypatch) -> None:
-    (tmp_path / "pyproject.toml").write_text(
-        '[tool.bdt.github]\nboard = "Config Board"\n'
-    )
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.github]\nboard = "Config Board"\n')
     monkeypatch.chdir(tmp_path)
     assert resolve_board(None) == "Config Board"
 
@@ -350,9 +295,7 @@ def test_update_closes_as_completed_for_done_states(monkeypatch, state: str) -> 
 
 
 @pytest.mark.parametrize("state", ["Removed", "Not Planned", "wontfix"])
-def test_update_closes_as_not_planned_for_removed_states(
-    monkeypatch, state: str
-) -> None:
+def test_update_closes_as_not_planned_for_removed_states(monkeypatch, state: str) -> None:
     cmds = _run_update_capturing_commands(monkeypatch, state=state)
     assert cmds == [["gh", "issue", "close", "42", "--reason", "not planned"]]
 
@@ -364,16 +307,7 @@ def test_update_reopens_for_open_state(monkeypatch) -> None:
 
 def test_update_comments_exact_state_when_unsupported(monkeypatch) -> None:
     cmds = _run_update_capturing_commands(monkeypatch, state="Active")
-    assert cmds == [
-        [
-            "gh",
-            "issue",
-            "comment",
-            "42",
-            "--body",
-            "Requested state change to 'Active', which isn't a valid GitHub issue state — left unchanged.",
-        ]
-    ]
+    assert cmds == [["gh", "issue", "comment", "42", "--body", "Requested state change to 'Active', which isn't a valid GitHub issue state — left unchanged."]]
 
 
 def test_update_errors_with_nothing_to_do(monkeypatch) -> None:
@@ -385,10 +319,7 @@ def test_update_errors_with_nothing_to_do(monkeypatch) -> None:
 def _fake_push_assets(monkeypatch) -> None:
     monkeypatch.setattr(
         "bmsdna.devtools.gh_issue.push_assets",
-        lambda owner, repo, key, paths, **kwargs: [
-            f"https://github.com/{owner}/{repo}/blob/pr-assets/{key}/{i:02d}-{p.split('/')[-1]}?raw=true"
-            for i, p in enumerate(paths)
-        ],
+        lambda owner, repo, key, paths, **kwargs: [f"https://github.com/{owner}/{repo}/blob/pr-assets/{key}/{i:02d}-{p.split('/')[-1]}?raw=true" for i, p in enumerate(paths)],
     )
 
 
@@ -399,26 +330,12 @@ def test_create_with_files_appends_attachments_section(monkeypatch) -> None:
     def fake_run(cmd, **kwargs):
         captured_cmds.append(cmd)
         if "create" in cmd:
-            return MagicMock(
-                returncode=0,
-                stdout="https://github.com/owner/repo/issues/42\n",
-                stderr="",
-            )
+            return MagicMock(returncode=0, stdout="https://github.com/owner/repo/issues/42\n", stderr="")
         return MagicMock(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
 
-    create(
-        "gh",
-        "owner",
-        "repo",
-        "Bug title",
-        "body text",
-        [],
-        [],
-        [],
-        file_paths=["/tmp/report.pdf"],
-    )
+    create("gh", "owner", "repo", "Bug title", "body text", [], [], [], file_paths=["/tmp/report.pdf"])
 
     edit_cmd = next(cmd for cmd in captured_cmds if "edit" in cmd)
     body = edit_cmd[edit_cmd.index("--body") + 1]
@@ -432,9 +349,7 @@ def test_create_with_board_passes_project_flag(monkeypatch) -> None:
 
     def fake_run(cmd, **kwargs):
         captured_cmds.append(cmd)
-        return MagicMock(
-            returncode=0, stdout="https://github.com/owner/repo/issues/42\n", stderr=""
-        )
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/issues/42\n", stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
 
@@ -449,9 +364,7 @@ def test_create_without_board_omits_project_flag(monkeypatch) -> None:
 
     def fake_run(cmd, **kwargs):
         captured_cmds.append(cmd)
-        return MagicMock(
-            returncode=0, stdout="https://github.com/owner/repo/issues/42\n", stderr=""
-        )
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/issues/42\n", stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
 
@@ -466,11 +379,7 @@ def test_comment_with_screenshots_and_files_builds_both_sections(monkeypatch) ->
 
     def fake_run(cmd, **kwargs):
         captured_cmd[:] = cmd
-        return MagicMock(
-            returncode=0,
-            stdout="https://github.com/owner/repo/issues/42#issuecomment-1\n",
-            stderr="",
-        )
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/issues/42#issuecomment-1\n", stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
 
@@ -489,9 +398,7 @@ def test_create_appends_agent_session_note_when_detected(monkeypatch) -> None:
 
     def fake_run(cmd, **kwargs):
         captured_cmd[:] = cmd
-        return MagicMock(
-            returncode=0, stdout="https://github.com/owner/repo/issues/42\n", stderr=""
-        )
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/issues/42\n", stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
 
@@ -506,9 +413,7 @@ def test_create_without_agent_leaves_body_untouched(monkeypatch) -> None:
 
     def fake_run(cmd, **kwargs):
         captured_cmd[:] = cmd
-        return MagicMock(
-            returncode=0, stdout="https://github.com/owner/repo/issues/42\n", stderr=""
-        )
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/issues/42\n", stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
 
@@ -524,11 +429,7 @@ def test_comment_appends_agent_session_note_when_detected(monkeypatch) -> None:
 
     def fake_run(cmd, **kwargs):
         captured_cmd[:] = cmd
-        return MagicMock(
-            returncode=0,
-            stdout="https://github.com/owner/repo/issues/42#issuecomment-1\n",
-            stderr="",
-        )
+        return MagicMock(returncode=0, stdout="https://github.com/owner/repo/issues/42#issuecomment-1\n", stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
 
@@ -558,17 +459,13 @@ def test_ensure_pr_available_label_creates_label_when_missing(monkeypatch) -> No
     assert create_cmd[3] == "pr-available"
 
 
-def test_ensure_pr_available_label_skips_create_when_label_already_exists(
-    monkeypatch,
-) -> None:
+def test_ensure_pr_available_label_skips_create_when_label_already_exists(monkeypatch) -> None:
     captured_cmds: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):
         captured_cmds.append(cmd)
         if cmd[1:3] == ["label", "list"]:
-            return MagicMock(
-                returncode=0, stdout='[{"name": "pr-available"}]', stderr=""
-            )
+            return MagicMock(returncode=0, stdout='[{"name": "pr-available"}]', stderr="")
         return MagicMock(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
