@@ -6,11 +6,11 @@ description: >
   a PR, creating a git worktree, committing and pushing files (with pre-flight
   checks), claiming an issue / work item (`bdt issue take`), a one-shot PR summary
   (`bdt pr info`: link, build state, closed issues), querying Azure logs, and static checks (`bdt lint`: SQL/psycopg rules, pydantic placement, tooling; `bdt dead-code`:
-  unreferenced .sql files and backend routes nothing calls). `bdt pr *` works against both Azure DevOps
+  unreferenced .sql files and backend routes nothing calls), listing which env vars a repo defines (`bdt env get-keys`, names only). `bdt pr *` works against both Azure DevOps
   and GitHub — it auto-detects which one from the `origin` remote. Trigger
   whenever the user asks to check a build/PR status, create a PR, make a
   worktree, commit changes, fetch/tail application logs, lint a repo, find dead API routes /
-  unused .sql files, or start working on / take an issue ("work on issue #N"), in a repo that has
+  unused .sql files, find out which environment variables exist, or start working on / take an issue ("work on issue #N"), in a repo that has
   bmsdna-devtools installed (check for `bdt` on PATH, or `bmsdna-devtools` in
   pyproject.toml, before assuming it applies).
 ---
@@ -129,6 +129,12 @@ vendor a git submodule under that path.
   `url_for(...)` call uses (`[[tool.bdt.dead_code.apps]]`: app or openapi file, frontends, excludes, optional `baseline`;
   adopt with `--update-baseline`). `--only sql|routes` runs one check. The routes check imports the app, so run it with
   the repo's own interpreter (`uv run`). Generated API-client code and tests never count as callers.
+
+## Environment variables
+
+`bdt env get-keys [--search TEXT]` lists the variable **names** (never values) from `.env`, `*.env` and `.env.*`
+files in the current directory and `~`. Use it instead of `cat .env` / `printenv` to find out which variables exist;
+files in `~` (and ones using `export VAR=...`) are bash syntax, so the output says to `source` them.
 
 ## Application Insights logs
 
