@@ -1,6 +1,6 @@
 """AST rule engine for `bdt lint`'s postgres/psycopg checks (bmsuisse/skills#52):
 every `.execute()`/`.executemany()` call (and pgdevkit's `fetch_all`/`fetch_one`/`fetch_scalar`/`execute` and
-`PostgresJsonResponse`) is classified by how its SQL argument was
+`PostgresJsonResponse`, and arrowbricks' `execute_streamed`/`query_agent`/`stream_query_json`) is classified by how its SQL argument was
 built, then checked against the `postgres-best-practices` skill's rules
 (../../skills/postgres-best-practices in a checkout of bmsuisse/skills).
 
@@ -28,7 +28,7 @@ import itertools
 import re
 import sys
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .lint_findings import Finding
@@ -137,6 +137,14 @@ class _Trust:
     literal_funcs: frozenset[str] = frozenset()
     sqlglot_aliases: Mapping[str, str] = field(default_factory=dict)  # local name -> name it was imported as
     pgdevkit_sinks: frozenset[str] = frozenset()  # local names bound by `from pgdevkit[.x] import <sql-taking helper>`
+    arrowbricks_modules: frozenset[str] = frozenset()  # local names bound by `import arrowbricks[.x] [as y]`
+    arrowbricks_file: bool = False  # the file imports arrowbricks (`import arrowbricks` / `from arrowbricks[.x] import ...`)
+    arrowbricks_stream_funcs: frozenset[str] = frozenset()  # local names of the free `stream_query_json(client, sql)`
+    # Per-call, set by the visitor (see `_call_trust`): this sink's SQL is Databricks SQL, so a probe that does not parse
+    # as postgres is retried as Databricks (backticks, `:name` markers, QUALIFY, ...) ...
+    databricks: bool = False
+    # ... and the postgres house style (inline-complexity, `%s` params, forbidden joins) is not applied to it.
+    postgres_rules: bool = True
 
 
 _NO_TRUST = _Trust()
@@ -176,10 +184,13 @@ def _is_trusted_sql_call(node: ast.AST, trust: _Trust = _NO_TRUST) -> bool:
 
 
 def _literal_string_cast_inner(node: ast.Call) -> ast.expr | None:
-    """`cast(LiteralString, x)` -> `x`. The cast itself proves nothing: it is only as safe as `x`."""
+    """`cast(LiteralString, x)` -> `x`, and arrowbricks' `unsafe_sql(x)` (its no-op spelling of the same cast) -> `x`.
+    The cast itself proves nothing: it is only as safe as `x`."""
     func = node.func
-    is_cast = (isinstance(func, ast.Name) and func.id == "cast") or (isinstance(func, ast.Attribute) and func.attr == "cast")
-    if is_cast and len(node.args) == 2 and _is_literal_string_ref(node.args[0]):
+    name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
+    if name == "unsafe_sql" and len(node.args) == 1 and not node.keywords:
+        return node.args[0]
+    if name == "cast" and len(node.args) == 2 and _is_literal_string_ref(node.args[0]):
         return node.args[1]
     return None
 
@@ -199,22 +210,48 @@ def _is_pgdevkit_module(module: str | None) -> bool:
     return module is not None and (module == "pgdevkit" or module.startswith("pgdevkit."))
 
 
+def _is_arrowbricks_module(module: str | None) -> bool:
+    return module is not None and (module == "arrowbricks" or module.startswith("arrowbricks."))
+
+
 def _file_trust(tree: ast.AST) -> _Trust:
     literal_funcs: set[str] = set()
     sqlglot_names: set[str] = set()
     sqlglot_aliases: dict[str, str] = {}
     pgdevkit_sinks: set[str] = set()
+    arrowbricks_modules: set[str] = set()
+    arrowbricks_stream_funcs: set[str] = set()
+    arrowbricks_file = False
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.returns is not None and _is_literal_string_ref(node.returns):
             literal_funcs.add(node.name)
         elif isinstance(node, ast.Import):
             sqlglot_names.update((a.asname or a.name).split(".")[0] for a in node.names if a.name.split(".")[0] == "sqlglot")
+            for alias in node.names:
+                if _is_arrowbricks_module(alias.name):
+                    arrowbricks_file = True
+                    arrowbricks_modules.add(alias.asname or alias.name.split(".")[0])
         elif isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "sqlglot":
             sqlglot_names.update(a.asname or a.name for a in node.names)
             sqlglot_aliases.update({a.asname or a.name: a.name for a in node.names})
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and _is_pgdevkit_module(node.module):
             pgdevkit_sinks.update(a.asname or a.name for a in node.names if a.name in _PGDEVKIT_SQL_CALLEES)
-    return _Trust(frozenset(sqlglot_names), frozenset(literal_funcs), sqlglot_aliases, frozenset(pgdevkit_sinks))
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and _is_arrowbricks_module(node.module):
+            arrowbricks_file = True
+            for alias in node.names:
+                if alias.name == "stream_query_json":
+                    arrowbricks_stream_funcs.add(alias.asname or alias.name)
+                elif alias.name == "_streaming":  # the module that defines the free function
+                    arrowbricks_modules.add(alias.asname or alias.name)
+    return _Trust(
+        frozenset(sqlglot_names),
+        frozenset(literal_funcs),
+        sqlglot_aliases,
+        frozenset(pgdevkit_sinks),
+        frozenset(arrowbricks_modules),
+        arrowbricks_file,
+        frozenset(arrowbricks_stream_funcs),
+    )
 
 
 def _resolve_single(expr: ast.expr, lookup) -> ast.expr:
@@ -293,6 +330,20 @@ _FSTRING_FIX = (
     "`{name:i}` quotes a table/column identifier. Or use load_sql()/a .sql file for static SQL."
 )
 _GENERIC_FIX = "Use a psycopg t-string (Python 3.14+), psycopg.sql for dynamic SQL, or load_sql()/a .sql file for static SQL."
+_ARROWBRICKS_FSTRING_FIX = (
+    "Change the `f` prefix to `t` (arrowbricks t-string, Python 3.14+): `{value}` is bound as a named parameter and "
+    "`{name:i}` quotes a table/column identifier. Or keep the SQL literal and pass its `:name` markers' values as "
+    "`parameters=[...]` (`params=[...]` for `query_agent`/`stream_query_json`)."
+)
+_ARROWBRICKS_GENERIC_FIX = (
+    "Use an arrowbricks t-string (Python 3.14+: `{value}` binds a named parameter, `{name:i}` quotes an identifier), or a "
+    "literal SQL string with `parameters=[...]` (`params=[...]` for `query_agent`/`stream_query_json`) for its `:name` markers."
+)
+# A plain `.execute()` in a file that imports arrowbricks may be either driver's cursor: name neither.
+_MIXED_FIX = (
+    "Change the `f` prefix to `t` (psycopg/arrowbricks t-string, Python 3.14+): `{value}` becomes a bound parameter and "
+    "`{name:i}` quotes a table/column identifier. Or use load_sql()/a .sql file for static SQL."
+)
 
 
 # Keyword that must literally be in the text before a variant reading (a fragment as nothing/an assignment) may
@@ -309,11 +360,18 @@ if exp is not None:
     }
 
 
-def _parse_probe_text(text: str) -> "exp.Expression | None":
+def _parse_any_dialect(text: str, databricks: bool) -> "exp.Expression | None":
+    parsed = parse_sql_text(text)
+    if parsed is None and databricks:
+        parsed = parse_sql_text(text, "databricks")
+    return parsed
+
+
+def _parse_probe_text(text: str, databricks: bool = False) -> "exp.Expression | None":
     """`parse_sql_text` for text with `_PROBE_PLACEHOLDER` standing in for dynamic fragments: the placeholder
     as an identifier first, then (see `_PROBE_SLOT_VARIANTS`) every fragment as nothing/an assignment -- the
     latter only when the literal text carries the statement's own keyword (`_VARIANT_REQUIRED_KEYWORD`)."""
-    parsed = parse_sql_text(text)
+    parsed = _parse_any_dialect(text, databricks)
     if parsed is not None:
         return parsed
     parts = text.split(_PROBE_PLACEHOLDER)
@@ -325,7 +383,7 @@ def _parse_probe_text(text: str) -> "exp.Expression | None":
         if all(c == _PROBE_PLACEHOLDER for c in combination):
             continue  # that's `text` itself, already tried
         candidate = "".join(a + b for a, b in itertools.zip_longest(parts, combination, fillvalue=""))
-        parsed = parse_sql_text(candidate)
+        parsed = _parse_any_dialect(candidate, databricks)
         if parsed is None:
             continue
         keyword = next((rx for t, rx in _VARIANT_REQUIRED_KEYWORD.items() if isinstance(parsed, t)), None)
@@ -334,10 +392,15 @@ def _parse_probe_text(text: str) -> "exp.Expression | None":
     return None
 
 
-def _injection_finding(text: str, path: Path, lineno: int, rule: str, how: str) -> list[Finding]:
-    if _parse_probe_text(text) is None:
+def _injection_finding(text: str, path: Path, lineno: int, rule: str, how: str, trust: _Trust = _NO_TRUST) -> list[Finding]:
+    if _parse_probe_text(text, trust.databricks) is None:
         return []
-    fix = _FSTRING_FIX if rule == "sql-fstring-injection" else _GENERIC_FIX
+    if trust.databricks and not trust.postgres_rules:
+        fix = _ARROWBRICKS_FSTRING_FIX if rule == "sql-fstring-injection" else _ARROWBRICKS_GENERIC_FIX
+    elif trust.databricks:
+        fix = _MIXED_FIX
+    else:
+        fix = _FSTRING_FIX if rule == "sql-fstring-injection" else _GENERIC_FIX
     return [Finding(path, lineno, rule, f"SQL built with {how} -- injection risk. {fix}")]
 
 
@@ -416,30 +479,30 @@ def _check_resolved_candidate(
     if _is_load_sql_call(resolved) or _is_sql_composed_call(resolved) or _is_trusted_sql_call(resolved, trust):
         return []
     if isinstance(resolved, getattr(ast, "TemplateStr", ())):
-        return []  # psycopg t-string: params are always bound, never interpolated
+        return []  # psycopg/arrowbricks t-string: params are always bound, never interpolated
 
     if isinstance(resolved, ast.JoinedStr):
-        return _injection_finding(_fstring_probe_text(resolved), path, lineno, "sql-fstring-injection", "an f-string")
+        return _injection_finding(_fstring_probe_text(resolved), path, lineno, "sql-fstring-injection", "an f-string", trust)
 
     if isinstance(resolved, ast.BinOp) and isinstance(resolved.op, ast.Mod):
         left = _resolve_single(resolved.left, lookup)
         if isinstance(left, ast.Constant) and isinstance(left.value, str):
-            return _injection_finding(left.value, path, lineno, "sql-percent-format-injection", "the `%` string-formatting operator")
+            return _injection_finding(left.value, path, lineno, "sql-percent-format-injection", "the `%` string-formatting operator", trust)
         return []
 
     if isinstance(resolved, ast.BinOp) and isinstance(resolved.op, ast.Add):
         text = _concat_probe_text(resolved, lookup)
-        return _injection_finding(text, path, lineno, "sql-concat-injection", "string concatenation") if text is not None else []
+        return _injection_finding(text, path, lineno, "sql-concat-injection", "string concatenation", trust) if text is not None else []
 
     if isinstance(resolved, ast.Call) and isinstance(resolved.func, ast.Attribute) and resolved.func.attr == "format":
         template = _resolve_single(resolved.func.value, lookup)
         if isinstance(template, ast.Constant) and isinstance(template.value, str):
             text = _FORMAT_FIELD_RE.sub(_PROBE_PLACEHOLDER, template.value)
-            return _injection_finding(text, path, lineno, "sql-format-injection", "`str.format()`")
+            return _injection_finding(text, path, lineno, "sql-format-injection", "`str.format()`", trust)
         return []
 
     if isinstance(resolved, ast.Constant) and isinstance(resolved.value, str):
-        return _literal_findings(resolved.value, path, lineno)
+        return _literal_findings(resolved.value, path, lineno) if trust.postgres_rules else []
 
     if isinstance(resolved, ast.Call):
         cast_inner = _literal_string_cast_inner(resolved)
@@ -474,7 +537,7 @@ def _unverified_cast_finding(path: Path, lineno: int) -> Finding:
         path,
         lineno,
         "sql-unverified-cast",
-        "`cast(LiteralString, ...)` wraps a value that isn't visibly a sqlglot expression or a literal. AI reviewer: verify it "
+        "`cast(LiteralString, ...)`/`unsafe_sql(...)` wraps a value that isn't visibly a sqlglot expression or a literal. AI reviewer: verify it "
         "cannot carry user-controlled text (the cast doesn't make it safe); pass a sqlglot expression, or add "
         "`# bdt-lint: ignore sql-unverified-cast`.",
         severity="review",
@@ -540,7 +603,8 @@ def _execute_query_arg(call: ast.Call, trust: _Trust = _NO_TRUST) -> ast.expr | 
         return None
     if call.args:
         return call.args[0]
-    return next((kw.value for kw in call.keywords if kw.arg == "query"), None)
+    keywords = ("query", "sql") if trust.arrowbricks_file else ("query",)  # arrowbricks' Cursor.execute(sql=...)
+    return next((kw.value for kw in call.keywords if kw.arg in keywords), None)
 
 
 # sqlglot's builders parse plain strings as SQL (`select(f"a, {x}")`, `.where(f"id = {x}")`), so text
@@ -634,6 +698,52 @@ def _sqlglot_builder_findings(
     return []
 
 
+# arrowbricks' (Databricks SQL client) calls that take SQL: `Cursor.execute_streamed(sql, ...)`,
+# `DatabricksClient.query_agent(sql, ...)`, `DatabricksClient.stream_query_json(sql, ...)` and the free function
+# `arrowbricks.stream_query_json(client, sql, ...)`. (`Cursor.execute` is already matched as any `.execute()`.) The names are
+# specific enough to match anywhere, like pgdevkit's `fetch_all`. Their SQL is Databricks SQL, so only the injection rules apply
+# (`_call_trust`); a t-string or `unsafe_sql(...)` is handled like psycopg's t-string / `cast(LiteralString, ...)`.
+_ARROWBRICKS_SQL_CALLEES = frozenset({"execute_streamed", "query_agent", "stream_query_json"})
+
+
+def _attribute_root(node: ast.expr) -> str | None:
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def _arrowbricks_sink_arg(call: ast.Call, trust: _Trust) -> ast.expr | None:
+    func = call.func
+    if isinstance(func, ast.Name):
+        # a bare name is the free function (also under an import alias) or, for the other two, the user's own helper
+        name = "stream_query_json" if func.id in trust.arrowbricks_stream_funcs else func.id
+        free_function = True
+    elif isinstance(func, ast.Attribute):
+        name = func.attr
+        free_function = _attribute_root(func.value) in trust.arrowbricks_modules  # `arrowbricks.stream_query_json(client, sql)`
+    else:
+        return None
+    if name not in _ARROWBRICKS_SQL_CALLEES:
+        return None
+    index = 1 if name == "stream_query_json" and free_function else 0  # the free function takes the client first
+    if len(call.args) > index and not isinstance(call.args[index], ast.Starred):
+        return call.args[index]
+    return next((kw.value for kw in call.keywords if kw.arg == "sql"), None)
+
+
+def _call_trust(call: ast.Call, trust: _Trust) -> tuple[ast.expr | None, _Trust]:
+    """The SQL argument of `call` (None if it isn't a SQL sink) and the trust to check it with: an arrowbricks call is
+    Databricks SQL without the postgres house style; a plain `.execute()` in a file that imports arrowbricks keeps the
+    postgres rules but may also be Databricks SQL (arrowbricks' `Cursor.execute`)."""
+    arrowbricks_arg = _arrowbricks_sink_arg(call, trust)
+    if arrowbricks_arg is not None:
+        return arrowbricks_arg, replace(trust, databricks=True, postgres_rules=False)
+    query_arg = _execute_query_arg(call, trust)
+    if query_arg is not None and trust.arrowbricks_file:
+        return query_arg, replace(trust, databricks=True)
+    return query_arg, trust
+
+
 class _ExecuteCallVisitor(ast.NodeVisitor):
     """Walks a module, tracking a stack of (function/class/module) local-variable scopes so a
     `cur.execute(query, ...)` call can resolve `query` back to every assignment it had in that
@@ -641,10 +751,11 @@ class _ExecuteCallVisitor(ast.NodeVisitor):
     branch-shadowed unsafe assignment is still seen), then applies the SQL rules to every
     `.execute()`/`.executemany()` call found."""
 
-    def __init__(self, path: Path, trust: _Trust = _NO_TRUST, review: bool = False) -> None:
+    def __init__(self, path: Path, trust: _Trust = _NO_TRUST, review: bool = False, arrowbricks_names: frozenset[str] = frozenset()) -> None:
         self.path = path
         self.trust = trust
         self.review = review
+        self._arrowbricks_names = arrowbricks_names  # `*_sql` variables passed to an arrowbricks call (no postgres house style)
         self.findings: list[Finding] = []
         self._scopes: list[dict[str, list[ast.expr]]] = [{}]
         self._sqlglot_vars: set[str] = set()  # names bound from a sqlglot expression chain
@@ -688,6 +799,8 @@ class _ExecuteCallVisitor(ast.NodeVisitor):
         `.execute()` call in this file (e.g. it's passed to a helper) -- apply the complexity rule."""
         if not (_is_sql_named(name) and isinstance(value, ast.Constant) and isinstance(value.value, str)):
             return
+        if name in self._arrowbricks_names:
+            return
         parsed = parse_sql_text(value.value)
         if parsed is not None:
             self.findings.extend(_complexity_findings(parsed, value.value, self.path, lineno))
@@ -700,9 +813,9 @@ class _ExecuteCallVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         self.findings.extend(_sqlglot_builder_findings(node, self.path, self.trust, self._lookup, self._sqlglot_vars))
-        query_arg = _execute_query_arg(node, self.trust)
+        query_arg, trust = _call_trust(node, self.trust)
         if query_arg is not None:
-            found = _check_query_arg(query_arg, self._lookup, self.path, node.lineno, self.trust, self.review)
+            found = _check_query_arg(query_arg, self._lookup, self.path, node.lineno, trust, self.review)
             if isinstance(query_arg, ast.Name) and _is_sql_named(query_arg.id) and self._all_bare_strings(query_arg.id):
                 found = [f for f in found if f.rule != "sql-inline-too-complex"]  # already reported at the assignment
             self.findings.extend(found)
@@ -726,6 +839,16 @@ def check_sql_file(path: Path, source: str | None = None, *, review: bool = Fals
         tree = ast.parse(text, filename=str(path))
     except SyntaxError:
         return []
-    visitor = _ExecuteCallVisitor(path, _file_trust(tree), review)
+    trust = _file_trust(tree)
+    arrowbricks_names: set[str] = set()  # `*_sql` variables handed to an arrowbricks call ...
+    other_names: set[str] = set()  # ... minus any name that is also handed to some other sink (it could be a psycopg query)
+    for call in ast.walk(tree):
+        if not isinstance(call, ast.Call):
+            continue
+        if isinstance(arg := _arrowbricks_sink_arg(call, trust), ast.Name):
+            arrowbricks_names.add(arg.id)
+        elif isinstance(arg := _execute_query_arg(call, trust), ast.Name):
+            other_names.add(arg.id)
+    visitor = _ExecuteCallVisitor(path, trust, review, frozenset(arrowbricks_names - other_names))
     visitor.visit(tree)
     return visitor.findings

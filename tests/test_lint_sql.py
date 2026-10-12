@@ -863,3 +863,224 @@ def f(cur, v):
     cur.execute(f"Update complete, {v} rows changed")
 '''
     assert _findings(source, tmp_path / "a.py") == []
+
+
+# --- arrowbricks (Databricks SQL client): execute_streamed / query_agent / stream_query_json -------------------------------
+
+
+def test_arrowbricks_fstring_in_every_sql_taking_call_is_flagged(tmp_path: Path) -> None:
+    source = '''
+async def a(client, cur, x):
+    await client.query_agent(f"select * from t where id = {x}")
+    async for _ in cur.execute_streamed(f"select * from t where id = {x}"):
+        pass
+    async for _ in client.stream_query_json(f"select * from t where id = {x}"):
+        pass
+'''
+    findings = _findings(source, tmp_path / "a.py")
+    assert [f.rule for f in findings] == ["sql-fstring-injection"] * 3
+    assert [f.line for f in findings] == [3, 4, 6]
+    assert all("arrowbricks t-string" in f.message and "psycopg" not in f.message for f in findings)
+
+
+def test_arrowbricks_free_stream_query_json_takes_sql_as_second_argument(tmp_path: Path) -> None:
+    source = '''
+import arrowbricks
+import arrowbricks as ab
+from arrowbricks import stream_query_json
+
+async def a(client, x):
+    stream_query_json(client, f"select * from t where id = {x}")
+    arrowbricks.stream_query_json(client, f"select * from t where id = {x}")
+    ab.stream_query_json(client, f"select * from t where id = {x}")
+    client.stream_query_json(f"select * from t where id = {x}")
+'''
+    assert [f.line for f in _findings(source, tmp_path / "a.py")] == [7, 8, 9, 10]
+
+
+def test_arrowbricks_free_stream_query_json_with_a_safe_sql_is_clean(tmp_path: Path) -> None:
+    source = '''
+from arrowbricks import stream_query_json
+
+async def a(client, x):
+    stream_query_json(client, "select * from t where id = :id", params=[{"name": "id", "value": "1"}])
+    stream_query_json(f"not sql {x}", "select 1")  # the client slot is not the SQL slot
+'''
+    assert _findings(source, tmp_path / "a.py") == []
+
+
+def test_arrowbricks_sql_keyword_argument_is_checked(tmp_path: Path) -> None:
+    source = '''
+async def a(client, x):
+    await client.query_agent(sql=f"select * from t where id = {x}", max_rows=5)
+'''
+    assert _rules(_findings(source, tmp_path / "a.py")) == {"sql-fstring-injection"}
+
+
+def test_arrowbricks_concat_percent_and_format_are_flagged(tmp_path: Path) -> None:
+    source = '''
+async def a(client, x):
+    await client.query_agent("select * from t where id = " + x)
+    await client.query_agent("select * from t where id = %s" % x)
+    await client.query_agent("select * from t where id = {}".format(x))
+'''
+    assert sorted(_rules(_findings(source, tmp_path / "a.py"))) == [
+        "sql-concat-injection",
+        "sql-format-injection",
+        "sql-percent-format-injection",
+    ]
+
+
+def test_arrowbricks_t_string_is_clean(tmp_path: Path) -> None:
+    source = '''
+async def a(client, cur, table, x):
+    await client.query_agent(t"select * from {table:i} where id = {x}")
+    await cur.execute(t"select * from {table:i} where id = {x}")
+    async for _ in client.stream_query_json(t"select * from t where id = {x}"):
+        pass
+'''
+    assert _findings(source, tmp_path / "a.py") == []
+
+
+def test_databricks_only_syntax_is_recognised_for_arrowbricks_calls(tmp_path: Path) -> None:
+    # Backticks and QUALIFY don't parse as postgres, so an f-string like this used to slip through unnoticed.
+    source = '''
+async def a(client, t):
+    await client.query_agent(f"select `a` from `{t}` qualify row_number() over (order by `a`) = 1")
+'''
+    assert _rules(_findings(source, tmp_path / "a.py")) == {"sql-fstring-injection"}
+
+
+def test_databricks_syntax_in_a_plain_execute_is_flagged_only_in_a_file_that_imports_arrowbricks(tmp_path: Path) -> None:
+    body = '''
+async def a(cur, t):
+    await cur.execute(f"select `a` from `{t}` qualify row_number() over (order by `a`) = 1")
+'''
+    assert _findings(body, tmp_path / "plain.py") == []  # unchanged: could be any driver
+    assert _rules(_findings("from arrowbricks import connect\n" + body, tmp_path / "ab.py")) == {"sql-fstring-injection"}
+
+
+def test_postgres_house_style_is_not_applied_to_arrowbricks_calls(tmp_path: Path) -> None:
+    sql = "select a.x, b.y from a right join b on a.id = b.id where a.k = %s and a.m in (select m from c)\\n"
+    source = f'''
+async def a(client, cur, x):
+    await client.query_agent("{sql}")
+    await cur.execute("{sql}")
+    await client.query_agent(f"select 1 from t where id = {{x}}")  # recognised: the injection rules do apply
+'''
+    findings = _findings(source, tmp_path / "a.py")
+    assert {(f.line, f.rule) for f in findings} == {
+        (4, "sql-forbidden-join"),  # only the plain .execute() gets the psycopg house style, as before
+        (4, "sql-positional-param"),
+        (4, "sql-inline-too-complex"),
+        (5, "sql-fstring-injection"),
+    }
+
+
+def test_long_sql_variable_passed_to_an_arrowbricks_call_is_not_too_complex(tmp_path: Path) -> None:
+    source = '''
+LONG_SQL = """
+    with a as (select 1 as x),
+         b as (select 2 as x)
+    select a.x, b.x from a join b on a.x < b.x
+    where a.x > 0
+"""
+
+async def a(client, cur):
+    await client.query_agent(LONG_SQL)
+'''
+    assert _findings(source, tmp_path / "a.py") == []
+    assert _rules(_findings(source.replace("client.query_agent(", "cur.execute("), tmp_path / "b.py")) == {"sql-inline-too-complex"}
+
+
+def test_unsafe_sql_is_checked_like_cast_literal_string(tmp_path: Path) -> None:
+    source = '''
+from arrowbricks import unsafe_sql
+
+async def a(client, x, request_sql):
+    await client.query_agent(unsafe_sql(f"select * from t where id = {x}"))
+    await client.query_agent(unsafe_sql(request_sql))
+    await client.query_agent(unsafe_sql("select 1"))
+'''
+    path = tmp_path / "a.py"
+    path.write_text(source)
+    assert [(f.rule, f.line) for f in check_sql_file(path)] == [("sql-fstring-injection", 5)]
+    assert sorted((f.rule, f.line) for f in check_sql_file(path, review=True)) == [
+        ("sql-fstring-injection", 5),
+        ("sql-unverified-cast", 6),
+    ]
+
+
+def test_arrowbricks_unresolvable_argument_stays_quiet(tmp_path: Path) -> None:
+    source = '''
+async def a(client, sql):
+    await client.query_agent(sql)
+    async for _ in client.stream_query_json(build_sql()):
+        pass
+'''
+    path = tmp_path / "a.py"
+    path.write_text(source)
+    assert check_sql_file(path) == []
+    assert [f.rule for f in check_sql_file(path, review=True)] == ["sql-unverified-call"]  # the call, not the bare parameter
+
+
+def test_arrowbricks_import_aliases_and_attribute_chains_find_the_free_function(tmp_path: Path) -> None:
+    source = '''
+import arrowbricks
+from arrowbricks import stream_query_json as sqj
+from arrowbricks import _streaming as streaming
+
+async def a(client, x):
+    sqj(client, f"select * from t where id = {x}")
+    arrowbricks._streaming.stream_query_json(client, f"select * from t where id = {x}")
+    streaming.stream_query_json(client, f"select * from t where id = {x}")
+    arrowbricks.stream_query_json(client, sql=f"select * from t where id = {x}")
+'''
+    assert [f.line for f in _findings(source, tmp_path / "a.py")] == [7, 8, 9, 10]
+
+
+def test_arrowbricks_starred_positional_falls_back_to_the_sql_keyword(tmp_path: Path) -> None:
+    source = '''
+async def a(client, args, x):
+    async for _ in client.stream_query_json(*args, sql=f"select * from t where id = {x}"):
+        pass
+'''
+    assert _rules(_findings(source, tmp_path / "a.py")) == {"sql-fstring-injection"}
+
+
+def test_cursor_execute_sql_keyword_is_checked_in_an_arrowbricks_file_only(tmp_path: Path) -> None:
+    body = '''
+async def a(cur, x):
+    await cur.execute(sql=f"select * from t where id = {x}")
+'''
+    assert _findings(body, tmp_path / "plain.py") == []
+    assert _rules(_findings("from arrowbricks import connect\n" + body, tmp_path / "ab.py")) == {"sql-fstring-injection"}
+
+
+def test_fix_hint_names_the_right_parameter_keyword_and_driver(tmp_path: Path) -> None:
+    source = '''
+from arrowbricks import connect
+
+async def a(client, cur, x):
+    await client.query_agent(f"select * from t where id = {x}")
+    await cur.execute(f"select * from t where id = {x}")
+'''
+    agent, execute = _findings(source, tmp_path / "a.py")
+    assert "params=[...]" in agent.message and "parameters=[...]" in agent.message  # both spellings, per method
+    assert "arrowbricks t-string" in agent.message and "psycopg" not in agent.message
+    assert "psycopg/arrowbricks t-string" in execute.message  # a plain .execute() could be either driver's cursor
+
+
+def test_arrowbricks_name_reused_for_a_psycopg_query_keeps_the_complexity_check(tmp_path: Path) -> None:
+    # Same variable name in two functions: the psycopg use must not be silenced by the arrowbricks use.
+    source = '''
+async def f1(client):
+    sql = LONG_SQL_PLACEHOLDER
+    await client.query_agent(sql)
+
+async def f2(cur):
+    sql = LONG_SQL_PLACEHOLDER
+    await cur.execute(sql)
+'''.replace("LONG_SQL_PLACEHOLDER", '"""select a.x, b.x from a join b on a.x < b.x where a.x > 0"""')
+    findings = _findings(source, tmp_path / "a.py")
+    assert [f.rule for f in findings] == ["sql-inline-too-complex", "sql-inline-too-complex"]

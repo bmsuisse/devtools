@@ -5,7 +5,7 @@ description: >
   commands or repo-local scripts for: checking PR build/check status, creating
   a PR, creating a git worktree, committing and pushing files (with pre-flight
   checks), claiming an issue / work item (`bdt issue take`), a one-shot PR summary
-  (`bdt pr info`: link, build state, closed issues), querying Azure logs, and static checks (`bdt lint`: SQL/psycopg rules, pydantic placement, tooling; `bdt dead-code`:
+  (`bdt pr info`: link, build state, closed issues), querying Azure logs, and static checks (`bdt lint`: SQL/psycopg/arrowbricks rules, pydantic placement, tooling; `bdt dead-code`:
   unreferenced .sql files and backend routes nothing calls), listing which env vars a repo defines (`bdt env get-keys`, names only). `bdt pr *` works against both Azure DevOps
   and GitHub — it auto-detects which one from the `origin` remote. Trigger
   whenever the user asks to check a build/PR status, create a PR, make a
@@ -123,7 +123,7 @@ vendor a git submodule under that path.
 
 ## Static checks
 
-- `bdt lint [paths]` -- SQL/psycopg rules (`.execute()`, pgdevkit `fetch_*`/`execute`, `PostgresJsonResponse`), pydantic-model placement, hand-wired HTTP in TypeScript, baseline tooling.
+- `bdt lint [paths]` -- SQL/psycopg rules (`.execute()`, pgdevkit `fetch_*`/`execute`, `PostgresJsonResponse`, arrowbricks `execute_streamed`/`query_agent`/`stream_query_json`), pydantic-model placement, hand-wired HTTP in TypeScript, baseline tooling.
 - `uv run bdt dead-code` -- dead code a linter can't see, configured under `[tool.bdt.dead_code]` in pyproject.toml:
   `.sql` files no Python code loads (`sql_roots`) and FastAPI routes that neither non-generated frontend code nor a
   `url_for(...)` call uses (`[[tool.bdt.dead_code.apps]]`: app or openapi file, frontends, excludes, optional `baseline`;
