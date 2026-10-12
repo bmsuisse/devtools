@@ -623,6 +623,16 @@ unresolvable argument, e.g. a plain function parameter, is silently skipped --
 this can't false-positive on non-psycopg `.execute()` calls, or on dynamic SQL
 it can't see through).
 
+**arrowbricks** (the Databricks SQL client): `Cursor.execute`/`execute_streamed`, `DatabricksClient.query_agent`/`stream_query_json`
+and the free `arrowbricks.stream_query_json(client, sql)` are checked as well. `execute_streamed`/`query_agent`/`stream_query_json`
+are matched by name (the free function's SQL is its *second* argument; the method's is the first; `sql=` as keyword works too).
+Only the injection rules apply there -- an f-string/concatenation/`%`/`.format()` is flagged and the fix suggests an
+arrowbricks t-string (`{value}` binds a named parameter, `{name:i}` quotes an identifier) or `parameters=[...]` for `:name`
+markers. The postgres house style (`sql-inline-too-complex`, `sql-positional-param`, `sql-forbidden-join`) is not applied to
+them, since Databricks SQL isn't postgres. The SQL is also parsed as Databricks SQL (backticks, `QUALIFY`, ...), so such
+statements are no longer missed; a plain `.execute()` gets that extra dialect only in a file that imports `arrowbricks`.
+arrowbricks' `unsafe_sql(x)` -- its typing-only escape hatch -- is treated like `cast(LiteralString, x)`: only as safe as `x`.
+
 pgdevkit's helpers are matched by name (`fetch_all(...)`, `db.fetch_all(...)`, `pgdevkit.db.execute(...)`). The one
 exception is a *bare* `execute(...)`, a far too generic name: it is only checked in a file that imports it from
 `pgdevkit`/`pgdevkit.db` (`from pgdevkit.db import execute`, also aliased: `... import execute as run`; the import is
@@ -832,8 +842,8 @@ Findings have two severities: **error** (a definite unsafe pattern, exit code 1)
 (depends on where a value comes from; listed with an instruction for an AI/human to verify, exit
 code 0 unless `--strict`).
 
-- **SQL** (Python `.execute()` / `fetch_all()` / `fetch_one()` / `fetch_scalar()` / `execute()` from pgdevkit / `PostgresJsonResponse()`): f-string / `%` / concatenation / `.format()` SQL is an error.
-  SQL from `load_sql()`, `sql.SQL`, sqlglot (`expr.sql()`, `sqlglot.*`), `cast(LiteralString, <sqlglot expr>)` (the cast is only as safe as its argument) or
+- **SQL** (Python `.execute()` / `fetch_all()` / `fetch_one()` / `fetch_scalar()` / `execute()` from pgdevkit / `PostgresJsonResponse()` / arrowbricks `execute_streamed()` / `query_agent()` / `stream_query_json()`): f-string / `%` / concatenation / `.format()` SQL is an error.
+  SQL from `load_sql()`, `sql.SQL`, sqlglot (`expr.sql()`, `sqlglot.*`), `cast(LiteralString, <sqlglot expr>)`/`unsafe_sql(...)` (the cast is only as safe as its argument) or
   a function in the same file annotated `-> LiteralString` is trusted; SQL from any other function
   call is a `sql-unverified-call` review item. (`bdt lint` accepts the same trusted forms but never
   reports unverified calls.)
