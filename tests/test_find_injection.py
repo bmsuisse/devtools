@@ -163,6 +163,20 @@ def test_pgdevkit_execute_is_a_sql_sink_for_find_injection(tmp_path: Path) -> No
     assert [(f.path.name, f.rule) for f in result.reviews] == [("db.py", "sql-unverified-call")]
 
 
+def test_arrowbricks_calls_are_sql_sinks_for_find_injection(tmp_path: Path) -> None:
+    (tmp_path / "ab.py").write_text(
+        "from arrowbricks import unsafe_sql\n\n"
+        'async def a(client, x):\n    await client.query_agent(f"select * from t where id = {x}")\n\n'
+        "async def b(client, x):\n    await client.query_agent(build(x))\n\n"
+        "async def c(client, request_sql):\n    await client.query_agent(unsafe_sql(request_sql))\n\n"
+        'async def d(client, x):\n    await client.query_agent(unsafe_sql(f"select * from t where id = {x}"))\n\n'
+        'async def e(client):\n    await client.query_agent(unsafe_sql("select 1"))\n    await client.query_agent(t"select {1}")\n'
+    )
+    result = _run(tmp_path)
+    assert [(f.rule, f.line) for f in result.errors] == [("sql-fstring-injection", 4), ("sql-fstring-injection", 13)]
+    assert [(f.rule, f.line) for f in result.reviews] == [("sql-unverified-call", 7), ("sql-unverified-cast", 10)]
+
+
 def test_tests_and_missing_paths(tmp_path: Path) -> None:
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "test_x.py").write_text("eval(x)\n")

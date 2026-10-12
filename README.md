@@ -4,7 +4,7 @@ Shared developer tooling for BMS projects: PR build/check status and a
 one-shot PR summary (`bdt pr info`), PR creation, claiming an issue (`bdt issue take`), issue/work item creation and comments, git worktrees (creation and
 merged-worktree/orphaned-test-DB cleanup), a commit-and-push helper with
 pre-flight checks, Azure log queries, and static checks (`bdt lint`) for
-postgres/psycopg SQL rules, pydantic-model placement, hand-wired HTTP access in
+postgres/psycopg (and arrowbricks) SQL rules, pydantic-model placement, hand-wired HTTP access in
 TypeScript and baseline tooling, plus `bdt dead-code` for `.sql` files nothing loads and
 backend routes nothing calls.
 `bdt pr *` and `bdt issue *` auto-detect whether the current repo's `origin`
@@ -627,11 +627,16 @@ it can't see through).
 and the free `arrowbricks.stream_query_json(client, sql)` are checked as well. `execute_streamed`/`query_agent`/`stream_query_json`
 are matched by name (the free function's SQL is its *second* argument; the method's is the first; `sql=` as keyword works too).
 Only the injection rules apply there -- an f-string/concatenation/`%`/`.format()` is flagged and the fix suggests an
-arrowbricks t-string (`{value}` binds a named parameter, `{name:i}` quotes an identifier) or `parameters=[...]` for `:name`
-markers. The postgres house style (`sql-inline-too-complex`, `sql-positional-param`, `sql-forbidden-join`) is not applied to
+arrowbricks t-string (`{value}` binds a named parameter, `{name:i}` quotes an identifier) or literal SQL with
+`parameters=[...]` (`params=[...]` on `query_agent`/`stream_query_json`) for `:name` markers. The postgres house style (`sql-inline-too-complex`, `sql-positional-param`, `sql-forbidden-join`) is not applied to
 them, since Databricks SQL isn't postgres. The SQL is also parsed as Databricks SQL (backticks, `QUALIFY`, ...), so such
-statements are no longer missed; a plain `.execute()` gets that extra dialect only in a file that imports `arrowbricks`.
-arrowbricks' `unsafe_sql(x)` -- its typing-only escape hatch -- is treated like `cast(LiteralString, x)`: only as safe as `x`.
+statements are no longer missed; a plain `.execute()` (incl. `execute(sql=...)`) gets that extra dialect only in a file that
+imports `arrowbricks`, and keeps the postgres rules there (it may be a psycopg cursor too). The free function is recognised
+under `from arrowbricks import stream_query_json as x` and `arrowbricks[._streaming].stream_query_json(...)`.
+Like pgdevkit's helpers the three names match by name wherever they are called (a client injected from another module is the
+common case), so an unrelated `agent.query_agent(f"select ...")` whose text parses as SQL is flagged too.
+arrowbricks' `unsafe_sql(x)` -- its typing-only escape hatch -- is treated like `cast(LiteralString, x)` (in any file):
+only as safe as `x`.
 
 pgdevkit's helpers are matched by name (`fetch_all(...)`, `db.fetch_all(...)`, `pgdevkit.db.execute(...)`). The one
 exception is a *bare* `execute(...)`, a far too generic name: it is only checked in a file that imports it from
