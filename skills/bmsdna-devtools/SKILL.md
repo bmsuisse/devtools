@@ -4,7 +4,7 @@ description: >
   Use the `bdt` CLI (from the bmsdna-devtools package) instead of ad hoc git/az/gh
   commands or repo-local scripts for: checking PR build/check status, creating
   a PR, creating a git worktree, committing and pushing files (with pre-flight
-  checks), claiming an issue / work item (`bdt issue take`), a one-shot PR summary
+  checks), claiming an issue / work item (`bdt issue take`), finding issues addressed to you (`bdt issue search --for-me`), waiting for a reply on an issue (`bdt issue watch`), a one-shot PR summary
   (`bdt pr info`: link, build state, closed issues), querying Azure logs, and static checks (`bdt lint`: SQL/psycopg/arrowbricks rules, pydantic placement, tooling; `bdt dead-code`:
   unreferenced .sql files and backend routes nothing calls), listing which env vars a repo defines (`bdt env get-keys`, names only). `bdt pr *` works against both Azure DevOps
   and GitHub — it auto-detects which one from the `origin` remote. Trigger
@@ -84,6 +84,26 @@ when no agent is detected) so others can see it's being worked on. No parameters
 -- the session is detected, and without `NUMBER` the issue is the one the current branch's PR closes
 (so open the PR with `Fixes #N` first, or pass the number). It does nothing if the issue's newest comment already is a "Taken by" claim, so repeating it is harmless. (`bdt issue do N` already does this for you before it starts the agent -- don't repeat it there.) Don't hand-write a
 session-link comment instead.
+
+## Finding issues meant for you, and asking via an issue
+
+```bash
+bdt issue search --for-me                  # open issues whose LAST comment says @Claude / @Codex / @Goose (you) or @Agent (everyone)
+bdt issue watch 84 --since-comment 123 --skip-own --json --timeout 1800
+```
+
+`bdt issue search --for-me` is how to look for work addressed to you: it keeps issues / work items whose newest
+comment mentions your agent (case-insensitive, whole word: `@Claudette` is not `@Claude`) or `@Agent`; it takes the
+usual `search` filters (keywords, `--label`, `--state`, `--org-wide`, ...). Which agent you are is detected from the
+environment (`CLAUDECODE`, `AI_AGENT`, `CODEX_*`, `GOOSE_*`, ...); pass `--agent NAME` or set `BDT_AGENT` if it
+guesses wrong or you are an agent it doesn't know.
+
+To ask a human something without stopping, comment the question on the issue (`bdt issue comment add N --message
+"@person ..."`, which prints `(comment #ID)`), then `bdt issue watch N --since-comment ID --skip-own`
+(alias `bdt watch-issue N`). It blocks, polling, until a new comment arrives, prints it and exits 0; exit code 4 means
+`--timeout` (default 900 s) passed without one -- not an error, just run it again or carry on. `--json` gives one JSON object per
+comment (`id`, `author`, `created_at`, `url`, `body`); `--for-me` only reports comments mentioning you. Keep
+the command's own timeout (or run it in the background) longer than `--timeout`.
 
 ## PR summary
 
