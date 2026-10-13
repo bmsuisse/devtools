@@ -258,6 +258,13 @@ def pr_create(
         "named group before the PR is created. [tool.bdt.pr.scope_labels] can auto-add a label based "
         "on the HEAD commit's conventional-commit scope (e.g. `feat(customers): ...` -> a configured label).",
     ),
+    title: str | None = typer.Option(None, "--title", help="PR title (default: from the commits)"),
+    description: str | None = typer.Option(
+        None,
+        "--description",
+        help="PR description, kept in full (default: from the commits). On Azure DevOps it is set over the "
+        "REST API after the PR is created, since `az repos pr create --description` can cut long text.",
+    ),
     screenshot: list[str] = typer.Option(
         [], "--screenshot", help="Path to an image to attach to the PR description (repeatable)"
     ),
@@ -315,7 +322,7 @@ def pr_create(
     pr_url: str | None = None
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
-        returncode, pr_url = gh_pr.create(gh, target, args or [], draft=draft, labels=label)
+        returncode, pr_url = gh_pr.create(gh, target, args or [], draft=draft, labels=label, title=title, description=description)
         build_policy = gh_pr.has_build_policy(gh, target)
         if returncode == 0 and (screenshot or file):
             _after_create(lambda: gh_pr.add_attachments(gh, remote.owner, remote.repo, source_branch, screenshot, file), "attaching screenshots/files")
@@ -323,6 +330,17 @@ def pr_create(
             _after_create(lambda: _link_and_label_github(gh, remote, issue_numbers), "linking issue(s) / setting 'pr-available' label")
     else:
         az = require_az()
+        # `--title`/`--description` (also when passed through to `az`) are applied over REST
+        # below rather than trusting `az` with long text.
+        az_args, pass_title, pass_description = pr_build.split_az_text_args(args or [])
+        title = title if title is not None else pass_title
+        description = description if description is not None else pass_description
+        if description is not None and len(description) > pr_build.ADO_PR_DESCRIPTION_MAX:
+            raise typer.BadParameter(
+                f"{len(description)} characters; Azure DevOps allows at most {pr_build.ADO_PR_DESCRIPTION_MAX}. "
+                "Shorten it, or attach the detail with --file.",
+                param_hint="--description",
+            )
         cmd = [
             az, "repos", "pr", "create",
             "--organization", f"https://dev.azure.com/{remote.org}",
@@ -334,7 +352,8 @@ def pr_create(
             "--output", "json",
             *(["--draft", "true"] if draft else []),
             *(["--labels", *label] if label else []),
-            *(args or []),
+            *(["--title", title] if title is not None else []),
+            *az_args,
         ]
         r = subprocess.run(cmd, capture_output=True, encoding="utf-8")
         returncode = r.returncode
@@ -361,14 +380,16 @@ def pr_create(
         session = requests.Session()
         session.headers.update(auth_header(pat))
         build_policy = pr_build.has_build_policy(session, remote, target)
-        if returncode == 0 and (detect_agent_session() is not None or screenshot or file):
+        if returncode == 0 and (detect_agent_session() is not None or screenshot or file or description is not None):
             def _finish() -> None:
                 pr = pr_build.get_pr(session, remote, source_branch, target)
+                if description is not None:
+                    pr = pr_build.set_description(session, remote, pr, description)
                 if screenshot or file:
                     pr = pr_build.add_attachments(session, remote, pr, screenshot, file)
                 pr_build.ensure_session_note(session, remote, pr)
 
-            _after_create(_finish, "attaching screenshots/files and/or noting the agent session")
+            _after_create(_finish, "setting the description, attaching screenshots/files and/or noting the agent session (retry with `bdt pr update`)")
         if returncode == 0:
             # Fetches the PR fresh via `pr_build.get_pr` rather than trusting `pr_json` -- `az`
             # can exit 0 with stdout that isn't clean JSON (e.g. a deprecation banner ahead of
