@@ -15,11 +15,12 @@ import requests
 import typer
 from pgdevkit.testdb import constants as pgdevkit_constants
 
-from . import ado_issue, api_usage as api_usage_mod, app_service_logs, commit as commit_mod, dead_code as dead_code_mod
+from . import ado_issue, agent_mentions, api_usage as api_usage_mod, app_service_logs, commit as commit_mod, dead_code as dead_code_mod
 from . import env_config
 from . import env_files as env_files_mod
 from . import find_repo as find_repo_mod
 from . import issue_do as issue_do_mod
+from . import issue_watch as issue_watch_mod
 from . import gh_issue, gh_pr
 from . import find_injection as find_injection_mod
 from . import lint as lint_mod
@@ -694,6 +695,20 @@ def issue_search(
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
         help="Azure DevOps PAT (else falls back to `az` login)",
     ),
+    for_me: bool = typer.Option(
+        False,
+        "--for-me",
+        help="Only issues/work items whose LAST comment addresses the calling coding agent: contains "
+        "@Claude / @Codex / @Goose / ... (case-insensitive, whole word; which one is detected from the "
+        "environment, see --agent) or @Agent (addresses every agent).",
+    ),
+    agent: str | None = typer.Option(
+        None,
+        "--agent",
+        envvar=agent_mentions.AGENT_ENV_VAR,
+        help="With --for-me: the agent to look for mentions of, e.g. claude, codex, goose. Default: detected "
+        "from the environment (CLAUDECODE, AI_AGENT, CODEX_*, GOOSE_*, ...); without any, only @Agent matches.",
+    ),
 ) -> None:
     """Search (or, with no keywords, just list) issues / work items, defaulting to open issues
     from the last 30 days (Azure DevOps or GitHub, auto-detected).
@@ -702,6 +717,8 @@ def issue_search(
         raise typer.BadParameter("Must be one of: open, closed, all", param_hint="--state")
     since = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%Y-%m-%d") if since_days > 0 else None
     tags_or_labels = _merge_tags_and_labels(tag, label) or []
+    # only passed on with --for-me, so a plain search calls the backends exactly as before
+    search_extra = {"comment_filter": agent_mentions.last_comment_filter(_resolve_agent(agent))} if for_me else {}
 
     # --org/--github-org are only ever consulted as a *fallback*, when `current_remote()` itself
     # fails (no git repo, no origin remote, or a remote that's neither GitHub nor Azure DevOps) --
@@ -729,15 +746,24 @@ def issue_search(
     if isinstance(remote, GitHubRemote):
         resolved_board = gh_issue.resolve_board(board)
         gh_issue.search(
-            require_gh(), remote.owner, remote.repo, keywords or [], since, limit, state, board=resolved_board, org_wide=org_wide, labels=tags_or_labels
+            require_gh(), remote.owner, remote.repo, keywords or [], since, limit, state, board=resolved_board, org_wide=org_wide, labels=tags_or_labels, **search_extra
         )
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
         resolved_board = ado_issue.resolve_board(board)
         ado_issue.search(
-            session, remote, keywords or [], since=since, board=resolved_board, top=limit, state=state, org_wide=org_wide, tags=tags_or_labels
+            session, remote, keywords or [], since=since, board=resolved_board, top=limit, state=state, org_wide=org_wide, tags=tags_or_labels, **search_extra
         )
+
+
+def _resolve_agent(agent: str | None) -> str | None:
+    """The agent to match `@mentions` of: `--agent`/`BDT_AGENT`, else detected from the environment.
+    None (with a note on stderr) when neither -- then only `@Agent` mentions can match."""
+    resolved = agent_mentions.detect_agent(override=agent)
+    if resolved is None:
+        typer.echo("No calling agent detected (pass --agent or set BDT_AGENT) -- only @Agent mentions match", err=True)
+    return resolved
 
 
 @issue_app.command("do", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
@@ -866,6 +892,74 @@ def _capture(cmd: list[str]) -> subprocess.CompletedProcess | None:
         return subprocess.run(cmd, capture_output=True, encoding="utf-8", timeout=CLI_TIMEOUT_SECS, check=False)
     except subprocess.TimeoutExpired:
         return None
+
+
+def issue_watch(
+    number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
+    interval: float = typer.Option(20.0, "--interval", help="Seconds between polls"),
+    timeout: float = typer.Option(900.0, "--timeout", help="Give up after this many seconds (0 = wait forever); exits 4 on timeout"),
+    since_comment: int | None = typer.Option(
+        None,
+        "--since-comment",
+        help="Report comments newer than this comment ID (as printed by `issue comment add`), even ones already "
+        "posted before the watch started. Default: only comments arriving after the watch started.",
+    ),
+    for_me: bool = typer.Option(
+        False, "--for-me", help="Only report comments that mention the calling agent (@Claude / @Codex / ...) or @Agent -- see `issue search --for-me`"
+    ),
+    agent: str | None = typer.Option(
+        None, "--agent", envvar=agent_mentions.AGENT_ENV_VAR, help="With --for-me: the agent to look for mentions of (default: detected from the environment)"
+    ),
+    skip_own: bool = typer.Option(
+        False,
+        "--skip-own",
+        help="Ignore comments this agent wrote itself: those carrying its session note (appended by bdt to every comment "
+        "it posts), or, outside an agent, those authored by the current user",
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Print each new comment as one JSON line (id, author, created_at, url, body)"),
+    pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
+) -> None:
+    """Wait for new comments on an issue / work item -- so an agent can ask a question in the issue and
+    block until someone answers. Prints the new comment(s) and exits 0; exits 4 if none arrived within
+    --timeout. Progress notes go to stderr, so stdout holds only the comments (JSON lines with --json).
+    """
+    if interval <= 0:
+        raise typer.BadParameter("Must be greater than 0", param_hint="--interval")
+    if timeout < 0:
+        raise typer.BadParameter("Must be 0 (wait forever) or greater", param_hint="--timeout")
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh = require_gh()
+
+        def fetch() -> list[issue_watch_mod.Comment]:
+            return issue_watch_mod.to_comments(gh_issue.list_comments(gh, remote.owner, remote.repo, number))
+    else:
+        ado_session = requests.Session()
+        ado_session.headers.update(auth_header(pat))
+
+        def fetch() -> list[issue_watch_mod.Comment]:
+            return issue_watch_mod.to_comments(ado_issue.list_comments(ado_session, remote, number), is_html=True)
+
+    own_session = detect_agent_session() if skip_own else None
+    accept = issue_watch_mod.build_accept(
+        agent=_resolve_agent(agent) if for_me else None,
+        for_me=for_me,
+        own_session_id=own_session.session_id if own_session else None,
+        own_author=_current_user(remote) if skip_own and own_session is None else None,
+    )
+    typer.echo(f"Watching #{number} for new comments (every {interval:g}s, {f'up to {timeout:g}s' if timeout else 'no timeout'})", err=True)
+    new = issue_watch_mod.watch(fetch, since_id=since_comment, accept=accept, interval=interval, timeout=timeout or None)
+    if new is None:
+        typer.echo(f"No new comment on #{number} within {timeout:g}s", err=True)
+        raise typer.Exit(issue_watch_mod.EXIT_TIMEOUT)
+    for comment in new:
+        typer.echo(issue_watch_mod.format_comment(comment, as_json=as_json))
+        if not as_json:
+            typer.echo("")
+
+
+issue_app.command("watch")(issue_watch)
+app.command("watch-issue", help="Alias for `bdt issue watch`")(issue_watch)
 
 
 @issue_app.command("update")

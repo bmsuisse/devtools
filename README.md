@@ -1,7 +1,7 @@
 # bmsdna-devtools
 
 Shared developer tooling for BMS projects: PR build/check status and a
-one-shot PR summary (`bdt pr info`), PR creation, claiming an issue (`bdt issue take`), issue/work item creation and comments, git worktrees (creation and
+one-shot PR summary (`bdt pr info`), PR creation, claiming an issue (`bdt issue take`), issue/work item creation and comments, finding issues addressed to an agent (`bdt issue search --for-me`) and waiting for new comments (`bdt issue watch`), git worktrees (creation and
 merged-worktree/orphaned-test-DB cleanup), a commit-and-push helper with
 pre-flight checks, Azure log queries, and static checks (`bdt lint`) for
 postgres/psycopg (and arrowbricks) SQL rules, pydantic-model placement, hand-wired HTTP access in
@@ -328,6 +328,58 @@ agent), so others can see who is on it. `<you>` is the GitHub login
 branch's PR closes (`Fixes #N`, or an issue/work-item URL in the PR body); it refuses to guess if
 that is none or several. If the issue's newest comment already is a "Taken by ..." claim (by anyone) it
 says so and posts nothing, so it's safe to run repeatedly -- including before `bdt issue do`.
+
+## `bdt issue search --for-me` / `bdt issue watch`
+
+Issues are how people and coding agents talk to each other: someone comments `@Claude, can you look
+at this?` on an issue, and the agent finds it; the agent asks a question in an issue and waits for the answer.
+
+```bash
+bdt issue search --for-me [--agent claude] [--state all] [--limit 10]
+bdt issue watch 84 [--timeout 900] [--interval 20] [--since-comment ID] [--for-me] [--skip-own] [--json]
+```
+
+**`issue search --for-me`** only keeps issues (GitHub) / work items (Azure DevOps) whose **last comment**
+addresses the calling agent. It combines with every other `search` filter (keywords, `--label`, `--board`,
+`--org-wide`, ...). A comment addresses the agent when it contains `@Claude`, `@Codex`, `@Goose`, ... for
+the agent that is running `bdt`, or `@Agent`, which addresses every agent. Matching is case-insensitive and
+on whole words: `@claude`, `@CLAUDE,` and `@Claude.` match, `@Claudette`, `@claude-bot` and `me@claude.ai` do not.
+Only the newest comment counts, so once someone (including the agent, e.g. with a reply) comments after the
+mention, the issue drops out of the list. The newest comment isn't part of the list output of `gh`/Azure DevOps,
+so this costs one extra request per candidate; candidates are scanned in recently-updated order (up to 10x
+`--limit` on GitHub, 200 on Azure DevOps) until `--limit` have matched.
+
+Which agent is calling is detected from the environment, first match wins: `--agent NAME` (or the `BDT_AGENT`
+environment variable, to pin it), `CLAUDECODE=1` (Claude), the agent-agnostic `AI_AGENT` convention (first
+token of its value, `claude-code_2-1_agent` is Claude; `gh` reads it too), then marker variables of
+`CLAUDE_CODE_*` (Claude), `CODEX_SANDBOX*` / `CODEX_THREAD_*` / `CODEX_CI` (Codex), `GOOSE_TERMINAL` /
+`GOOSE_SESSION` (Goose), `OPENCODE` (OpenCode) and `GEMINI_CLI=1` (Gemini). These variables are not a
+documented contract of those tools, so use `--agent`/`BDT_AGENT` for any other agent (any name works:
+`--agent myagent` looks for `@myagent`). With no agent detected (a human at a terminal), `--for-me` notes
+that on stderr and matches `@Agent` only.
+
+**`issue watch NUMBER`** (also available as `bdt watch-issue NUMBER`) blocks until a new comment arrives on the
+issue / work item, polling every `--interval` seconds (default 20), then prints the new comment(s) and exits 0. It
+exits **4** if nothing arrived within `--timeout` seconds (default 900; `0` waits forever), so an agent can
+tell "no answer yet" from a failure (exit 1) and run it again. Comments that were already there when the
+watch started are ignored -- use `--since-comment ID` (the id `issue comment add` printed) to also receive anything
+posted after that comment, which avoids missing a reply that came in before the watch started. So an agent asks
+and waits like this:
+
+```bash
+bdt issue comment add 84 --message "@aersam Should this also cover Azure DevOps?"   # prints (comment #123)
+bdt issue watch 84 --since-comment 123 --skip-own --json --timeout 1800
+```
+
+- `--for-me` only reports new comments that address the calling agent (same matching and `--agent` as `search`).
+- `--skip-own` ignores comments this agent wrote itself: those carrying its session note (bdt appends
+  `<Agent> Session: <id>` to every comment it posts under an agent) or, outside an agent, those authored by the
+  authenticated user. Comments of a human who shares the agent's account are still reported under an agent.
+- `--json` prints each new comment as one JSON object per line (`id`, `author`, `created_at`, `url`, `body`; Azure
+  DevOps's HTML is converted to plain text); without it a short readable block per comment. Status messages go to
+  stderr, so stdout holds only the comments.
+- A single failed poll (network blip, API error) is retried; three in a row abort with the error.
+- On Azure DevOps only the newest 100 comments of a work item are looked at per poll.
 
 ## `bdt env get-keys`
 
