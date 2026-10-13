@@ -417,7 +417,7 @@ def pr_create(
 
 @pr_app.command("publish")
 def pr_publish(
-    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch of the PR (Azure DevOps only)"),
+    target: str | None = typer.Option(None, "--target", help="Only consider a PR into this target branch (Azure DevOps only; default: any target, since the PR is found by the current branch)"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -477,7 +477,7 @@ def pr_info(
 
 @pr_app.command("retry")
 def pr_retry(
-    target_branch: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target-branch", help="Target branch of the PR (Azure DevOps only)"),
+    target_branch: str | None = typer.Option(None, "--target-branch", help="Only consider a PR into this target branch (Azure DevOps only; default: any target, since the PR is found by the current branch)"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -534,7 +534,7 @@ def pr_update(
     file: list[str] = typer.Option(
         [], "--file", help="Path to an arbitrary file to append to the PR description as a linked attachment (repeatable)"
     ),
-    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch of the PR (Azure DevOps only)"),
+    target: str | None = typer.Option(None, "--target", help="Only consider a PR into this target branch (Azure DevOps only; default: any target, since the PR is found by the current branch)"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -577,7 +577,7 @@ def pr_comment(
     file: list[str] = typer.Option(
         [], "--file", help="Path to an arbitrary file to link in the comment as an attachment (repeatable)"
     ),
-    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch of the PR (Azure DevOps only)"),
+    target: str | None = typer.Option(None, "--target", help="Only consider a PR into this target branch (Azure DevOps only; default: any target, since the PR is found by the current branch)"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,

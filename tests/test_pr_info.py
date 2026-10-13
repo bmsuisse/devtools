@@ -285,8 +285,11 @@ def test_target_options_default_to_dev_except_lookups_which_do_not_filter() -> N
     found = dict(_target_options(typer.main.get_command(app)))
 
     assert {"pr create", "pr status", "pr info", "pr retry", "pr publish", "pr update", "pr comment", "pr watch-deploy", "issue take"} <= set(found)
-    # status/info/take only look a PR up: no target given means no filter on it
-    assert {k: v for k, v in found.items() if v != "dev"} == {"pr status": None, "pr info": None, "issue take": None}
+    # these only look an existing PR up (by the current branch): no target given means no filter on it, so a
+    # PR into `main` is found without `--target main`. Only commands that create a PR or watch a branch need a target.
+    lookups = {"pr status", "pr info", "pr retry", "pr publish", "pr update", "pr comment", "issue take"}
+    assert {k for k, v in found.items() if v is None} == lookups
+    assert {k: v for k, v in found.items() if v is not None} == {"pr create": "dev", "pr watch-deploy": "dev", "commit": "dev"}
 
 
 # -- bdt issue do takes the issue first ---------------------------------------
