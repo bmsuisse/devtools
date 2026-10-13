@@ -22,6 +22,7 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from .bdt_config import load_bdt_table
@@ -225,6 +226,7 @@ def search(
     board: str | None = None,
     org_wide: bool = False,
     labels: list[str] | None = None,
+    comment_filter: Callable[[str | None], bool] | None = None,
 ) -> list[dict]:
     """Search (or, with no keywords, just list) issues by state, most recently updated first.
 
@@ -239,6 +241,11 @@ def search(
     cross-repo search endpoint) instead of `gh issue list` (always single-repo, scoped by cwd's
     git remote) -- mutually exclusive with `board`, whose membership is only resolved against
     `repo`, not every repo under `owner`.
+
+    `comment_filter` keeps only issues whose newest comment (None if it has none) it accepts --
+    e.g. `bdt issue search --for-me`. The newest comment isn't part of either list command's
+    output, so it costs one API call per candidate (in result order, stopping once `limit`
+    issues matched); the raw pool is over-fetched like for `board`, as the filter drops results.
     """
     if org_wide and board:
         sys.exit("--board can't be combined with --org-wide (board membership is only resolved for the current repo).")
@@ -259,10 +266,12 @@ def search(
             gh,
             [
                 "search", "issues", query, "--owner", owner, *state_args, *label_args,
-                "--limit", str(limit), "--json", "number,title,url,state,repository",
+                "--limit", str(limit * _BOARD_SEARCH_OVERFETCH if comment_filter else limit), "--json", "number,title,url,state,repository",
             ],
         )
         items = json.loads(out) if out else []
+        if comment_filter:
+            items = _filter_by_last_comment(gh, items, limit, comment_filter, _org_wide_repo_of)
         for item in items:
             print(f"{item['repository']['nameWithOwner']}#{item['number']} [{item['state']}] {item['title']}")
             print(item["url"])
@@ -270,7 +279,7 @@ def search(
             print("No matching issues found.")
         return items
 
-    fetch_limit = limit * _BOARD_SEARCH_OVERFETCH if board else limit
+    fetch_limit = limit * _BOARD_SEARCH_OVERFETCH if board or comment_filter else limit
     out = _run_gh(
         gh,
         ["issue", "list", "--search", query, "--state", state, *label_args, "--limit", str(fetch_limit), "--json", "number,title,url,state"],
@@ -282,6 +291,8 @@ def search(
         allowed = board_issue_numbers(gh, owner, repo, project_number)
         items = [item for item in items if item["number"] in allowed]
 
+    if comment_filter:
+        items = _filter_by_last_comment(gh, items, limit, comment_filter, lambda item: (owner, repo))
     items = items[:limit]
     for item in items:
         print(f"#{item['number']} [{item['state']}] {item['title']}")
@@ -289,6 +300,29 @@ def search(
     if not items:
         print("No matching issues found.")
     return items
+
+
+def _org_wide_repo_of(item: dict) -> tuple[str, str]:
+    owner, _, repo = item["repository"]["nameWithOwner"].partition("/")
+    return owner, repo
+
+
+def _filter_by_last_comment(
+    gh: str,
+    items: list[dict],
+    limit: int,
+    comment_filter: Callable[[str | None], bool],
+    repo_of: Callable[[dict], tuple[str, str]],
+) -> list[dict]:
+    """The first `limit` of `items` (in order) whose newest comment `comment_filter` accepts."""
+    matched: list[dict] = []
+    for item in items:
+        if len(matched) >= limit:
+            break
+        owner, repo = repo_of(item)
+        if comment_filter(last_comment(gh, owner, repo, item["number"])):
+            matched.append(item)
+    return matched
 
 
 _DONE_STATE_NAMES = ("closed", "done", "completed")
@@ -407,3 +441,23 @@ def update_comment(gh: str, owner: str, repo: str, comment_id: str, text: str) -
 def delete_comment(gh: str, owner: str, repo: str, comment_id: str) -> None:
     _run_gh(gh, ["api", "--method", "DELETE", f"repos/{owner}/{repo}/issues/comments/{comment_id}"])
     print(f"Deleted comment #{comment_id}")
+
+
+# `gh api --paginate` prints one JSON array per page back to back (not a single valid document), so
+# the jq program flattens them into a stream of one object per comment.
+_LIST_COMMENTS_JQ = ".[] | {id, author: (.user.login // \"ghost\"), created_at, url: .html_url, body: (.body // \"\")}"
+
+
+def list_comments(gh: str, owner: str, repo: str, number: int) -> list[dict]:
+    """Every comment on the issue, oldest first, as `{id, author, created_at, url, body}`."""
+    out = _run_gh(gh, ["api", "--paginate", f"repos/{owner}/{repo}/issues/{number}/comments?per_page=100", "--jq", _LIST_COMMENTS_JQ])
+    decoder = json.JSONDecoder()
+    comments: list[dict] = []
+    pos = 0
+    while pos < len(out):
+        if out[pos].isspace():
+            pos += 1
+            continue
+        obj, pos = decoder.raw_decode(out, pos)
+        comments.append(obj)
+    return comments

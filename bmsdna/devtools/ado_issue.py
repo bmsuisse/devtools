@@ -41,6 +41,8 @@ a field is saved as Markdown it can't be switched back to HTML via the API.
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from urllib.parse import quote
 
@@ -325,6 +327,32 @@ def last_comment(session: requests.Session, remote: AdoRemote, work_item_id: int
     return comments[0].get("text") if comments else None
 
 
+# Newest comments to fetch per poll of a work item (see `list_comments`) -- a watcher only ever needs
+# what arrived since its last poll, so this is far more than enough while keeping one request per poll.
+_LIST_COMMENTS_TOP = 100
+
+
+def list_comments(session: requests.Session, remote: AdoRemote, work_item_id: int) -> list[dict]:
+    """The work item's newest comments (at most `_LIST_COMMENTS_TOP`), oldest first, as
+    `{id, author, created_at, url, body}` -- `body` is the comment's HTML, as stored."""
+    r = session.get(
+        f"{_base_url(remote)}/_apis/wit/workItems/{work_item_id}/comments",
+        params={"api-version": COMMENTS_API_VERSION, "$top": _LIST_COMMENTS_TOP, "order": "desc"},
+    )
+    r.raise_for_status()
+    url = edit_url(remote, work_item_id)
+    return [
+        {
+            "id": c["id"],
+            "author": (c.get("createdBy") or {}).get("displayName") or "unknown",
+            "created_at": c.get("createdDate") or "",
+            "url": url,
+            "body": c.get("text") or "",
+        }
+        for c in reversed(r.json().get("comments") or [])
+    ]
+
+
 def update_comment(session: requests.Session, remote: AdoRemote, work_item_id: int, comment_id: int, text: str) -> dict:
     r = session.patch(
         f"{_base_url(remote)}/_apis/wit/workItems/{work_item_id}/comments/{comment_id}",
@@ -524,6 +552,27 @@ def get_work_items(session: requests.Session, remote: AdoRemote, ids: list[int],
     return [by_id[i] for i in ids if i in by_id]
 
 
+# Max candidates a comment-filtered `search()` looks at -- also the most work item ids the batch
+# `get_work_items` endpoint accepts per request.
+_COMMENT_FILTER_POOL = 200
+
+
+def _filter_by_last_comment(
+    session: requests.Session, remote: AdoRemote, items: list[dict], top: int, comment_filter: Callable[[str | None], bool]
+) -> list[dict]:
+    """The first `top` of `items` (in order) whose newest comment `comment_filter` accepts. An
+    item from another project (org-wide search) is looked up in its own project."""
+    matched: list[dict] = []
+    for item in items:
+        if len(matched) >= top:
+            break
+        project = item["fields"].get("System.TeamProject")
+        item_remote = replace(remote, project=project) if project else remote
+        if comment_filter(last_comment(session, item_remote, item["id"])):
+            matched.append(item)
+    return matched
+
+
 def search(
     session: requests.Session,
     remote: AdoRemote,
@@ -534,6 +583,7 @@ def search(
     state: str = "open",
     org_wide: bool = False,
     tags: list[str] | None = None,
+    comment_filter: Callable[[str | None], bool] | None = None,
 ) -> list[dict]:
     """Search (or, with no keywords, just list) work items by keywords (ANDed, matched against
     Title or Description) and state, most recently changed first. `board` is an Azure Boards team
@@ -544,13 +594,19 @@ def search(
     `org_wide` searches every project in `remote.org` instead of just `remote.project` --
     mutually exclusive with `board`, since a team's Area Path only means something within a
     single project.
+
+    `comment_filter` keeps only work items whose newest comment (None if it has none) it accepts --
+    e.g. `bdt issue search --for-me`. WIQL can't query comments, so up to `_COMMENT_FILTER_POOL`
+    candidates are fetched and checked one by one, stopping once `top` have matched.
     """
     if org_wide and board:
         sys.exit("--board can't be combined with --org-wide (a board's Area Path is scoped to a single project).")
     area_path = get_team_area_path(session, remote, board) if board else None
     wiql = build_search_wiql(keywords, since, area_path, state, org_wide=org_wide, tags=tags)
-    ids = run_wiql(session, remote, wiql, top, org_wide=org_wide)
+    ids = run_wiql(session, remote, wiql, min(top * 10, _COMMENT_FILTER_POOL) if comment_filter else top, org_wide=org_wide)
     items = get_work_items(session, remote, ids, org_wide=org_wide)
+    if comment_filter:
+        items = _filter_by_last_comment(session, remote, items, top, comment_filter)
     for item in items:
         fields = item["fields"]
         project = fields.get("System.TeamProject")
