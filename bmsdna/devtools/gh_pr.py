@@ -453,7 +453,15 @@ def run_watch_deploy(gh: str, target_branch: str, wait: bool) -> None:
         time.sleep(30)
 
 
-def create(gh: str, target: str, extra_args: list[str], draft: bool = False, labels: list[str] | None = None) -> tuple[int, str | None]:
+def create(
+    gh: str,
+    target: str,
+    extra_args: list[str],
+    draft: bool = False,
+    labels: list[str] | None = None,
+    title: str | None = None,
+    description: str | None = None,
+) -> tuple[int, str | None]:
     """Create a GitHub PR from the current branch into `target`.
 
     --fill autofills title/body from commit info so this never blocks on an
@@ -464,6 +472,9 @@ def create(gh: str, target: str, extra_args: list[str], draft: bool = False, lab
     unlike Azure DevOps PR labels, GitHub rejects a label name it doesn't
     already know about.
 
+    `title`/`description` override the `--fill` values; the description is piped to
+    `gh` on stdin (`--body-file -`) in full, not squeezed through the command line.
+
     Returns (returncode, web_url) — on success `gh pr create` prints the
     PR's web URL as its only stdout line, which is what a human needs to
     open it; on failure the url is `None` and the CLI's stderr is
@@ -472,8 +483,12 @@ def create(gh: str, target: str, extra_args: list[str], draft: bool = False, lab
     cmd = [gh, "pr", "create", "--base", target, "--fill", *(["--draft"] if draft else [])]
     for label in labels or []:
         cmd += ["--label", label]
+    if title is not None:
+        cmd += ["--title", title]
+    if description is not None:
+        cmd += ["--body-file", "-"]
     cmd += extra_args
-    r = _run(cmd, capture_output=True, encoding="utf-8")
+    r = _run(cmd, capture_output=True, encoding="utf-8", **({"input": description} if description is not None else {}))
     if r.stderr:
         print(r.stderr.strip(), file=sys.stderr)
     if r.returncode != 0:

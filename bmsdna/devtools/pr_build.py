@@ -228,7 +228,19 @@ def _upload_attachments(session: requests.Session, remote: AdoRemote, pr_id: int
     ]
 
 
-def _patch_pr(session: requests.Session, remote: AdoRemote, pr_id: int, fields: dict) -> None:
+# Azure DevOps allows at most this many characters in a PR description.
+ADO_PR_DESCRIPTION_MAX = 4000
+
+
+def _patch_pr(session: requests.Session, remote: AdoRemote, pr_id: int, fields: dict) -> dict:
+    """PATCH the PR and return its JSON. A title/description that Azure DevOps stored shorter than
+    what was sent is reported on stderr instead of being lost silently."""
+    description = fields.get("description")
+    if isinstance(description, str) and len(description) > ADO_PR_DESCRIPTION_MAX:
+        sys.exit(
+            f"PR description is {len(description)} characters; Azure DevOps allows at most {ADO_PR_DESCRIPTION_MAX}. "
+            "Shorten it, or move the detail into an attached file (`bdt pr update --file <path>`)."
+        )
     r = session.patch(
         f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}/pullRequests/{pr_id}",
         params={"api-version": "7.1"},
@@ -236,6 +248,59 @@ def _patch_pr(session: requests.Session, remote: AdoRemote, pr_id: int, fields: 
         timeout=HTTP_TIMEOUT_SECS,
     )
     r.raise_for_status()
+    try:
+        stored = r.json()
+    except ValueError:
+        return {}
+    if not isinstance(stored, dict):
+        return {}
+    for name in ("title", "description"):
+        sent, got = fields.get(name), stored.get(name)
+        if isinstance(sent, str) and isinstance(got, str) and len(got) < len(sent):
+            print(f"Warning: Azure DevOps stored the PR {name} cut short ({len(got)} of {len(sent)} characters).", file=sys.stderr)
+    return stored
+
+
+def split_az_text_args(args: list[str]) -> tuple[list[str], str | None, str | None]:
+    """Pull `--title`/`-t` and `--description`/`-d` (and their `--opt=value` forms) out of the
+    passthrough args for `az repos pr create`, returning `(remaining_args, title, description)`.
+
+    `az` is not trusted to carry a long description intact (it has been seen cutting it at ~450
+    characters), so `bdt pr create` applies these over the REST API after creating the PR. Like
+    `az`, `--description` takes every following value up to the next option, one per line.
+    """
+    rest: list[str] = []
+    title: str | None = None
+    description: str | None = None
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        name, eq, inline = arg.partition("=")
+        if name in ("--title", "-t", "--description", "-d"):
+            i += 1
+            if eq:
+                values = [inline]
+            else:
+                values = []
+                while i < len(args) and (not values or not args[i].startswith("-")):
+                    values.append(args[i])
+                    i += 1
+            text = "\n".join(values)
+            if name in ("--title", "-t"):
+                title = text
+            else:
+                description = text
+            continue
+        rest.append(arg)
+        i += 1
+    return rest, title, description
+
+
+def set_description(session: requests.Session, remote: AdoRemote, pr: dict, description: str) -> dict:
+    """Replace the PR's description (full text, over REST) and return `pr` updated to match."""
+    description = ensure_agent_session_note(description, also_check=pr.get("title")) or ""
+    _patch_pr(session, remote, pr["pullRequestId"], {"description": description})
+    return {**pr, "description": description}
 
 
 def add_attachments(

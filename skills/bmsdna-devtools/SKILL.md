@@ -65,9 +65,10 @@ bdt pr create --target dev    # or --target main / test
 
 Uses the current branch as source. On Azure DevOps this wraps `az repos pr
 create`; on GitHub, `gh pr create --fill` (autofills title/body from commit
-info, so it never blocks waiting on an interactive prompt). Extra args pass
-straight through either way, e.g.
-`bdt pr create --target dev -- --title "..." --description "..."`.
+info, so it never blocks waiting on an interactive prompt). Give a custom title/body with
+`bdt pr create --target dev --title "..." --description "$(cat pr.md)"` -- kept in full (on Azure
+DevOps set over REST after creation, since `az --description` can cut long text; ADO's own limit is
+4000 characters, which bdt rejects up front). Other extra args pass straight through, after `--`.
 
 After creating a PR, use `bdt pr status` (see above) to check whether the
 CI build passes.

@@ -165,7 +165,15 @@ a thin wrapper around `az repos pr create` (org/project/repo inferred by
 `az` itself from the git remote). On GitHub, `gh pr create --fill` (autofills
 title/body from commit info so it never blocks on an interactive prompt).
 Extra arguments pass through either way, e.g.
-`bdt pr create --target dev -- --title "..."`.
+`bdt pr create --target dev -- --reviewers "..."`.
+
+Pass the text with `--title "..."` and `--description "$(cat pr.md)"` rather than as passthrough
+args: it is kept in full. On GitHub the description goes to `gh` on stdin (`--body-file -`); on
+Azure DevOps it is set over the REST API right after `az` creates the PR, because
+`az repos pr create --description` has been seen cutting long text at ~450 characters (a `--title`/
+`--description` given after `--` is intercepted the same way). Azure DevOps itself allows at most
+4000 characters in a PR description: a longer one is rejected up front, and a description the
+server stored shorter than sent is reported as a warning (`bdt pr update` does the same check).
 
 PRs are created as **drafts by default**; a successful create always prints
 the PR's link plus `bdt pr publish` (which abstracts over the host) to mark
