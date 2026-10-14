@@ -24,6 +24,10 @@ from .agent_mentions import mentions_agent
 # Deliberately not 1 (an error), 2 (usage error, Click/Typer) or 3 (`pr status --wait`: needs approval).
 EXIT_TIMEOUT = 4
 
+# Defaults of `--interval` / `--timeout` of `issue watch` and `issue search --wait`.
+DEFAULT_INTERVAL = 20.0
+DEFAULT_TIMEOUT = 900.0
+
 # Consecutive failed polls tolerated before giving up: a long watch shouldn't die of one network blip.
 MAX_CONSECUTIVE_ERRORS = 3
 
@@ -68,12 +72,51 @@ def build_accept(
     return accept
 
 
+def poll_until[T](
+    probe: Callable[[], T | None],
+    *,
+    interval: float = DEFAULT_INTERVAL,
+    timeout: float | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+    log: Callable[[str], None] = lambda msg: print(msg, file=sys.stderr, flush=True),
+) -> T | None:
+    """Call `probe` (immediately, then every `interval` seconds) until it returns something other than None;
+    return that. None when `timeout` seconds (None = never) pass first. The timeout only stops *new* polls: a probe
+    already running when it passes is not cut off, and a match it returns is still returned.
+
+    A failing probe is retried, `MAX_CONSECUTIVE_ERRORS` failures in a row are raised: a long poll
+    shouldn't die of one network blip, but must not turn a persistent failure into "nothing found".
+    """
+    deadline = None if timeout is None else clock() + timeout
+    errors = 0
+    while True:
+        try:
+            result = probe()
+            errors = 0
+        except (Exception, SystemExit) as e:
+            errors += 1
+            if errors >= MAX_CONSECUTIVE_ERRORS:
+                raise
+            log(f"Polling failed ({e}); retrying ({errors}/{MAX_CONSECUTIVE_ERRORS - 1})")
+        else:
+            if result is not None:
+                return result
+        if deadline is not None:
+            remaining = deadline - clock()
+            if remaining <= 0:
+                return None
+            sleep(min(interval, remaining))
+        else:
+            sleep(interval)
+
+
 def watch(
     fetch: Callable[[], list[Comment]],
     *,
     since_id: int | None = None,
     accept: Callable[[Comment], bool] = lambda c: True,
-    interval: float = 20.0,
+    interval: float = DEFAULT_INTERVAL,
     timeout: float | None = None,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
@@ -85,32 +128,17 @@ def watch(
     The baseline is `since_id` (a comment id: everything after it counts, even if it was already
     posted before the watch started) or, by default, the newest comment existing at the start.
     """
-    deadline = None if timeout is None else clock() + timeout
-    errors = 0
     baseline = since_id
-    while True:
-        try:
-            comments = fetch()
-            errors = 0
-        except (Exception, SystemExit) as e:
-            errors += 1
-            if errors >= MAX_CONSECUTIVE_ERRORS:
-                raise
-            log(f"Polling the issue failed ({e}); retrying ({errors}/{MAX_CONSECUTIVE_ERRORS - 1})")
-        else:
-            if baseline is None:
-                baseline = max((c.id for c in comments), default=0)
-            else:
-                new = [c for c in comments if c.id > baseline and accept(c)]
-                if new:
-                    return new
-        if deadline is not None:
-            remaining = deadline - clock()
-            if remaining <= 0:
-                return None
-            sleep(min(interval, remaining))
-        else:
-            sleep(interval)
+
+    def probe() -> list[Comment] | None:
+        nonlocal baseline
+        comments = fetch()
+        if baseline is None:
+            baseline = max((c.id for c in comments), default=0)
+            return None
+        return [c for c in comments if c.id > baseline and accept(c)] or None
+
+    return poll_until(probe, interval=interval, timeout=timeout, sleep=sleep, clock=clock, log=log)
 
 
 def html_to_text(text: str) -> str:

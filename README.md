@@ -348,7 +348,7 @@ Issues are how people and coding agents talk to each other: someone comments `@C
 at this?` on an issue, and the agent finds it; the agent asks a question in an issue and waits for the answer.
 
 ```bash
-bdt issue search --for-me [--agent claude] [--state all] [--limit 10] [--take]
+bdt issue search --for-me [--agent claude] [--state all] [--limit 10] [--take] [--wait [--timeout 900] [--interval 20]]
 bdt issue watch 84 [--timeout 900] [--interval 20] [--since-comment ID] [--for-me] [--skip-own] [--json]
 ```
 
@@ -368,6 +368,18 @@ how many recently-updated candidates are scanned (the same scan as without `--ta
 `--for-me` searches and a second run returns the next issue. With `--org-wide` the claim is posted on the match's own
 repo (GitHub) / project (Azure DevOps), not the current one, and the output names your local clone of that repo, or -- if it isn't cloned -- tells you to get it with `bdt find-repo <name>`. With no match nothing is claimed and the exit code is
 still 0 (the output says "No matching ... found"); it exits 1 only if someone else holds the claim.
+
+Add **`--wait`** (requires `--for-me`) when there is nothing to do right now but something may come: instead of
+reporting "No matching ... found", the same search is repeated every `--interval` seconds (default 20; the first
+poll runs immediately) until an issue matches, and then it behaves exactly like a run that found it straight away:
+it prints the matches and, with `--take`, claims the first one (so `bdt issue search --for-me --take --wait` is
+"give me the next issue addressed to me, and block until there is one"). Like `issue watch` it exits **4** if
+nothing matched within `--timeout` seconds (default 900; `0` waits forever), after a message on stderr and
+without printing "No matching ..." -- "nothing yet" is distinguishable from a failure (exit 1), so run it again or
+carry on. A single failed poll is retried; three in a row fail the command. The progress note goes to stderr, so stdout is exactly
+what a plain search prints. `--timeout` and `--interval` are only accepted together with `--wait`. A script or
+human that is not a coding agent says whose mentions to wait for with `--agent NAME` (or `BDT_AGENT`), else only `@Agent` matches. Keep the
+command's own timeout (or run it in the background) longer than `--timeout`.
 
 Which agent is calling is detected from the environment, first match wins: `--agent NAME` (or the `BDT_AGENT`
 environment variable, to pin it), `CLAUDECODE=1` (Claude), the agent-agnostic `AI_AGENT` convention (first

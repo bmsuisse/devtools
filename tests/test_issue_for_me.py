@@ -7,9 +7,10 @@ import os
 import subprocess
 from unittest.mock import MagicMock
 
+import pytest
 from typer.testing import CliRunner
 
-from bmsdna.devtools import ado_issue, gh_issue
+from bmsdna.devtools import ado_issue, gh_issue, issue_watch as issue_watch_mod
 from bmsdna.devtools.agent_mentions import last_comment_filter
 from bmsdna.devtools.cli import app
 from bmsdna.devtools.gitrepo import AdoRemote, GitHubRemote
@@ -455,6 +456,221 @@ def test_gh_comment_names_its_repo_explicitly(monkeypatch) -> None:
     assert cmds == [["gh", "issue", "comment", "7", "--repo", "o/r", "--body", "Taken by me"]]
 
 
+# -- CLI: issue search --for-me --wait ------------------------------------------------
+
+
+class _WaitEnv:
+    """`issue search --wait` against a fake backend: poll N finds `polls[N]` (the last one repeats), printing like the real
+    backend does, and time only moves when the command sleeps -- so a wait runs instantly and deterministically."""
+
+    def __init__(self, monkeypatch, polls: list, remote=None) -> None:
+        self.taken: list = []
+        self.search_calls = 0
+        self.now = 1000.0
+        self.sleeps: list[float] = []
+        _patch_take(monkeypatch, [], remote=remote, taken=self.taken)
+        is_ado = remote is not None
+
+        def fake_search(*args, **kwargs):
+            poll = polls[min(self.search_calls, len(polls) - 1)]
+            self.search_calls += 1
+            if isinstance(poll, BaseException):
+                raise poll
+            for item in poll:
+                print(f"#{item['id' if is_ado else 'number']} [OPEN] some issue")
+            if not poll:
+                print("No matching issues found.")
+            return poll
+
+        monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.search", fake_search)
+        monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.search", fake_search)
+
+        real_poll_until = issue_watch_mod.poll_until
+
+        def sleep(secs: float) -> None:
+            self.sleeps.append(secs)
+            self.now += secs
+
+        monkeypatch.setattr(
+            "bmsdna.devtools.cli.issue_watch_mod.poll_until",
+            lambda probe, **kw: real_poll_until(probe, **kw, sleep=sleep, clock=lambda: self.now, log=lambda msg: None),
+        )
+
+
+def test_issue_search_wait_returns_a_match_on_the_first_poll_without_sleeping(monkeypatch) -> None:
+    env = _WaitEnv(monkeypatch, [[{"number": 7}]])
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--wait"])
+
+    assert result.exit_code == 0, result.output
+    assert env.search_calls == 1 and env.sleeps == []
+    assert "#7 [OPEN] some issue" in result.stdout
+
+
+def test_issue_search_wait_polls_until_something_matches(monkeypatch) -> None:
+    env = _WaitEnv(monkeypatch, [[], [], [{"number": 7}]])
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--wait", "--interval", "5"])
+
+    assert result.exit_code == 0, result.output
+    assert env.search_calls == 3 and env.sleeps == [5, 5]
+    # what the empty polls printed is not part of the result
+    assert result.stdout == "#7 [OPEN] some issue\n"
+
+
+def test_issue_search_wait_output_equals_a_plain_search(monkeypatch) -> None:
+    _WaitEnv(monkeypatch, [[], [{"number": 7}, {"number": 8}]])
+    waited = runner.invoke(app, ["issue", "search", "--for-me", "--wait"])
+    _WaitEnv(monkeypatch, [[{"number": 7}, {"number": 8}]])
+    plain = runner.invoke(app, ["issue", "search", "--for-me"])
+
+    assert waited.exit_code == plain.exit_code == 0
+    assert waited.stdout == plain.stdout == "#7 [OPEN] some issue\n#8 [OPEN] some issue\n"
+
+
+def test_issue_search_wait_times_out_with_exit_4_and_claims_nothing(monkeypatch) -> None:
+    env = _WaitEnv(monkeypatch, [[]])
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--wait", "--timeout", "50", "--interval", "20"])
+
+    assert result.exit_code == 4
+    assert env.sleeps == [20, 20, 10]  # the last sleep is cut to the deadline
+    assert env.taken == []
+    assert "No matching" not in result.stdout and result.stdout == ""
+    assert "turned up within 50 s" in result.stderr
+
+
+def test_issue_search_wait_announces_itself_on_stderr_only(monkeypatch) -> None:
+    _WaitEnv(monkeypatch, [[], [{"number": 7}]])
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--wait", "--timeout", "100", "--agent", "claude"])
+
+    assert "Waiting up to 100 s" in result.stderr and "@claude" in result.stderr
+    assert "Waiting" not in result.stdout
+
+
+def test_issue_search_wait_defaults_match_issue_watch(monkeypatch) -> None:
+    env = _WaitEnv(monkeypatch, [[]])
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--wait"])
+
+    assert result.exit_code == 4
+    assert env.sleeps == [issue_watch_mod.DEFAULT_INTERVAL] * 45  # 900 s / 20 s
+    assert (issue_watch_mod.DEFAULT_INTERVAL, issue_watch_mod.DEFAULT_TIMEOUT) == (20.0, 900.0)
+
+
+def test_issue_search_wait_timeout_zero_waits_until_a_match(monkeypatch) -> None:
+    env = _WaitEnv(monkeypatch, [[]] * 100 + [[{"number": 7}]])
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--wait", "--timeout", "0"])
+
+    assert result.exit_code == 0, result.output
+    assert env.search_calls == 101
+
+
+def test_issue_search_wait_take_claims_exactly_once_and_only_after_a_match(monkeypatch) -> None:
+    env = _WaitEnv(monkeypatch, [[], [], [{"number": 7}]])
+    claims_at_search: list[int] = []
+    real_take = env.taken.append
+
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli._take",
+        lambda remote, number, message, pat, **kw: (claims_at_search.append(env.search_calls), real_take((remote, number, message))) and True,
+    )
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--wait"])
+
+    assert result.exit_code == 0, result.output
+    assert env.taken == [(GitHubRemote("o", "r"), 7, "Taken by claude-bot")]
+    assert claims_at_search == [3]  # nothing was claimed while polling
+    assert result.stdout == "#7 [OPEN] some issue\n"
+
+
+def test_issue_search_wait_take_exits_1_when_someone_else_holds_the_claim(monkeypatch) -> None:
+    _WaitEnv(monkeypatch, [[{"number": 7}]])
+    monkeypatch.setattr("bmsdna.devtools.cli._take", lambda *a, **kw: False)
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--wait"])
+
+    assert result.exit_code == 1
+
+
+def test_issue_search_wait_take_org_wide_still_hints_at_the_other_repo(monkeypatch) -> None:
+    env = _WaitEnv(monkeypatch, [[], [{"number": 7, "repository": {"nameWithOwner": "o/other"}}]])
+    monkeypatch.setattr("bmsdna.devtools.cli._find_repo_hint", lambda target: f"HINT {target.owner}/{target.repo}")
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--wait", "--org-wide"])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines()[-1] == "HINT o/other"
+    assert [(r, n) for r, n, _ in env.taken] == [(GitHubRemote("o", "other"), 7)]
+
+
+def test_issue_search_wait_on_azure_devops(monkeypatch) -> None:
+    env = _WaitEnv(monkeypatch, [[], [{"id": 42}]], remote=REMOTE)
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--wait"])
+
+    assert result.exit_code == 0, result.output
+    assert [(r, n) for r, n, _ in env.taken] == [(REMOTE, 42)]
+
+
+def test_issue_search_wait_requires_for_me(monkeypatch) -> None:
+    env = _WaitEnv(monkeypatch, [[{"number": 7}]])
+
+    result = runner.invoke(app, ["issue", "search", "--wait"])
+
+    assert result.exit_code == 2
+    assert env.search_calls == 0
+
+
+def test_issue_search_timeout_and_interval_need_wait(monkeypatch) -> None:
+    env = _WaitEnv(monkeypatch, [[{"number": 7}]])
+
+    for option in ("--timeout", "--interval"):
+        result = runner.invoke(app, ["issue", "search", "--for-me", option, "5"])
+        assert result.exit_code == 2, option
+    assert env.search_calls == 0
+
+
+def test_issue_search_wait_rejects_invalid_interval_and_timeout(monkeypatch) -> None:
+    env = _WaitEnv(monkeypatch, [[{"number": 7}]])
+
+    for args in (["--interval", "0"], ["--interval", "-1"], ["--timeout", "-1"]):
+        result = runner.invoke(app, ["issue", "search", "--for-me", "--wait", *args])
+        assert result.exit_code == 2, args
+    assert env.search_calls == 0
+
+
+def test_issue_search_wait_a_failing_poll_is_not_a_success(monkeypatch) -> None:
+    env = _WaitEnv(monkeypatch, [SystemExit("gh: network down")])
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--wait"])
+
+    assert result.exit_code not in (0, 4)
+    assert env.search_calls == issue_watch_mod.MAX_CONSECUTIVE_ERRORS
+    assert env.taken == []
+
+
+def test_issue_search_wait_retries_a_single_failed_poll(monkeypatch) -> None:
+    env = _WaitEnv(monkeypatch, [RuntimeError("blip"), [{"number": 7}]])
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--wait"])
+
+    assert result.exit_code == 0, result.output
+    assert env.search_calls == 2
+
+
+def test_issue_search_without_wait_keeps_printing_no_match_and_exits_0(monkeypatch) -> None:
+    env = _WaitEnv(monkeypatch, [[]])
+
+    result = runner.invoke(app, ["issue", "search", "--for-me"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "No matching issues found.\n"
+    assert env.search_calls == 1 and env.sleeps == []
+
+
 # -- CLI: issue watch / watch-issue --------------------------------------------------
 
 
@@ -587,3 +803,18 @@ def test_issue_watch_ado_fetch_converts_html_bodies(monkeypatch) -> None:
 def test_issue_watch_rejects_a_non_positive_interval(monkeypatch) -> None:
     _patch_watch(monkeypatch, [_comment(5)])
     assert runner.invoke(app, ["issue", "watch", "84", "--interval", "0"]).exit_code == 2
+
+
+@pytest.mark.parametrize("option", ["--timeout", "--interval"])
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_issue_search_wait_rejects_non_finite_numbers(monkeypatch, option: str, value: str) -> None:
+    _patch_take(monkeypatch, [{"number": 7}])
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--wait", option, value])
+
+    assert result.exit_code == 2
+
+
+@pytest.mark.parametrize("option", ["--timeout", "--interval"])
+def test_issue_watch_rejects_non_finite_numbers(option: str) -> None:
+    assert runner.invoke(app, ["issue", "watch", "84", option, "nan"]).exit_code == 2

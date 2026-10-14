@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import math
 import re
 import subprocess
 import sys
@@ -755,6 +758,21 @@ def issue_search(
         "like `issue take` does (--limit then only sizes how many candidates are scanned). With --org-wide the claim is "
         "posted on the match's own repo / project.",
     ),
+    wait: bool = typer.Option(
+        False,
+        "--wait",
+        help="With --for-me: instead of reporting that nothing matches, keep polling until an issue/work item does, then "
+        "behave as if the search had found it right away (with --take: claim it). Exits 4 if none turned up "
+        "within --timeout (a progress note goes to stderr, stdout stays what a plain search prints).",
+    ),
+    timeout: float | None = typer.Option(
+        None,
+        "--timeout",
+        help=f"With --wait: give up after this many seconds (0 = wait forever; default {issue_watch_mod.DEFAULT_TIMEOUT:g}); exits 4 on timeout",
+    ),
+    interval: float | None = typer.Option(
+        None, "--interval", help=f"With --wait: seconds between polls (default {issue_watch_mod.DEFAULT_INTERVAL:g})"
+    ),
 ) -> None:
     """Search (or, with no keywords, just list) issues / work items, defaulting to open issues
     from the last 30 days (Azure DevOps or GitHub, auto-detected).
@@ -765,9 +783,15 @@ def issue_search(
         raise typer.BadParameter("--take only works together with --for-me", param_hint="--take")
     if take and limit < 1:
         raise typer.BadParameter("--take needs --limit of at least 1 (it sizes the candidates scanned)", param_hint="--limit")
+    if wait and not for_me:
+        raise typer.BadParameter("--wait only works together with --for-me (without it, a search just lists)", param_hint="--wait")
+    if not wait and (timeout is not None or interval is not None):
+        raise typer.BadParameter("--timeout and --interval only work together with --wait", param_hint="--timeout" if timeout is not None else "--interval")
+    _check_poll_options(interval, timeout)
     # only passed on with --for-me, so a plain search calls the backends exactly as before.
     # --take wants one match out of the same scan a plain --for-me does: --limit then sizes the scan, not the result
-    search_extra: dict = {"comment_filter": agent_mentions.last_comment_filter(_resolve_agent(agent))} if for_me else {}
+    resolved_agent = _resolve_agent(agent) if for_me else None
+    search_extra: dict = {"comment_filter": agent_mentions.last_comment_filter(resolved_agent)} if for_me else {}
     if take:
         search_extra["scan_limit"] = limit
         limit = 1
@@ -797,21 +821,35 @@ def issue_search(
     else:
         remote = current_remote()
 
-    if isinstance(remote, GitHubRemote):
-        resolved_board = gh_issue.resolve_board(board)
-        items = gh_issue.search(
-            require_gh(), remote.owner, remote.repo, keywords or [], since, limit, state, board=resolved_board, org_wide=org_wide, labels=tags_or_labels, **search_extra
+    def search_once() -> tuple[list[dict], tuple[AdoRemote | GitHubRemote, int] | None]:
+        """One search (the backend prints the matches, or "No matching ...", itself); with the first match's
+        remote and number, which is where `--take` claims it."""
+        if isinstance(remote, GitHubRemote):
+            resolved_board = gh_issue.resolve_board(board)
+            items = gh_issue.search(
+                require_gh(), remote.owner, remote.repo, keywords or [], since, limit, state, board=resolved_board, org_wide=org_wide, labels=tags_or_labels, **search_extra
+            )
+            found = (_github_item_remote(items[0]) if org_wide else remote, items[0]["number"]) if items else None
+        else:
+            session = requests.Session()
+            session.headers.update(auth_header(pat))
+            resolved_board = ado_issue.resolve_board(board)
+            items = ado_issue.search(
+                session, remote, keywords or [], since=since, board=resolved_board, top=limit, state=state, org_wide=org_wide, tags=tags_or_labels, **search_extra
+            )
+            project = items[0]["fields"].get("System.TeamProject") if items and org_wide else None
+            found = (replace(remote, project=project) if project else remote, items[0]["id"]) if items else None
+        return items, found
+
+    if wait:
+        found = _wait_for_match(
+            search_once,
+            agent=resolved_agent,
+            interval=issue_watch_mod.DEFAULT_INTERVAL if interval is None else interval,
+            timeout=issue_watch_mod.DEFAULT_TIMEOUT if timeout is None else timeout,
         )
-        found = (_github_item_remote(items[0]) if org_wide else remote, items[0]["number"]) if items else None
     else:
-        session = requests.Session()
-        session.headers.update(auth_header(pat))
-        resolved_board = ado_issue.resolve_board(board)
-        items = ado_issue.search(
-            session, remote, keywords or [], since=since, board=resolved_board, top=limit, state=state, org_wide=org_wide, tags=tags_or_labels, **search_extra
-        )
-        project = items[0]["fields"].get("System.TeamProject") if items and org_wide else None
-        found = (replace(remote, project=project) if project else remote, items[0]["id"]) if items else None
+        found = search_once()[1]
 
     if take and found is not None:
         # an --org-wide match can live in any repo / project of the org: claim it where it is, not in the current one
@@ -821,6 +859,33 @@ def issue_search(
             raise typer.Exit(1)
         if org_wide and target != remote:
             typer.echo(_find_repo_hint(target))
+
+
+def _wait_for_match[T](
+    search_once: Callable[[], tuple[list[dict], T]], *, agent: str | None, interval: float, timeout: float
+) -> T:
+    """`issue search --wait`: repeat `search_once` until it finds something, then print what it printed and return its
+    second result. The backends print as they search ("No matching ..." included), so each poll runs with stdout captured
+    and only the poll that matched is replayed -- stdout ends up exactly what a plain search that found it prints. Exits
+    `EXIT_TIMEOUT` (4, like `issue watch`) when nothing matched within `timeout` seconds (0 = never give up)."""
+    typer.echo(
+        f"Waiting {f'up to {timeout:g} s' if timeout else 'with no timeout'} for an issue / work item that addresses "
+        f"@{agent or 'Agent'} (polling every {interval:g} s) ...",
+        err=True,
+    )
+
+    def probe() -> tuple[str, T] | None:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            items, found = search_once()
+        return (out.getvalue(), found) if items else None
+
+    polled = issue_watch_mod.poll_until(probe, interval=interval, timeout=timeout or None)
+    if polled is None:
+        typer.echo(f"No issue / work item addressing @{agent or 'Agent'} turned up within {timeout:g} s", err=True)
+        raise typer.Exit(issue_watch_mod.EXIT_TIMEOUT)
+    typer.echo(polled[0], nl=False)
+    return polled[1]
 
 
 def _origin_is(clone: Path, target: GitHubRemote) -> bool:
@@ -847,6 +912,15 @@ def _find_repo_hint(target: AdoRemote | GitHubRemote) -> str:
         f"This work item is in the Azure DevOps project {target.project}, not necessarily the current repo -- "
         "find (and clone) the repo it concerns with `bdt find-repo <repo name>`."
     )
+
+
+def _check_poll_options(interval: float | None, timeout: float | None) -> None:
+    """`--interval` / `--timeout` of the polling commands: finite numbers (nan/inf would poll forever or crash `sleep`);
+    a timeout of 0 means wait forever."""
+    if interval is not None and not (math.isfinite(interval) and interval > 0):
+        raise typer.BadParameter("Must be a number greater than 0", param_hint="--interval")
+    if timeout is not None and not (math.isfinite(timeout) and timeout >= 0):
+        raise typer.BadParameter("Must be a number, 0 (wait forever) or greater", param_hint="--timeout")
 
 
 def _github_item_remote(item: dict) -> GitHubRemote:
@@ -994,8 +1068,8 @@ def _capture(cmd: list[str]) -> subprocess.CompletedProcess | None:
 
 def issue_watch(
     number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
-    interval: float = typer.Option(20.0, "--interval", help="Seconds between polls"),
-    timeout: float = typer.Option(900.0, "--timeout", help="Give up after this many seconds (0 = wait forever); exits 4 on timeout"),
+    interval: float = typer.Option(issue_watch_mod.DEFAULT_INTERVAL, "--interval", help="Seconds between polls"),
+    timeout: float = typer.Option(issue_watch_mod.DEFAULT_TIMEOUT, "--timeout", help="Give up after this many seconds (0 = wait forever); exits 4 on timeout"),
     since_comment: int | None = typer.Option(
         None,
         "--since-comment",
@@ -1021,10 +1095,7 @@ def issue_watch(
     block until someone answers. Prints the new comment(s) and exits 0; exits 4 if none arrived within
     --timeout. Progress notes go to stderr, so stdout holds only the comments (JSON lines with --json).
     """
-    if interval <= 0:
-        raise typer.BadParameter("Must be greater than 0", param_hint="--interval")
-    if timeout < 0:
-        raise typer.BadParameter("Must be 0 (wait forever) or greater", param_hint="--timeout")
+    _check_poll_options(interval, timeout)
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
