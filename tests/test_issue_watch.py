@@ -8,6 +8,7 @@ from bmsdna.devtools.issue_watch import (
     build_accept,
     format_comment,
     html_to_text,
+    poll_until,
     to_comments,
     watch,
 )
@@ -124,6 +125,58 @@ def test_gh_style_sys_exit_is_retried_too() -> None:
     clock = FakeClock()
     fetch = sequence([c(1)], SystemExit("gh: network"), [c(1), c(2)])
     assert run(fetch, clock, interval=10, timeout=100) == [c(2)]
+
+
+# -- poll_until ------------------------------------------------------------------
+
+
+def poll(probe, clock: FakeClock, **kwargs):
+    return poll_until(probe, sleep=clock.sleep, clock=clock.clock, log=lambda msg: None, **kwargs)
+
+
+def test_poll_until_probes_immediately_without_sleeping() -> None:
+    clock = FakeClock()
+    assert poll(lambda: "hit", clock, interval=10, timeout=100) == "hit"
+    assert clock.sleeps == []
+
+
+def test_poll_until_returns_a_later_hit() -> None:
+    clock = FakeClock()
+    results = iter([None, None, "hit"])
+    assert poll(lambda: next(results), clock, interval=10, timeout=100) == "hit"
+    assert clock.sleeps == [10, 10]
+
+
+def test_poll_until_gives_up_at_the_timeout() -> None:
+    clock = FakeClock()
+    assert poll(lambda: None, clock, interval=10, timeout=25) is None
+    assert clock.sleeps == [10, 10, 5]
+
+
+def test_poll_until_without_timeout_keeps_polling() -> None:
+    clock = FakeClock()
+    results = iter([None] * 50 + ["hit"])
+    assert poll(lambda: next(results), clock, interval=10, timeout=None) == "hit"
+    assert len(clock.sleeps) == 50
+
+
+def test_poll_until_retries_an_error_but_raises_repeated_ones() -> None:
+    clock = FakeClock()
+    results = iter([RuntimeError("blip"), "hit"])
+
+    def flaky():
+        r = next(results)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    assert poll(flaky, clock, interval=10, timeout=100) == "hit"
+
+    def down():
+        raise RuntimeError("down")
+
+    with pytest.raises(RuntimeError, match="down"):
+        poll(down, FakeClock(), interval=10, timeout=1000)
 
 
 # -- build_accept ----------------------------------------------------------------
