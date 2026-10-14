@@ -730,12 +730,24 @@ def issue_search(
         help="With --for-me: the agent to look for mentions of, e.g. claude, codex, goose. Default: detected "
         "from the environment (CLAUDECODE, AI_AGENT, CODEX_*, GOOSE_*, ...); without any, only @Agent matches.",
     ),
+    take: bool = typer.Option(
+        False,
+        "--take",
+        help="With --for-me: return only the first matching issue/work item and claim it in the same go, "
+        "like `issue take` does (--limit is ignored). Can't be combined with --org-wide.",
+    ),
 ) -> None:
     """Search (or, with no keywords, just list) issues / work items, defaulting to open issues
     from the last 30 days (Azure DevOps or GitHub, auto-detected).
     """
     if state not in ("open", "closed", "all"):
         raise typer.BadParameter("Must be one of: open, closed, all", param_hint="--state")
+    if take and not for_me:
+        raise typer.BadParameter("--take only works together with --for-me", param_hint="--take")
+    if take and org_wide:
+        raise typer.BadParameter("--take can't be combined with --org-wide (the claim is posted on the current repo)", param_hint="--take")
+    if take:
+        limit = 1
     since = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%Y-%m-%d") if since_days > 0 else None
     tags_or_labels = _merge_tags_and_labels(tag, label) or []
     # only passed on with --for-me, so a plain search calls the backends exactly as before
@@ -766,16 +778,23 @@ def issue_search(
 
     if isinstance(remote, GitHubRemote):
         resolved_board = gh_issue.resolve_board(board)
-        gh_issue.search(
+        items = gh_issue.search(
             require_gh(), remote.owner, remote.repo, keywords or [], since, limit, state, board=resolved_board, org_wide=org_wide, labels=tags_or_labels, **search_extra
         )
+        found = items[0]["number"] if items else None
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
         resolved_board = ado_issue.resolve_board(board)
-        ado_issue.search(
+        items = ado_issue.search(
             session, remote, keywords or [], since=since, board=resolved_board, top=limit, state=state, org_wide=org_wide, tags=tags_or_labels, **search_extra
         )
+        found = items[0]["id"] if items else None
+
+    if take and found is not None:
+        user = _current_user(remote)
+        if not _take(remote, found, f"{issue_do_mod.TAKEN_PREFIX} {user}", pat, user=user):
+            raise typer.Exit(1)
 
 
 def _resolve_agent(agent: str | None) -> str | None:

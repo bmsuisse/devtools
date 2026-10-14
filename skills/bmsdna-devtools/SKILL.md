@@ -90,6 +90,7 @@ session-link comment instead.
 
 ```bash
 bdt issue search --for-me                  # open issues whose LAST comment says @Claude / @Codex / @Goose (you) or @Agent (everyone)
+bdt issue search --for-me --take           # same, but only the first match, and claim it (like `bdt issue take`) in one go
 bdt issue watch 84 --since-comment 123 --skip-own --json --timeout 1800
 ```
 

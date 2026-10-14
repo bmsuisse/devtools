@@ -288,6 +288,87 @@ def test_issue_search_for_me_on_azure_devops(monkeypatch) -> None:
     assert captured["comment_filter"]("@Claude look")
 
 
+def _patch_take(monkeypatch, items: list[dict], remote=None, taken: list | None = None, search_limits: list | None = None) -> None:
+    _clean_agent_env(monkeypatch)
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote or GitHubRemote("o", "r"))
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+
+    def fake_search(*args, **kwargs):
+        if search_limits is not None:
+            search_limits.append(kwargs.get("top", args[5] if len(args) > 5 else None))
+        return items
+
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.search", fake_search)
+    monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.search", fake_search)
+    monkeypatch.setattr("bmsdna.devtools.cli._current_user", lambda remote: "claude-bot")
+    monkeypatch.setattr("bmsdna.devtools.cli._take", lambda remote, number, message, pat, **kw: (taken.append((remote, number, message)) if taken is not None else None) or True)
+
+
+def test_issue_search_take_claims_the_first_match(monkeypatch) -> None:
+    taken: list = []
+    limits: list = []
+    _patch_take(monkeypatch, [{"number": 7}], taken=taken, search_limits=limits)
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--limit", "5"])
+
+    assert result.exit_code == 0, result.output
+    assert taken == [(GitHubRemote("o", "r"), 7, "Taken by claude-bot")]
+    assert limits == [1]
+
+
+def test_issue_search_take_on_azure_devops_uses_the_work_item_id(monkeypatch) -> None:
+    taken: list = []
+    _patch_take(monkeypatch, [{"id": 42}], remote=REMOTE, taken=taken)
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take"])
+
+    assert result.exit_code == 0, result.output
+    assert [(r, n) for r, n, _ in taken] == [(REMOTE, 42)]
+
+
+def test_issue_search_take_without_a_match_takes_nothing(monkeypatch) -> None:
+    taken: list = []
+    _patch_take(monkeypatch, [], taken=taken)
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take"])
+
+    assert result.exit_code == 0, result.output
+    assert taken == []
+
+
+def test_issue_search_take_exits_1_when_someone_else_holds_the_claim(monkeypatch) -> None:
+    _patch_take(monkeypatch, [{"number": 7}])
+    monkeypatch.setattr("bmsdna.devtools.cli._take", lambda *a, **kw: False)
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take"])
+
+    assert result.exit_code == 1
+
+
+def test_issue_search_take_requires_for_me(monkeypatch) -> None:
+    taken: list = []
+    _patch_take(monkeypatch, [{"number": 7}], taken=taken)
+
+    result = runner.invoke(app, ["issue", "search", "--take"])
+
+    assert result.exit_code != 0
+    assert "--for-me" in result.output
+    assert taken == []
+
+
+def test_issue_search_take_rejects_org_wide(monkeypatch) -> None:
+    taken: list = []
+    _patch_take(monkeypatch, [{"number": 7}], taken=taken)
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--org-wide"])
+
+    assert result.exit_code != 0
+    assert "--org-wide" in result.output
+    assert taken == []
+
+
 # -- CLI: issue watch / watch-issue --------------------------------------------------
 
 
