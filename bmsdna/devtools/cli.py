@@ -7,6 +7,7 @@ import sys
 import tomllib
 import uuid
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
@@ -30,7 +31,17 @@ from . import pr_build, pr_info as pr_info_mod, pr_issue_link, pr_labels, pull a
 from .ado_auth import auth_header
 from .bdt_config import find_pyproject, load_bdt_table
 from .cli_tools import CLI_TIMEOUT_SECS, detect_agent_session, require_az, require_gh
-from .gitrepo import AdoRemote, GitHubRemote, UnknownRemoteError, current_branch, current_remote, head_commit_subject
+from .gitrepo import (
+    AdoRemote,
+    GitHubRemote,
+    NotGitHubRemoteError,
+    UnknownRemoteError,
+    current_branch,
+    current_remote,
+    head_commit_subject,
+    origin_url,
+    parse_remote,
+)
 from .lint_findings import render_findings
 
 # Non-ASCII output (checkmarks, en-dashes in ADO project names, etc.) needs a
@@ -135,7 +146,8 @@ def _resolve_ado_pr(pat: str | None, remote: AdoRemote, target: str | None, pr_i
 def _current_pr_info(pr_id: int | None, target_branch: str | None, pat: str | None) -> pr_info_mod.PrInfo:
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        return pr_info_mod.github_info(gh_pr.get_pr(require_gh(), pr_id, fields=gh_pr.PR_INFO_FIELDS), remote)
+        gh = require_gh()
+        return pr_info_mod.github_info(gh_pr.get_pr(gh, gh_pr.resolve_pr_id(gh, pr_id, target_branch), fields=gh_pr.PR_INFO_FIELDS), remote)
     session, pr = _resolve_ado_pr(pat, remote, target_branch, pr_id=pr_id)
     return pr_info_mod.ado_info(session, pr, remote)
 
@@ -155,6 +167,7 @@ def _gh_branch_for(gh: str, pr_id: int | None, *, needed: bool) -> str:
     return gh_pr.get_pr(gh, pr_id).get("headRefName") or str(pr_id)
 
 
+_LOOKUP_TARGET_HELP = "Only consider a PR into this target branch (default: any target). Several open PRs for the branch: asks which one (non-interactive: fails listing them) unless this or --pr-id picks one"
 _PR_ID_HELP = "Act on this PR by ID/number directly, instead of resolving it from the current git branch (lets you skip having the PR's branch checked out locally)"
 
 
@@ -417,7 +430,7 @@ def pr_create(
 
 @pr_app.command("publish")
 def pr_publish(
-    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch of the PR (Azure DevOps only)"),
+    target: str | None = typer.Option(None, "--target", help=_LOOKUP_TARGET_HELP),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -431,7 +444,8 @@ def pr_publish(
     """
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_pr.publish(require_gh(), pr_id=pr_id)
+        gh = require_gh()
+        gh_pr.publish(gh, pr_id=gh_pr.resolve_pr_id(gh, pr_id, target))
     else:
         session, pr = _resolve_ado_pr(pat, remote, target, pr_id=pr_id)
         pr_build.publish(session, remote, pr)
@@ -439,7 +453,7 @@ def pr_publish(
 
 @pr_app.command("status")
 def pr_status(
-    target_branch: str | None = typer.Option(None, "--target-branch", help="Only consider PRs into this target branch (Azure DevOps only; default: any target — gh has no such filter, it always resolves the PR for the current branch)"),
+    target_branch: str | None = typer.Option(None, "--target-branch", help=_LOOKUP_TARGET_HELP),
     wait: bool = typer.Option(False, "--wait", help="Poll until all pipelines/checks are completed; stops early and reports status if one needs manual approval"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
@@ -449,7 +463,8 @@ def pr_status(
     """
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_pr.run(require_gh(), wait, pr_id=pr_id)
+        gh = require_gh()
+        gh_pr.run(gh, wait, pr_id=gh_pr.resolve_pr_id(gh, pr_id, target_branch))
         return
     pr_build.run(remote, pat, target_branch, wait, pr_id=pr_id)
 
@@ -457,7 +472,7 @@ def pr_status(
 @pr_app.command("info")
 def pr_info(
     as_json: bool = typer.Option(False, "--json", help="Print machine-readable JSON (for status integrations that poll it)"),
-    target_branch: str | None = typer.Option(None, "--target-branch", help="Only consider PRs into this target branch (Azure DevOps only; default: any target)"),
+    target_branch: str | None = typer.Option(None, "--target-branch", help=_LOOKUP_TARGET_HELP),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
 ) -> None:
@@ -477,7 +492,7 @@ def pr_info(
 
 @pr_app.command("retry")
 def pr_retry(
-    target_branch: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target-branch", help="Target branch of the PR (Azure DevOps only)"),
+    target_branch: str | None = typer.Option(None, "--target-branch", help=_LOOKUP_TARGET_HELP),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -492,7 +507,8 @@ def pr_retry(
     """
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_pr.retry(require_gh(), pr_id=pr_id)
+        gh = require_gh()
+        gh_pr.retry(gh, pr_id=gh_pr.resolve_pr_id(gh, pr_id, target_branch))
         return
     pr_build.retry(remote, pat, target_branch, pr_id=pr_id)
 
@@ -534,7 +550,7 @@ def pr_update(
     file: list[str] = typer.Option(
         [], "--file", help="Path to an arbitrary file to append to the PR description as a linked attachment (repeatable)"
     ),
-    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch of the PR (Azure DevOps only)"),
+    target: str | None = typer.Option(None, "--target", help=_LOOKUP_TARGET_HELP),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -558,6 +574,7 @@ def pr_update(
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
+        pr_id = gh_pr.resolve_pr_id(gh, pr_id, target)
         # `gh_pr.update()` already re-resolves the branch itself from `--pr-id` (it needs the
         # PR anyway, to fetch its current title/body) -- passing `_gh_branch_for` here would
         # just be a second, redundant `gh pr view` round-trip for the same PR.
@@ -577,7 +594,7 @@ def pr_comment(
     file: list[str] = typer.Option(
         [], "--file", help="Path to an arbitrary file to link in the comment as an attachment (repeatable)"
     ),
-    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch of the PR (Azure DevOps only)"),
+    target: str | None = typer.Option(None, "--target", help=_LOOKUP_TARGET_HELP),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -601,6 +618,7 @@ def pr_comment(
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
+        pr_id = gh_pr.resolve_pr_id(gh, pr_id, target)
         branch = _gh_branch_for(gh, pr_id, needed=bool(screenshot or file))
         gh_pr.comment_with_screenshots(gh, remote.owner, remote.repo, branch, message, screenshot, file, pr_id=pr_id)
     else:
@@ -730,16 +748,31 @@ def issue_search(
         help="With --for-me: the agent to look for mentions of, e.g. claude, codex, goose. Default: detected "
         "from the environment (CLAUDECODE, AI_AGENT, CODEX_*, GOOSE_*, ...); without any, only @Agent matches.",
     ),
+    take: bool = typer.Option(
+        False,
+        "--take",
+        help="With --for-me: return only the first matching issue/work item and claim it in the same go, "
+        "like `issue take` does (--limit then only sizes how many candidates are scanned). With --org-wide the claim is "
+        "posted on the match's own repo / project.",
+    ),
 ) -> None:
     """Search (or, with no keywords, just list) issues / work items, defaulting to open issues
     from the last 30 days (Azure DevOps or GitHub, auto-detected).
     """
     if state not in ("open", "closed", "all"):
         raise typer.BadParameter("Must be one of: open, closed, all", param_hint="--state")
+    if take and not for_me:
+        raise typer.BadParameter("--take only works together with --for-me", param_hint="--take")
+    if take and limit < 1:
+        raise typer.BadParameter("--take needs --limit of at least 1 (it sizes the candidates scanned)", param_hint="--limit")
+    # only passed on with --for-me, so a plain search calls the backends exactly as before.
+    # --take wants one match out of the same scan a plain --for-me does: --limit then sizes the scan, not the result
+    search_extra: dict = {"comment_filter": agent_mentions.last_comment_filter(_resolve_agent(agent))} if for_me else {}
+    if take:
+        search_extra["scan_limit"] = limit
+        limit = 1
     since = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%Y-%m-%d") if since_days > 0 else None
     tags_or_labels = _merge_tags_and_labels(tag, label) or []
-    # only passed on with --for-me, so a plain search calls the backends exactly as before
-    search_extra = {"comment_filter": agent_mentions.last_comment_filter(_resolve_agent(agent))} if for_me else {}
 
     # --org/--github-org are only ever consulted as a *fallback*, when `current_remote()` itself
     # fails (no git repo, no origin remote, or a remote that's neither GitHub nor Azure DevOps) --
@@ -766,16 +799,60 @@ def issue_search(
 
     if isinstance(remote, GitHubRemote):
         resolved_board = gh_issue.resolve_board(board)
-        gh_issue.search(
+        items = gh_issue.search(
             require_gh(), remote.owner, remote.repo, keywords or [], since, limit, state, board=resolved_board, org_wide=org_wide, labels=tags_or_labels, **search_extra
         )
+        found = (_github_item_remote(items[0]) if org_wide else remote, items[0]["number"]) if items else None
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
         resolved_board = ado_issue.resolve_board(board)
-        ado_issue.search(
+        items = ado_issue.search(
             session, remote, keywords or [], since=since, board=resolved_board, top=limit, state=state, org_wide=org_wide, tags=tags_or_labels, **search_extra
         )
+        project = items[0]["fields"].get("System.TeamProject") if items and org_wide else None
+        found = (replace(remote, project=project) if project else remote, items[0]["id"]) if items else None
+
+    if take and found is not None:
+        # an --org-wide match can live in any repo / project of the org: claim it where it is, not in the current one
+        target, number = found
+        user = _current_user(target)
+        if not _take(target, number, f"{issue_do_mod.TAKEN_PREFIX} {user}", pat, user=user):
+            raise typer.Exit(1)
+        if org_wide and target != remote:
+            typer.echo(_find_repo_hint(target))
+
+
+def _origin_is(clone: Path, target: GitHubRemote) -> bool:
+    """Is `clone`'s `origin` the GitHub repo `target`? (A same-named repo of another owner is not.)"""
+    try:
+        origin = parse_remote(origin_url(str(clone)))
+    except (SystemExit, UnknownRemoteError, NotGitHubRemoteError):
+        return False
+    return isinstance(origin, GitHubRemote) and (origin.owner.lower(), origin.repo.lower()) == (target.owner.lower(), target.repo.lower())
+
+
+def _find_repo_hint(target: AdoRemote | GitHubRemote) -> str:
+    """Where a claimed `--org-wide` match lives and where its repo is: the local clone when there is one, else how to get
+    it (`bdt find-repo`) -- it is usually not the checkout `bdt` ran in. An Azure DevOps work item belongs to a project,
+    not a repo, so there is no clone to name."""
+    if isinstance(target, GitHubRemote):
+        root = find_repo_mod.work_dir()
+        candidates = find_repo_mod.find_local(target.repo, root) if root.is_dir() else []
+        clones = [p for p in candidates if p.name.lower() == target.repo.lower() and _origin_is(p, target)]
+        if clones:
+            return f"This issue is in {target.owner}/{target.repo}, not the current repo -- local clone: {', '.join(str(p) for p in clones)}"
+        return f"This issue is in {target.owner}/{target.repo}, not the current repo, and not cloned yet -- find (and clone) it with `bdt find-repo {target.repo}`."
+    return (
+        f"This work item is in the Azure DevOps project {target.project}, not necessarily the current repo -- "
+        "find (and clone) the repo it concerns with `bdt find-repo <repo name>`."
+    )
+
+
+def _github_item_remote(item: dict) -> GitHubRemote:
+    """The repo an `--org-wide` GitHub search result (`repository.nameWithOwner`) lives in."""
+    owner, _, repo = item["repository"]["nameWithOwner"].partition("/")
+    return GitHubRemote(owner, repo)
 
 
 def _resolve_agent(agent: str | None) -> str | None:
@@ -825,7 +902,7 @@ def issue_do(
 @issue_app.command("take")
 def issue_take(
     number: int | None = typer.Argument(None, help="Issue number (GitHub) or work item ID (Azure DevOps). Default: the issue the current branch's PR closes"),
-    target_branch: str | None = typer.Option(None, "--target-branch", help="Only consider PRs into this target branch (Azure DevOps only; default: any target; only used to find the issue when no number is given)"),
+    target_branch: str | None = typer.Option(None, "--target-branch", help=_LOOKUP_TARGET_HELP + " (only used to find the issue when no number is given)"),
     force: bool = typer.Option(False, "--force", help="Comment even if someone else already holds the claim"),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
 ) -> None:
@@ -1209,7 +1286,8 @@ def lint(
 ) -> None:
     """Static checks (bmsuisse/skills#52): postgres/psycopg SQL rules on every `.execute()` call and pgdevkit
     `fetch_all`/`fetch_one`/`fetch_scalar`/`execute`/`PostgresJsonResponse` call (and arrowbricks'
-    `execute_streamed`/`query_agent`/`stream_query_json`, injection rules only)
+    `execute_streamed`/`query_agent`/`stream_query_json`, and the project's own `[tool.bdt.lint] sql_functions`; the same
+    rules for every dialect, Databricks SQL included)
     (must use load_sql()/a .sql file, a t-string, or psycopg.sql for anything beyond a trivial
     query; never an f-string/concatenation/`%`-formatting), pydantic-model placement under api/
     directories, hand-wired HTTP in TypeScript, and that the repo declares/configures ty, ruff, pytest and prek.
@@ -1483,7 +1561,7 @@ def cleanup_worktree(
     )
 
 
-def _draft_feat_pr(target: str, pat: str | None) -> None:
+def _draft_feat_pr(target: str | None, pat: str | None) -> None:
     """A 'feat' commit landing on an already-published PR forces it back to draft --
     a feature needs a fresh review pass before CI/merge, not just whatever review
     happened before this commit existed.
@@ -1495,7 +1573,7 @@ def _draft_feat_pr(target: str, pat: str | None) -> None:
     try:
         remote = current_remote()
         if isinstance(remote, GitHubRemote):
-            converted = gh_pr.set_draft(require_gh())
+            converted = gh_pr.set_draft(require_gh(), target=target)
         else:
             session = requests.Session()
             session.headers.update(auth_header(pat))
@@ -1516,7 +1594,7 @@ def commit(
     subrepo: list[str] = typer.Option([], "--subrepo", help="Submodule directory name to split matching files into (repeatable)"),
     skip_message_check: bool = typer.Option(False, "--skip-message-check", help="Don't require a conventional-commit-style message"),
     allow_main: bool = typer.Option(False, "--allow-main", help="Allow committing directly on main/master"),
-    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch of the PR to draft on a 'feat' commit (Azure DevOps only)"),
+    target: str | None = typer.Option(None, "--target", help=_LOOKUP_TARGET_HELP + " (the PR to draft on a 'feat' commit)"),
     pat: str | None = typer.Option(
         None,
         "--pat",

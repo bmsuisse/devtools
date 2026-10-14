@@ -13,6 +13,7 @@ import requests
 from .ado_auth import auth_header
 from .cli_tools import EXIT_NEEDS_APPROVAL, HTTP_TIMEOUT_SECS, PollHeartbeat, detect_agent_session, ensure_agent_session_note, is_claude_code
 from .gitrepo import AdoRemote, current_branch
+from .pr_choice import PrCandidate, choose_pr
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 # Matches an ISO 8601 timestamp at the start of a log line, e.g. 2024-03-21T15:01:23.1234567Z
@@ -152,7 +153,10 @@ def retry_hint() -> str:
 
 
 def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, target_branch: str | None) -> dict:
-    """The PR from `source_branch` (active first, else completed). `target_branch=None` doesn't filter on the target."""
+    """The PR from `source_branch` (active first, else completed). `target_branch=None` doesn't filter on the target.
+
+    Several active PRs from the branch (into different targets) are ambiguous: see `choose_pr`.
+    """
     url = f"{_base_url(remote)}/_apis/git/repositories/{remote.repo}/pullrequests"
     for status in ["active", "completed"]:
         r = session.get(
@@ -161,7 +165,7 @@ def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, tar
                 "searchCriteria.sourceRefName": f"refs/heads/{source_branch}",
                 **({"searchCriteria.targetRefName": f"refs/heads/{target_branch}"} if target_branch else {}),
                 "searchCriteria.status": status,
-                "$top": 1,
+                **({"$top": 1} if status == "completed" else {}),
                 "api-version": "7.1",
             },
             timeout=HTTP_TIMEOUT_SECS,
@@ -169,7 +173,11 @@ def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, tar
         r.raise_for_status()
         items = r.json().get("value", [])
         if items:
-            pr = items[0]
+            candidates = [
+                PrCandidate(i["pullRequestId"], i.get("title", "?"), i["targetRefName"].removeprefix("refs/heads/"), pr_web_url(remote, i["pullRequestId"]))
+                for i in items
+            ]
+            pr = items[choose_pr(source_branch, candidates)]
             conflict = merge_conflict_message(pr)
             if conflict:
                 sys.exit(conflict)
@@ -751,7 +759,9 @@ def run(
         """
         nonlocal source_branch, target_branch
         pr, source_branch = _resolve_pr_and_branch(session, remote, target_branch, source_branch, pr_id)
-        if target_branch is None:  # unfiltered lookup: the deploy-build hint needs the PR's actual target
+        # unfiltered lookup: the deploy-build hint needs the PR's actual target -- and pinning it also
+        # means later polls find that one PR without asking again which of several it is
+        if target_branch is None:
             target_branch = pr.get("targetRefName", "").removeprefix("refs/heads/") or None
         return pr
 

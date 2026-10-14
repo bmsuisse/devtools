@@ -39,9 +39,13 @@ GitHub — whichever `origin` points at.
 bdt pr status [--target-branch BRANCH] [--wait]
 ```
 
-The `--target` / `--target-branch` option of `pr create/retry/publish/update/comment/watch-deploy` and `commit`
-defaults to `dev`; pass `--target main` (or whatever your PRs go into) to override. `pr status`, `pr info` and
-`issue take` only look a PR up, so by default they don't filter on the target branch at all.
+Every command that acts on an existing PR (`pr status/info/retry/publish/update/comment`, `issue take` without
+a number, and the draft conversion of `commit`) finds the PR opened from the current branch **into any target**:
+`--target` / `--target-branch` is only an optional filter. If the branch has **several open PRs** (say one into
+`dev` and one into `main`) it asks which one on a terminal, and fails listing them (id, target, title) when not
+interactive (an agent, CI): pass `--pr-id N` or `--target BRANCH` then. Exactly one open PR is used without asking.
+Only `pr create` and `pr watch-deploy`, which need a branch rather than a PR, default `--target` / `--target-branch`
+to `dev`.
 
 If the PR can't be merged, that's reported immediately instead of polling
 for builds/checks that will never run — e.g. on Azure DevOps:
@@ -64,16 +68,17 @@ one is also waiting on approval.
 caller's own `az login` — never embed a PAT literal in a script or CI file.
 `--target-branch` optionally restricts the lookup to PRs into that branch (default: any).
 
-**GitHub**: uses `gh`'s own auth (`gh auth login`) and always resolves the
-PR opened from the current branch — `gh pr view` has no target-branch
-filter, so `--target-branch` is ignored here; the PR's actual base branch
+**GitHub**: uses `gh`'s own auth (`gh auth login`) and resolves the open
+PR opened from the current branch (`gh pr list --head`, narrowed by
+`--target-branch` to that base branch if given; with none open, `gh pr view`
+finds a merged/closed one); the PR's actual base branch
 is shown in the output. Check status is computed from
 `gh pr view --json statusCheckRollup` rather than `gh pr checks --json`,
 since the latter flag isn't available in all `gh` releases.
 
 Pass `--pr-id <number>` to check a specific PR directly instead of resolving
 it from the current branch — useful when that PR's branch isn't checked out
-locally at all. `bdt pr retry`, `pr publish`, `pr update`, and `pr comment`
+locally at all (it also settles which PR when several are open for the branch). `bdt pr retry`, `pr publish`, `pr update`, and `pr comment`
 all accept the same option, for the same reason. (`pr watch-deploy` doesn't:
 it watches a branch-triggered build/workflow run, not any particular PR.)
 
@@ -103,7 +108,7 @@ PR opened from the current branch — not a whole new build/run. Whenever `bdt
 pr status` reports a failure, it prints a hint to run this.
 
 ```bash
-bdt pr retry [--target-branch dev]
+bdt pr retry [--target-branch BRANCH] [--pr-id N]
 ```
 
 No build/run ID needed — like `bdt pr status`, it resolves the PR (and its
@@ -343,7 +348,7 @@ Issues are how people and coding agents talk to each other: someone comments `@C
 at this?` on an issue, and the agent finds it; the agent asks a question in an issue and waits for the answer.
 
 ```bash
-bdt issue search --for-me [--agent claude] [--state all] [--limit 10]
+bdt issue search --for-me [--agent claude] [--state all] [--limit 10] [--take]
 bdt issue watch 84 [--timeout 900] [--interval 20] [--since-comment ID] [--for-me] [--skip-own] [--json]
 ```
 
@@ -356,6 +361,13 @@ Only the newest comment counts, so once someone (including the agent, e.g. with 
 mention, the issue drops out of the list. The newest comment isn't part of the list output of `gh`/Azure DevOps,
 so this costs one extra request per candidate; candidates are scanned in recently-updated order (up to 10x
 `--limit` on GitHub, 200 on Azure DevOps) until `--limit` have matched.
+
+Add **`--take`** to pick up work in one go: it returns only the first matching issue and claims it like
+`bdt issue take` does (a `Taken by <you>` comment, with the usual agent-session note). `--limit` then only sizes
+how many recently-updated candidates are scanned (the same scan as without `--take`). It requires `--for-me`. The claim becomes the issue's newest comment, so it drops out of later
+`--for-me` searches and a second run returns the next issue. With `--org-wide` the claim is posted on the match's own
+repo (GitHub) / project (Azure DevOps), not the current one, and the output names your local clone of that repo, or -- if it isn't cloned -- tells you to get it with `bdt find-repo <name>`. With no match nothing is claimed and the exit code is
+still 0 (the output says "No matching ... found"); it exits 1 only if someone else holds the claim.
 
 Which agent is calling is detected from the environment, first match wins: `--agent NAME` (or the `BDT_AGENT`
 environment variable, to pin it), `CLAUDECODE=1` (Claude), the agent-agnostic `AI_AGENT` convention (first
@@ -601,8 +613,9 @@ If the pushed commit's type is `feat` and the current branch's PR is
 already published (not a draft), it's converted back to draft — a feature
 needs a fresh review pass before CI/merge, not just whatever review
 happened before the commit existed. Run `bdt pr publish` when it's ready
-again. Pass `--target`/`--pat` to resolve the PR on Azure DevOps (GitHub
-always resolves the current branch's PR directly).
+again. The PR is found like for `bdt pr status` (any target; `--target` narrows it, `--pat` for Azure DevOps).
+This step is best-effort, so with several open PRs for the branch a non-interactive run skips it rather than
+guessing; on a terminal it asks which one.
 
 Set `IS_BMS_AI_SANDBOX=1` to skip the push step (commit only) — used when
 an AI coding sandbox pushes on its own schedule separately. The draft
@@ -687,12 +700,13 @@ it can't see through).
 **arrowbricks** (the Databricks SQL client): `Cursor.execute`/`execute_streamed`, `DatabricksClient.query_agent`/`stream_query_json`
 and the free `arrowbricks.stream_query_json(client, sql)` are checked as well. `execute_streamed`/`query_agent`/`stream_query_json`
 are matched by name (the free function's SQL is its *second* argument; the method's is the first; `sql=` as keyword works too).
-Only the injection rules apply there -- an f-string/concatenation/`%`/`.format()` is flagged and the fix suggests an
-arrowbricks t-string (`{value}` binds a named parameter, `{name:i}` quotes an identifier) or literal SQL with
-`parameters=[...]` (`params=[...]` on `query_agent`/`stream_query_json`) for `:name` markers. The postgres house style (`sql-inline-too-complex`, `sql-positional-param`, `sql-forbidden-join`) is not applied to
-them, since Databricks SQL isn't postgres. The SQL is also parsed as Databricks SQL (backticks, `QUALIFY`, ...), so such
-statements are no longer missed; a plain `.execute()` (incl. `execute(sql=...)`) gets that extra dialect only in a file that
-imports `arrowbricks`, and keeps the postgres rules there (it may be a psycopg cursor too). The free function is recognised
+All SQL gets the same rules, whatever the dialect: an f-string/concatenation/`%`/`.format()` is flagged (the fix suggests an
+arrowbricks t-string -- `{value}` binds a named parameter, `{name:i}` quotes an identifier -- or literal SQL with
+`parameters=[...]` (`params=[...]` on `query_agent`/`stream_query_json`) for `:name` markers), and the house style applies too:
+`sql-inline-too-complex` (non-trivial Databricks SQL belongs in its own `.sql` file, loaded with `load_sql()`),
+`sql-forbidden-join` (not looking into string literals or comments) and, except in a call known to be arrowbricks -- where `%s` is no placeholder -- `sql-positional-param`. The SQL is parsed as postgres first, then as Databricks SQL (backticks,
+`QUALIFY`, ...); a plain `.execute()` (incl. `execute(sql=...)`) gets that extra dialect only in a file that
+imports `arrowbricks` (it may be a psycopg cursor too). The free function is recognised
 under `from arrowbricks import stream_query_json as x` and `arrowbricks[._streaming].stream_query_json(...)`.
 Like pgdevkit's helpers the three names match by name wherever they are called (a client injected from another module is the
 common case), so an unrelated `agent.query_agent(f"select ...")` whose text parses as SQL is flagged too.
@@ -707,6 +721,19 @@ import, is never flagged. Aliased imports of the other helpers (`fetch_all as fa
 project's own module (`from app.db import execute`; call it as `db.execute(...)` or import it from `pgdevkit.db`
 instead), a subclass of `PostgresJsonResponse` under another name, and CCMT2's pre-pgdevkit
 `PostgresJsonResponse("postgres", sql)`, whose first argument is a connection source, not SQL.
+
+**Project helpers.** Your own functions that take SQL (a repo-specific `run_query(sql, conn)`, `fetch_rows(sql, ...)`) can
+be checked like `.execute()` by naming them in `pyproject.toml`:
+
+```toml
+[tool.bdt.lint]
+sql_functions = ["run_query", "app.db.fetch_rows"]
+```
+
+The one convention `bdt lint` relies on: **the SQL is the helper's first parameter** (the first positional argument; a
+`query=`/`sql=` keyword is accepted if there is none). Calls are matched by name, bare or as a method/attribute (`db.run_query(...)`; a
+dotted entry matches by its last segment, as `.execute()` does), so keep the names specific. The setting is read by
+`bdt lint` and `bdt find-injection`; a malformed value (not a list of names) stops the run with a message.
 
 - **`sql-inline-too-complex`** — more than a trivial (≤4 line) query, or a
   JOIN/CTE/subquery/aggregation, inline instead of `load_sql()`/a `.sql` file.
@@ -778,7 +805,7 @@ names to skip, beyond the built-in `.venv`/`node_modules`/etc. list),
 `pydantic_field_threshold` (default 5), `pydantic_base_classes` (default
 `["BaseModel", "PostgresTableModel"]`), `pydantic_allowed_subdirs` (default
 `["models", "schemas", "dto"]`), `pydantic_api_dir_names` (default `["api"]`),
-`ts_exclude_globs` (repo-relative globs of TypeScript files to skip, e.g.
+`sql_functions` (your own SQL-taking helpers, see above), `ts_exclude_globs` (repo-relative globs of TypeScript files to skip, e.g.
 `["src/legacy/*"]`), `ts_non_json_markers` (extra strings that mark a call's
 enclosing block as non-JSON traffic).
 
