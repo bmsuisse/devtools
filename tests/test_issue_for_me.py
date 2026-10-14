@@ -373,8 +373,7 @@ def test_issue_search_take_requires_for_me(monkeypatch) -> None:
 
     result = runner.invoke(app, ["issue", "search", "--take"])
 
-    assert result.exit_code != 0
-    assert "--for-me" in result.output
+    assert result.exit_code == 2  # a usage error (the message itself is a rich box, so wrapped/coloured in CI)
     assert taken == []
 
 
