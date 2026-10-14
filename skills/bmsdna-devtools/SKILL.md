@@ -83,7 +83,7 @@ When you start working on an issue / work item, run this first: it comments `Tak
 your session (the claude.ai link under a bridged Claude session, otherwise the bare session id; nothing
 when no agent is detected) so others can see it's being worked on. No parameters needed
 -- the session is detected, and without `NUMBER` the issue is the one the current branch's PR closes
-(so open the PR with `Fixes #N` first, or pass the number). It does nothing if the issue's newest comment already is a "Taken by" claim, so repeating it is harmless. (`bdt issue do N` already does this for you before it starts the agent -- don't repeat it there.) Don't hand-write a
+(so open the PR with `Fixes #N` first, or pass the number). It does nothing if the issue's newest comment already is a "Taken by" claim, so repeating it is harmless. (`bdt issue do N` and `bdt issue search --for-me --take` already do this for you before it starts the agent -- don't repeat it there.) Don't hand-write a
 session-link comment instead.
 
 ## Finding issues meant for you, and asking via an issue
@@ -99,6 +99,9 @@ comment mentions your agent (case-insensitive, whole word: `@Claudette` is not `
 usual `search` filters (keywords, `--label`, `--state`, `--org-wide`, ...). Which agent you are is detected from the
 environment (`CLAUDECODE`, `AI_AGENT`, `CODEX_*`, `GOOSE_*`, ...); pass `--agent NAME` or set `BDT_AGENT` if it
 guesses wrong or you are an agent it doesn't know.
+
+`--take` (with `--for-me`, not with `--org-wide`) returns only the first match and claims it like `bdt issue take`, so don't
+run `issue take` afterwards; `--limit` then only sizes the scan. No match: nothing is claimed, exit 0.
 
 To ask a human something without stopping, comment the question on the issue (`bdt issue comment add N --message
 "@person ..."`, which prints `(comment #ID)`), then `bdt issue watch N --since-comment ID --skip-own`

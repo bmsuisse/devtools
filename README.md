@@ -357,9 +357,12 @@ mention, the issue drops out of the list. The newest comment isn't part of the l
 so this costs one extra request per candidate; candidates are scanned in recently-updated order (up to 10x
 `--limit` on GitHub, 200 on Azure DevOps) until `--limit` have matched.
 
-Add **`--take`** to pick up work in one go: it returns only the first matching issue (`--limit` is ignored) and
-claims it like `bdt issue take` does (a `Taken by <you>` comment). It requires `--for-me` and can't be combined
-with `--org-wide`; it exits 1 if the issue is already claimed by someone else, and does nothing if there is no match.
+Add **`--take`** to pick up work in one go: it returns only the first matching issue and claims it like
+`bdt issue take` does (a `Taken by <you>` comment, with the usual agent-session note). `--limit` then only sizes
+how many recently-updated candidates are scanned (the same scan as without `--take`). It requires `--for-me` and
+can't be combined with `--org-wide`. The claim becomes the issue's newest comment, so it drops out of later
+`--for-me` searches and a second run returns the next issue. With no match nothing is claimed and the exit code is
+still 0 (the output says "No matching ... found"); it exits 1 only if someone else holds the claim.
 
 Which agent is calling is detected from the environment, first match wins: `--agent NAME` (or the `BDT_AGENT`
 environment variable, to pin it), `CLAUDECODE=1` (Claude), the agent-agnostic `AI_AGENT` convention (first

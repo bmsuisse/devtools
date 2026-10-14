@@ -734,7 +734,7 @@ def issue_search(
         False,
         "--take",
         help="With --for-me: return only the first matching issue/work item and claim it in the same go, "
-        "like `issue take` does (--limit is ignored). Can't be combined with --org-wide.",
+        "like `issue take` does (--limit then only sizes how many candidates are scanned). Can't be combined with --org-wide.",
     ),
 ) -> None:
     """Search (or, with no keywords, just list) issues / work items, defaulting to open issues
@@ -746,12 +746,14 @@ def issue_search(
         raise typer.BadParameter("--take only works together with --for-me", param_hint="--take")
     if take and org_wide:
         raise typer.BadParameter("--take can't be combined with --org-wide (the claim is posted on the current repo)", param_hint="--take")
+    # only passed on with --for-me, so a plain search calls the backends exactly as before.
+    # --take wants one match out of the same scan a plain --for-me does: --limit then sizes the scan, not the result
+    search_extra: dict = {"comment_filter": agent_mentions.last_comment_filter(_resolve_agent(agent))} if for_me else {}
     if take:
+        search_extra["scan_limit"] = limit
         limit = 1
     since = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%Y-%m-%d") if since_days > 0 else None
     tags_or_labels = _merge_tags_and_labels(tag, label) or []
-    # only passed on with --for-me, so a plain search calls the backends exactly as before
-    search_extra = {"comment_filter": agent_mentions.last_comment_filter(_resolve_agent(agent))} if for_me else {}
 
     # --org/--github-org are only ever consulted as a *fallback*, when `current_remote()` itself
     # fails (no git repo, no origin remote, or a remote that's neither GitHub nor Azure DevOps) --

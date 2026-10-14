@@ -227,6 +227,7 @@ def search(
     org_wide: bool = False,
     labels: list[str] | None = None,
     comment_filter: Callable[[str | None], bool] | None = None,
+    scan_limit: int | None = None,
 ) -> list[dict]:
     """Search (or, with no keywords, just list) issues by state, most recently updated first.
 
@@ -246,6 +247,8 @@ def search(
     e.g. `bdt issue search --for-me`. The newest comment isn't part of either list command's
     output, so it costs one API call per candidate (in result order, stopping once `limit`
     issues matched); the raw pool is over-fetched like for `board`, as the filter drops results.
+    `scan_limit` sizes that pool as if it were the `limit` (default: `limit`), for a caller that wants few
+    results out of a wide scan (`issue search --take`).
     """
     if org_wide and board:
         sys.exit("--board can't be combined with --org-wide (board membership is only resolved for the current repo).")
@@ -266,7 +269,7 @@ def search(
             gh,
             [
                 "search", "issues", query, "--owner", owner, *state_args, *label_args,
-                "--limit", str(limit * _BOARD_SEARCH_OVERFETCH if comment_filter else limit), "--json", "number,title,url,state,repository",
+                "--limit", str((scan_limit or limit) * _BOARD_SEARCH_OVERFETCH if comment_filter else limit), "--json", "number,title,url,state,repository",
             ],
         )
         items = json.loads(out) if out else []
@@ -279,7 +282,7 @@ def search(
             print("No matching issues found.")
         return items
 
-    fetch_limit = limit * _BOARD_SEARCH_OVERFETCH if board or comment_filter else limit
+    fetch_limit = (scan_limit or limit) * _BOARD_SEARCH_OVERFETCH if board or comment_filter else limit
     out = _run_gh(
         gh,
         ["issue", "list", "--search", query, "--state", state, *label_args, "--limit", str(fetch_limit), "--json", "number,title,url,state"],

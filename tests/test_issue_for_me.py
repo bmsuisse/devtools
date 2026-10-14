@@ -186,6 +186,16 @@ def test_ado_search_org_wide_checks_comments_in_the_items_own_project() -> None:
     assert urls == ["https://dev.azure.com/myorg/Other/_apis/wit/workItems/1/comments"]
 
 
+def test_gh_search_scan_limit_widens_the_scanned_pool_but_not_the_result(monkeypatch) -> None:
+    list_cmds: list[list[str]] = []
+    _fake_gh(monkeypatch, _gh_issues(30), {i: "@Claude hi" for i in range(1, 31)}, list_cmds=list_cmds)
+
+    items = gh_issue.search("gh", "o", "r", [], None, 1, comment_filter=lambda c: True, scan_limit=5)
+
+    assert [i["number"] for i in items] == [1]
+    assert list_cmds[0][list_cmds[0].index("--limit") + 1] == "50"
+
+
 # -- CLI: issue search --for-me -----------------------------------------------------
 
 
@@ -297,7 +307,7 @@ def _patch_take(monkeypatch, items: list[dict], remote=None, taken: list | None 
 
     def fake_search(*args, **kwargs):
         if search_limits is not None:
-            search_limits.append(kwargs.get("top", args[5] if len(args) > 5 else None))
+            search_limits.append((kwargs.get("top", args[5] if len(args) > 5 else None), kwargs.get("scan_limit")))
         return items
 
     monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.search", fake_search)
@@ -315,7 +325,7 @@ def test_issue_search_take_claims_the_first_match(monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert taken == [(GitHubRemote("o", "r"), 7, "Taken by claude-bot")]
-    assert limits == [1]
+    assert limits == [(1, 5)]  # one result, out of a scan sized by --limit
 
 
 def test_issue_search_take_on_azure_devops_uses_the_work_item_id(monkeypatch) -> None:
