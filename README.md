@@ -691,7 +691,7 @@ All SQL gets the same rules, whatever the dialect: an f-string/concatenation/`%`
 arrowbricks t-string -- `{value}` binds a named parameter, `{name:i}` quotes an identifier -- or literal SQL with
 `parameters=[...]` (`params=[...]` on `query_agent`/`stream_query_json`) for `:name` markers), and the house style applies too:
 `sql-inline-too-complex` (non-trivial Databricks SQL belongs in its own `.sql` file, loaded with `load_sql()`),
-`sql-forbidden-join` and `sql-positional-param`. The SQL is parsed as postgres first, then as Databricks SQL (backticks,
+`sql-forbidden-join` (not looking into string literals or comments) and, except in a call known to be arrowbricks -- where `%s` is no placeholder -- `sql-positional-param`. The SQL is parsed as postgres first, then as Databricks SQL (backticks,
 `QUALIFY`, ...); a plain `.execute()` (incl. `execute(sql=...)`) gets that extra dialect only in a file that
 imports `arrowbricks` (it may be a psycopg cursor too). The free function is recognised
 under `from arrowbricks import stream_query_json as x` and `arrowbricks[._streaming].stream_query_json(...)`.

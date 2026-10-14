@@ -58,6 +58,9 @@ if exp is not None:
 # here to inline SQL literals too.
 _FORBIDDEN_JOIN_RE = re.compile(r"(?i)(RIGHT\s+(OUTER\s+)?JOIN|JOIN\s+LATERAL|LATERAL\s+(OUTER\s+)?JOIN|CROSS\s+APPLY)")
 
+# String literals, quoted identifiers and comments: text a keyword search must not look into (`'RIGHT JOIN'` is data).
+_STRING_OR_COMMENT_RE = re.compile(r"""'(?:[^']|'')*'|"(?:[^"]|"")*"|`[^`]*`|--[^\n]*|/\*.*?\*/""", re.DOTALL)
+
 # A bare `%s` positional placeholder -- but not `%%s` (psycopg's escape for a literal '%s' in
 # the SQL text, e.g. inside a LIKE pattern) and not the `s` in `%(name)s`, which never has `%s`
 # as a substring immediately at the `%`.
@@ -452,23 +455,24 @@ def _complexity_findings(parsed: "exp.Expression", text: str, path: Path, lineno
     return findings
 
 
-def _literal_findings(text: str, path: Path, lineno: int, databricks: bool = False) -> list[Finding]:
+def _literal_findings(text: str, path: Path, lineno: int, databricks: bool = False, databricks_only: bool = False) -> list[Finding]:
     parsed = _parse_any_dialect(text, databricks)
     if parsed is None:
         return []
     findings = _complexity_findings(parsed, text, path, lineno)
 
-    if _POSITIONAL_PARAM_RE.search(text):
+    # `%s` is no placeholder in Databricks SQL (it has `:name` markers), so in a known-Databricks call it is just text
+    if not databricks_only and _POSITIONAL_PARAM_RE.search(text):
         findings.append(
             Finding(
                 path,
                 lineno,
                 "sql-positional-param",
-                "Uses positional `%s` params -- use named params instead (`%(name)s` with a dict for psycopg, `:name` markers for Databricks).",
+                "Uses positional `%s` params -- use named `%(name)s` params with a dict argument instead.",
             )
         )
 
-    join_match = _FORBIDDEN_JOIN_RE.search(text)
+    join_match = _FORBIDDEN_JOIN_RE.search(_STRING_OR_COMMENT_RE.sub(" ", text))
     if join_match:
         findings.append(
             Finding(
@@ -517,7 +521,7 @@ def _check_resolved_candidate(
         return []
 
     if isinstance(resolved, ast.Constant) and isinstance(resolved.value, str):
-        return _literal_findings(resolved.value, path, lineno, trust.databricks)
+        return _literal_findings(resolved.value, path, lineno, trust.databricks, trust.databricks_only)
 
     if isinstance(resolved, ast.Call):
         cast_inner = _literal_string_cast_inner(resolved)

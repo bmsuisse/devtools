@@ -972,8 +972,12 @@ async def a(client, cur, x):
     await client.query_agent(f"select 1 from t where id = {{x}}")
 '''
     findings = _findings(source, tmp_path / "a.py")
-    house_style = {"sql-forbidden-join", "sql-positional-param", "sql-inline-too-complex"}
-    assert {(f.line, f.rule) for f in findings} == {(line, rule) for line in (3, 4) for rule in house_style} | {(5, "sql-fstring-injection")}
+    house_style = {"sql-forbidden-join", "sql-inline-too-complex"}
+    assert {(f.line, f.rule) for f in findings} == (
+        {(line, rule) for line in (3, 4) for rule in house_style}
+        | {(4, "sql-positional-param")}  # `%s` is no placeholder in a call known to be Databricks
+        | {(5, "sql-fstring-injection")}
+    )
 
 
 def test_databricks_only_syntax_gets_the_complexity_rule_too(tmp_path: Path) -> None:
@@ -1172,3 +1176,24 @@ def test_bdt_lint_run_uses_the_configured_helpers(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text('def a(conn, x):\n    run_query(f"select * from t where id = {x}", conn)\n')
     result = lint_run([], root=tmp_path)
     assert [(f.rule, f.line) for f in result.findings] == [("sql-fstring-injection", 2)]
+
+
+def test_forbidden_join_is_not_found_in_string_literals_or_comments(tmp_path: Path) -> None:
+    source = '''
+async def a(client, cur):
+    await client.query_agent("select 'right join' as note, `a` from `t`")
+    await cur.execute("select 'cross apply' as note from t")
+    await cur.execute("select a from t -- right join later")
+    await cur.execute("select a /* join lateral */ from t")
+    await cur.execute("select a from t right join u on t.id = u.id")
+'''
+    assert [f.line for f in _findings(source, tmp_path / "a.py") if f.rule == "sql-forbidden-join"] == [7]
+
+
+def test_percent_s_is_only_a_positional_param_where_it_can_be_a_placeholder(tmp_path: Path) -> None:
+    source = '''
+async def a(client, cur):
+    await client.query_agent("select a from t where b like \\'%s%\\'")
+    await cur.execute("select a from t where b = %s")
+'''
+    assert [(f.line, f.rule) for f in _findings(source, tmp_path / "a.py")] == [(4, "sql-positional-param")]
