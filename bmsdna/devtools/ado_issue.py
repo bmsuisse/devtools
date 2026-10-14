@@ -584,6 +584,7 @@ def search(
     org_wide: bool = False,
     tags: list[str] | None = None,
     comment_filter: Callable[[str | None], bool] | None = None,
+    scan_limit: int | None = None,
 ) -> list[dict]:
     """Search (or, with no keywords, just list) work items by keywords (ANDed, matched against
     Title or Description) and state, most recently changed first. `board` is an Azure Boards team
@@ -597,13 +598,14 @@ def search(
 
     `comment_filter` keeps only work items whose newest comment (None if it has none) it accepts --
     e.g. `bdt issue search --for-me`. WIQL can't query comments, so up to `_COMMENT_FILTER_POOL`
-    candidates are fetched and checked one by one, stopping once `top` have matched.
+    candidates are fetched and checked one by one, stopping once `top` have matched. `scan_limit` sizes that
+    pool as if it were `top` (default: `top`), for a caller that wants few results out of a wide scan.
     """
     if org_wide and board:
         sys.exit("--board can't be combined with --org-wide (a board's Area Path is scoped to a single project).")
     area_path = get_team_area_path(session, remote, board) if board else None
     wiql = build_search_wiql(keywords, since, area_path, state, org_wide=org_wide, tags=tags)
-    ids = run_wiql(session, remote, wiql, min(top * 10, _COMMENT_FILTER_POOL) if comment_filter else top, org_wide=org_wide)
+    ids = run_wiql(session, remote, wiql, min((scan_limit or top) * 10, _COMMENT_FILTER_POOL) if comment_filter else top, org_wide=org_wide)
     items = get_work_items(session, remote, ids, org_wide=org_wide)
     if comment_filter:
         items = _filter_by_last_comment(session, remote, items, top, comment_filter)

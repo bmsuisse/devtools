@@ -4,6 +4,7 @@ listing) and the CLI wiring. The mention matching and the watch loop themselves 
 
 import json
 import os
+import subprocess
 from unittest.mock import MagicMock
 
 from typer.testing import CliRunner
@@ -186,6 +187,16 @@ def test_ado_search_org_wide_checks_comments_in_the_items_own_project() -> None:
     assert urls == ["https://dev.azure.com/myorg/Other/_apis/wit/workItems/1/comments"]
 
 
+def test_gh_search_scan_limit_widens_the_scanned_pool_but_not_the_result(monkeypatch) -> None:
+    list_cmds: list[list[str]] = []
+    _fake_gh(monkeypatch, _gh_issues(30), {i: "@Claude hi" for i in range(1, 31)}, list_cmds=list_cmds)
+
+    items = gh_issue.search("gh", "o", "r", [], None, 1, comment_filter=lambda c: True, scan_limit=5)
+
+    assert [i["number"] for i in items] == [1]
+    assert list_cmds[0][list_cmds[0].index("--limit") + 1] == "50"
+
+
 # -- CLI: issue search --for-me -----------------------------------------------------
 
 
@@ -286,6 +297,162 @@ def test_issue_search_for_me_on_azure_devops(monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert captured["comment_filter"]("@Claude look")
+
+
+def _patch_take(monkeypatch, items: list[dict], remote=None, taken: list | None = None, search_limits: list | None = None) -> None:
+    _clean_agent_env(monkeypatch)
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote or GitHubRemote("o", "r"))
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+
+    def fake_search(*args, **kwargs):
+        if search_limits is not None:
+            search_limits.append((kwargs.get("top", args[5] if len(args) > 5 else None), kwargs.get("scan_limit")))
+        return items
+
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.search", fake_search)
+    monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.search", fake_search)
+    monkeypatch.setattr("bmsdna.devtools.cli._current_user", lambda remote: "claude-bot")
+    monkeypatch.setattr("bmsdna.devtools.cli._take", lambda remote, number, message, pat, **kw: (taken.append((remote, number, message)) if taken is not None else None) or True)
+
+
+def test_issue_search_take_claims_the_first_match(monkeypatch) -> None:
+    taken: list = []
+    limits: list = []
+    _patch_take(monkeypatch, [{"number": 7}], taken=taken, search_limits=limits)
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--limit", "5"])
+
+    assert result.exit_code == 0, result.output
+    assert taken == [(GitHubRemote("o", "r"), 7, "Taken by claude-bot")]
+    assert limits == [(1, 5)]  # one result, out of a scan sized by --limit
+
+
+def test_issue_search_take_on_azure_devops_uses_the_work_item_id(monkeypatch) -> None:
+    taken: list = []
+    _patch_take(monkeypatch, [{"id": 42}], remote=REMOTE, taken=taken)
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take"])
+
+    assert result.exit_code == 0, result.output
+    assert [(r, n) for r, n, _ in taken] == [(REMOTE, 42)]
+
+
+def test_issue_search_take_without_a_match_takes_nothing(monkeypatch) -> None:
+    taken: list = []
+    _patch_take(monkeypatch, [], taken=taken)
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take"])
+
+    assert result.exit_code == 0, result.output
+    assert taken == []
+
+
+def test_issue_search_take_org_wide_in_the_current_repo_needs_no_hint(monkeypatch) -> None:
+    item = {"number": 7, "repository": {"nameWithOwner": "o/r"}}
+    _patch_take(monkeypatch, [item])
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--org-wide"])
+
+    assert result.exit_code == 0, result.output
+    assert "find-repo" not in result.output
+
+
+def test_issue_search_take_exits_1_when_someone_else_holds_the_claim(monkeypatch) -> None:
+    _patch_take(monkeypatch, [{"number": 7}])
+    monkeypatch.setattr("bmsdna.devtools.cli._take", lambda *a, **kw: False)
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take"])
+
+    assert result.exit_code == 1
+
+
+def test_issue_search_take_requires_for_me(monkeypatch) -> None:
+    taken: list = []
+    _patch_take(monkeypatch, [{"number": 7}], taken=taken)
+
+    result = runner.invoke(app, ["issue", "search", "--take"])
+
+    assert result.exit_code == 2  # a usage error (the message itself is a rich box, so wrapped/coloured in CI)
+    assert taken == []
+
+
+def test_issue_search_take_org_wide_claims_the_match_in_its_own_repo(monkeypatch, tmp_path) -> None:
+    taken: list = []
+    item = {"number": 7, "repository": {"nameWithOwner": "otherorg/otherrepo"}}
+    _patch_take(monkeypatch, [item], taken=taken)
+    monkeypatch.setattr("bmsdna.devtools.cli.find_repo_mod.work_dir", lambda: tmp_path)
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--org-wide"])
+
+    assert result.exit_code == 0, result.output
+    assert [(r, n) for r, n, _ in taken] == [(GitHubRemote("otherorg", "otherrepo"), 7)]
+    assert "not cloned yet" in result.output and "bdt find-repo otherrepo" in result.output
+
+
+def _git_clone_stub(path, origin: str) -> None:
+    path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(["git", "-C", str(path), "remote", "add", "origin", origin], check=True)
+
+
+def test_issue_search_take_org_wide_names_the_local_clone_when_there_is_one(monkeypatch, tmp_path) -> None:
+    clone = tmp_path / "github" / "otherrepo"
+    _git_clone_stub(clone, "https://github.com/otherorg/otherrepo.git")
+    _git_clone_stub(tmp_path / "github" / "otherrepo-docs", "https://github.com/otherorg/otherrepo-docs.git")  # a substring match is not the repo
+    item = {"number": 7, "repository": {"nameWithOwner": "otherorg/otherrepo"}}
+    _patch_take(monkeypatch, [item])
+    monkeypatch.setattr("bmsdna.devtools.cli.find_repo_mod.work_dir", lambda: tmp_path)
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--org-wide"])
+
+    assert result.exit_code == 0, result.output
+    assert f"local clone: {clone}" in result.output
+    assert "otherrepo-docs" not in result.output and "find-repo" not in result.output
+
+
+def test_issue_search_take_org_wide_ignores_a_same_named_clone_of_another_owner(monkeypatch, tmp_path) -> None:
+    _git_clone_stub(tmp_path / "github" / "otherrepo", "https://github.com/myorg/otherrepo.git")
+    item = {"number": 7, "repository": {"nameWithOwner": "otherorg/otherrepo"}}
+    _patch_take(monkeypatch, [item])
+    monkeypatch.setattr("bmsdna.devtools.cli.find_repo_mod.work_dir", lambda: tmp_path)
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--org-wide"])
+
+    assert result.exit_code == 0, result.output
+    assert "local clone" not in result.output and "bdt find-repo otherrepo" in result.output
+
+
+def test_issue_search_take_rejects_a_limit_below_one(monkeypatch) -> None:
+    taken: list = []
+    _patch_take(monkeypatch, [{"number": 7}], taken=taken)
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--limit", "0"])
+
+    assert result.exit_code == 2
+    assert taken == []
+
+
+def test_issue_search_take_org_wide_on_azure_devops_claims_in_the_items_project(monkeypatch) -> None:
+    taken: list = []
+    item = {"id": 42, "fields": {"System.TeamProject": "OtherProj"}}
+    _patch_take(monkeypatch, [item], remote=REMOTE, taken=taken)
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--org-wide"])
+
+    assert result.exit_code == 0, result.output
+    assert [(r, n) for r, n, _ in taken] == [(AdoRemote("myorg", "OtherProj", "myrepo"), 42)]
+    assert "OtherProj" in result.output and "bdt find-repo" in result.output
+
+
+def test_gh_comment_names_its_repo_explicitly(monkeypatch) -> None:
+    cmds: list[list[str]] = []
+    monkeypatch.setattr(gh_issue, "_run_gh", lambda gh, args, **kw: cmds.append([gh, *args]) or "https://github.com/o/r/issues/7#issuecomment-1")
+
+    gh_issue.comment("gh", "o", "r", 7, "Taken by me", [], agent_note=False)
+
+    assert cmds == [["gh", "issue", "comment", "7", "--repo", "o/r", "--body", "Taken by me"]]
 
 
 # -- CLI: issue watch / watch-issue --------------------------------------------------
