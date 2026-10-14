@@ -146,7 +146,8 @@ def _resolve_ado_pr(pat: str | None, remote: AdoRemote, target: str | None, pr_i
 def _current_pr_info(pr_id: int | None, target_branch: str | None, pat: str | None) -> pr_info_mod.PrInfo:
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        return pr_info_mod.github_info(gh_pr.get_pr(require_gh(), pr_id, fields=gh_pr.PR_INFO_FIELDS), remote)
+        gh = require_gh()
+        return pr_info_mod.github_info(gh_pr.get_pr(gh, gh_pr.resolve_pr_id(gh, pr_id, target_branch), fields=gh_pr.PR_INFO_FIELDS), remote)
     session, pr = _resolve_ado_pr(pat, remote, target_branch, pr_id=pr_id)
     return pr_info_mod.ado_info(session, pr, remote)
 
@@ -166,6 +167,7 @@ def _gh_branch_for(gh: str, pr_id: int | None, *, needed: bool) -> str:
     return gh_pr.get_pr(gh, pr_id).get("headRefName") or str(pr_id)
 
 
+_LOOKUP_TARGET_HELP = "Only consider a PR into this target branch (default: any target). Several open PRs for the branch: asks which one (non-interactive: fails listing them) unless this or --pr-id picks one"
 _PR_ID_HELP = "Act on this PR by ID/number directly, instead of resolving it from the current git branch (lets you skip having the PR's branch checked out locally)"
 
 
@@ -428,7 +430,7 @@ def pr_create(
 
 @pr_app.command("publish")
 def pr_publish(
-    target: str | None = typer.Option(None, "--target", help="Only consider a PR into this target branch (Azure DevOps only; default: any target, since the PR is found by the current branch)"),
+    target: str | None = typer.Option(None, "--target", help=_LOOKUP_TARGET_HELP),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -442,7 +444,8 @@ def pr_publish(
     """
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_pr.publish(require_gh(), pr_id=pr_id)
+        gh = require_gh()
+        gh_pr.publish(gh, pr_id=gh_pr.resolve_pr_id(gh, pr_id, target))
     else:
         session, pr = _resolve_ado_pr(pat, remote, target, pr_id=pr_id)
         pr_build.publish(session, remote, pr)
@@ -450,7 +453,7 @@ def pr_publish(
 
 @pr_app.command("status")
 def pr_status(
-    target_branch: str | None = typer.Option(None, "--target-branch", help="Only consider PRs into this target branch (Azure DevOps only; default: any target — gh has no such filter, it always resolves the PR for the current branch)"),
+    target_branch: str | None = typer.Option(None, "--target-branch", help=_LOOKUP_TARGET_HELP),
     wait: bool = typer.Option(False, "--wait", help="Poll until all pipelines/checks are completed; stops early and reports status if one needs manual approval"),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
@@ -460,7 +463,8 @@ def pr_status(
     """
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_pr.run(require_gh(), wait, pr_id=pr_id)
+        gh = require_gh()
+        gh_pr.run(gh, wait, pr_id=gh_pr.resolve_pr_id(gh, pr_id, target_branch))
         return
     pr_build.run(remote, pat, target_branch, wait, pr_id=pr_id)
 
@@ -468,7 +472,7 @@ def pr_status(
 @pr_app.command("info")
 def pr_info(
     as_json: bool = typer.Option(False, "--json", help="Print machine-readable JSON (for status integrations that poll it)"),
-    target_branch: str | None = typer.Option(None, "--target-branch", help="Only consider PRs into this target branch (Azure DevOps only; default: any target)"),
+    target_branch: str | None = typer.Option(None, "--target-branch", help=_LOOKUP_TARGET_HELP),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
 ) -> None:
@@ -488,7 +492,7 @@ def pr_info(
 
 @pr_app.command("retry")
 def pr_retry(
-    target_branch: str | None = typer.Option(None, "--target-branch", help="Only consider a PR into this target branch (Azure DevOps only; default: any target, since the PR is found by the current branch)"),
+    target_branch: str | None = typer.Option(None, "--target-branch", help=_LOOKUP_TARGET_HELP),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -503,7 +507,8 @@ def pr_retry(
     """
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_pr.retry(require_gh(), pr_id=pr_id)
+        gh = require_gh()
+        gh_pr.retry(gh, pr_id=gh_pr.resolve_pr_id(gh, pr_id, target_branch))
         return
     pr_build.retry(remote, pat, target_branch, pr_id=pr_id)
 
@@ -545,7 +550,7 @@ def pr_update(
     file: list[str] = typer.Option(
         [], "--file", help="Path to an arbitrary file to append to the PR description as a linked attachment (repeatable)"
     ),
-    target: str | None = typer.Option(None, "--target", help="Only consider a PR into this target branch (Azure DevOps only; default: any target, since the PR is found by the current branch)"),
+    target: str | None = typer.Option(None, "--target", help=_LOOKUP_TARGET_HELP),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -569,6 +574,7 @@ def pr_update(
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
+        pr_id = gh_pr.resolve_pr_id(gh, pr_id, target)
         # `gh_pr.update()` already re-resolves the branch itself from `--pr-id` (it needs the
         # PR anyway, to fetch its current title/body) -- passing `_gh_branch_for` here would
         # just be a second, redundant `gh pr view` round-trip for the same PR.
@@ -588,7 +594,7 @@ def pr_comment(
     file: list[str] = typer.Option(
         [], "--file", help="Path to an arbitrary file to link in the comment as an attachment (repeatable)"
     ),
-    target: str | None = typer.Option(None, "--target", help="Only consider a PR into this target branch (Azure DevOps only; default: any target, since the PR is found by the current branch)"),
+    target: str | None = typer.Option(None, "--target", help=_LOOKUP_TARGET_HELP),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
         None,
@@ -612,6 +618,7 @@ def pr_comment(
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
+        pr_id = gh_pr.resolve_pr_id(gh, pr_id, target)
         branch = _gh_branch_for(gh, pr_id, needed=bool(screenshot or file))
         gh_pr.comment_with_screenshots(gh, remote.owner, remote.repo, branch, message, screenshot, file, pr_id=pr_id)
     else:
@@ -895,7 +902,7 @@ def issue_do(
 @issue_app.command("take")
 def issue_take(
     number: int | None = typer.Argument(None, help="Issue number (GitHub) or work item ID (Azure DevOps). Default: the issue the current branch's PR closes"),
-    target_branch: str | None = typer.Option(None, "--target-branch", help="Only consider PRs into this target branch (Azure DevOps only; default: any target; only used to find the issue when no number is given)"),
+    target_branch: str | None = typer.Option(None, "--target-branch", help=_LOOKUP_TARGET_HELP + " (only used to find the issue when no number is given)"),
     force: bool = typer.Option(False, "--force", help="Comment even if someone else already holds the claim"),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
 ) -> None:
@@ -1554,7 +1561,7 @@ def cleanup_worktree(
     )
 
 
-def _draft_feat_pr(target: str, pat: str | None) -> None:
+def _draft_feat_pr(target: str | None, pat: str | None) -> None:
     """A 'feat' commit landing on an already-published PR forces it back to draft --
     a feature needs a fresh review pass before CI/merge, not just whatever review
     happened before this commit existed.
@@ -1566,7 +1573,7 @@ def _draft_feat_pr(target: str, pat: str | None) -> None:
     try:
         remote = current_remote()
         if isinstance(remote, GitHubRemote):
-            converted = gh_pr.set_draft(require_gh())
+            converted = gh_pr.set_draft(require_gh(), target=target)
         else:
             session = requests.Session()
             session.headers.update(auth_header(pat))
@@ -1587,7 +1594,7 @@ def commit(
     subrepo: list[str] = typer.Option([], "--subrepo", help="Submodule directory name to split matching files into (repeatable)"),
     skip_message_check: bool = typer.Option(False, "--skip-message-check", help="Don't require a conventional-commit-style message"),
     allow_main: bool = typer.Option(False, "--allow-main", help="Allow committing directly on main/master"),
-    target: str = typer.Option(DEFAULT_TARGET_BRANCH, "--target", help="Target branch of the PR to draft on a 'feat' commit (Azure DevOps only)"),
+    target: str | None = typer.Option(None, "--target", help=_LOOKUP_TARGET_HELP + " (the PR to draft on a 'feat' commit)"),
     pat: str | None = typer.Option(
         None,
         "--pat",

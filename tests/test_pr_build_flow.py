@@ -567,7 +567,7 @@ def test_get_pr_without_target_does_not_filter_on_it() -> None:
     class Resp:
         def raise_for_status(self): ...
         def json(self):
-            return {"value": [{"pullRequestId": 1, "mergeStatus": "succeeded"}]}
+            return {"value": [{"pullRequestId": 1, "targetRefName": "refs/heads/main", "mergeStatus": "succeeded"}]}
 
     class Sess:
         def get(self, url, params, timeout):
