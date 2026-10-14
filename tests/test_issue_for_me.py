@@ -348,6 +348,16 @@ def test_issue_search_take_without_a_match_takes_nothing(monkeypatch) -> None:
     assert taken == []
 
 
+def test_issue_search_take_org_wide_in_the_current_repo_needs_no_hint(monkeypatch) -> None:
+    item = {"number": 7, "repository": {"nameWithOwner": "o/r"}}
+    _patch_take(monkeypatch, [item])
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--org-wide"])
+
+    assert result.exit_code == 0, result.output
+    assert "find-repo" not in result.output
+
+
 def test_issue_search_take_exits_1_when_someone_else_holds_the_claim(monkeypatch) -> None:
     _patch_take(monkeypatch, [{"number": 7}])
     monkeypatch.setattr("bmsdna.devtools.cli._take", lambda *a, **kw: False)
@@ -368,15 +378,37 @@ def test_issue_search_take_requires_for_me(monkeypatch) -> None:
     assert taken == []
 
 
-def test_issue_search_take_rejects_org_wide(monkeypatch) -> None:
+def test_issue_search_take_org_wide_claims_the_match_in_its_own_repo(monkeypatch) -> None:
     taken: list = []
-    _patch_take(monkeypatch, [{"number": 7}], taken=taken)
+    item = {"number": 7, "repository": {"nameWithOwner": "otherorg/otherrepo"}}
+    _patch_take(monkeypatch, [item], taken=taken)
 
     result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--org-wide"])
 
-    assert result.exit_code != 0
-    assert "--org-wide" in result.output
-    assert taken == []
+    assert result.exit_code == 0, result.output
+    assert [(r, n) for r, n, _ in taken] == [(GitHubRemote("otherorg", "otherrepo"), 7)]
+    assert "bdt find-repo otherrepo" in result.output
+
+
+def test_issue_search_take_org_wide_on_azure_devops_claims_in_the_items_project(monkeypatch) -> None:
+    taken: list = []
+    item = {"id": 42, "fields": {"System.TeamProject": "OtherProj"}}
+    _patch_take(monkeypatch, [item], remote=REMOTE, taken=taken)
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--org-wide"])
+
+    assert result.exit_code == 0, result.output
+    assert [(r, n) for r, n, _ in taken] == [(AdoRemote("myorg", "OtherProj", "myrepo"), 42)]
+    assert "OtherProj" in result.output and "bdt find-repo" in result.output
+
+
+def test_gh_comment_names_its_repo_explicitly(monkeypatch) -> None:
+    cmds: list[list[str]] = []
+    monkeypatch.setattr(gh_issue, "_run_gh", lambda gh, args, **kw: cmds.append([gh, *args]) or "https://github.com/o/r/issues/7#issuecomment-1")
+
+    gh_issue.comment("gh", "o", "r", 7, "Taken by me", [], agent_note=False)
+
+    assert cmds == [["gh", "issue", "comment", "7", "--repo", "o/r", "--body", "Taken by me"]]
 
 
 # -- CLI: issue watch / watch-issue --------------------------------------------------

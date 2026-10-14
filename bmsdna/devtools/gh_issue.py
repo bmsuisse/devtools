@@ -416,7 +416,7 @@ def comment(
     content = build_comment_content(message, images, files) or ""
     if agent_note:
         content = ensure_agent_session_note(content) or ""
-    url = _run_gh(gh, ["issue", "comment", str(number), "--body", content])
+    url = _run_gh(gh, ["issue", "comment", str(number), "--repo", f"{owner}/{repo}", "--body", content])  # explicit: an --org-wide claim is not in the cwd repo
     comment_id = parse_comment_id(url)
     suffix = f" (comment #{comment_id})" if comment_id else ""
     print(f"Added comment ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) to issue #{number}{suffix}")

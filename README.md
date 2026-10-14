@@ -359,9 +359,9 @@ so this costs one extra request per candidate; candidates are scanned in recentl
 
 Add **`--take`** to pick up work in one go: it returns only the first matching issue and claims it like
 `bdt issue take` does (a `Taken by <you>` comment, with the usual agent-session note). `--limit` then only sizes
-how many recently-updated candidates are scanned (the same scan as without `--take`). It requires `--for-me` and
-can't be combined with `--org-wide`. The claim becomes the issue's newest comment, so it drops out of later
-`--for-me` searches and a second run returns the next issue. With no match nothing is claimed and the exit code is
+how many recently-updated candidates are scanned (the same scan as without `--take`). It requires `--for-me`. The claim becomes the issue's newest comment, so it drops out of later
+`--for-me` searches and a second run returns the next issue. With `--org-wide` the claim is posted on the match's own
+repo (GitHub) / project (Azure DevOps), not the current one, and the output tells you to find that repo with `bdt find-repo <name>`. With no match nothing is claimed and the exit code is
 still 0 (the output says "No matching ... found"); it exits 1 only if someone else holds the claim.
 
 Which agent is calling is detected from the environment, first match wins: `--agent NAME` (or the `BDT_AGENT`

@@ -7,6 +7,7 @@ import sys
 import tomllib
 import uuid
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
@@ -734,7 +735,8 @@ def issue_search(
         False,
         "--take",
         help="With --for-me: return only the first matching issue/work item and claim it in the same go, "
-        "like `issue take` does (--limit then only sizes how many candidates are scanned). Can't be combined with --org-wide.",
+        "like `issue take` does (--limit then only sizes how many candidates are scanned). With --org-wide the claim is "
+        "posted on the match's own repo / project.",
     ),
 ) -> None:
     """Search (or, with no keywords, just list) issues / work items, defaulting to open issues
@@ -744,8 +746,6 @@ def issue_search(
         raise typer.BadParameter("Must be one of: open, closed, all", param_hint="--state")
     if take and not for_me:
         raise typer.BadParameter("--take only works together with --for-me", param_hint="--take")
-    if take and org_wide:
-        raise typer.BadParameter("--take can't be combined with --org-wide (the claim is posted on the current repo)", param_hint="--take")
     # only passed on with --for-me, so a plain search calls the backends exactly as before.
     # --take wants one match out of the same scan a plain --for-me does: --limit then sizes the scan, not the result
     search_extra: dict = {"comment_filter": agent_mentions.last_comment_filter(_resolve_agent(agent))} if for_me else {}
@@ -783,7 +783,7 @@ def issue_search(
         items = gh_issue.search(
             require_gh(), remote.owner, remote.repo, keywords or [], since, limit, state, board=resolved_board, org_wide=org_wide, labels=tags_or_labels, **search_extra
         )
-        found = items[0]["number"] if items else None
+        found = (_github_item_remote(items[0]) if org_wide else remote, items[0]["number"]) if items else None
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
@@ -791,12 +791,33 @@ def issue_search(
         items = ado_issue.search(
             session, remote, keywords or [], since=since, board=resolved_board, top=limit, state=state, org_wide=org_wide, tags=tags_or_labels, **search_extra
         )
-        found = items[0]["id"] if items else None
+        project = items[0]["fields"].get("System.TeamProject") if items and org_wide else None
+        found = (replace(remote, project=project) if project else remote, items[0]["id"]) if items else None
 
     if take and found is not None:
-        user = _current_user(remote)
-        if not _take(remote, found, f"{issue_do_mod.TAKEN_PREFIX} {user}", pat, user=user):
+        # an --org-wide match can live in any repo / project of the org: claim it where it is, not in the current one
+        target, number = found
+        user = _current_user(target)
+        if not _take(target, number, f"{issue_do_mod.TAKEN_PREFIX} {user}", pat, user=user):
             raise typer.Exit(1)
+        if org_wide and target != remote:
+            typer.echo(_find_repo_hint(target))
+
+
+def _find_repo_hint(target: AdoRemote | GitHubRemote) -> str:
+    """Where a claimed `--org-wide` match lives, and how to get its repo: it is usually not the checkout `bdt` ran in."""
+    if isinstance(target, GitHubRemote):
+        return f"This issue is in {target.owner}/{target.repo}, not the current repo -- find (and clone) it with `bdt find-repo {target.repo}`."
+    return (
+        f"This work item is in the Azure DevOps project {target.project}, not necessarily the current repo -- "
+        "find (and clone) the repo it concerns with `bdt find-repo <repo name>`."
+    )
+
+
+def _github_item_remote(item: dict) -> GitHubRemote:
+    """The repo an `--org-wide` GitHub search result (`repository.nameWithOwner`) lives in."""
+    owner, _, repo = item["repository"]["nameWithOwner"].partition("/")
+    return GitHubRemote(owner, repo)
 
 
 def _resolve_agent(agent: str | None) -> str | None:
