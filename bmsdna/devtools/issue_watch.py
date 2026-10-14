@@ -82,7 +82,8 @@ def poll_until[T](
     log: Callable[[str], None] = lambda msg: print(msg, file=sys.stderr, flush=True),
 ) -> T | None:
     """Call `probe` (immediately, then every `interval` seconds) until it returns something other than None;
-    return that. None when `timeout` seconds (None = never) pass first.
+    return that. None when `timeout` seconds (None = never) pass first. The timeout only stops *new* polls: a probe
+    already running when it passes is not cut off, and a match it returns is still returned.
 
     A failing probe is retried, `MAX_CONSECUTIVE_ERRORS` failures in a row are raised: a long poll
     shouldn't die of one network blip, but must not turn a persistent failure into "nothing found".

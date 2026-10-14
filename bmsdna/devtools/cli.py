@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import math
 import re
 import subprocess
 import sys
@@ -786,10 +787,7 @@ def issue_search(
         raise typer.BadParameter("--wait only works together with --for-me (without it, a search just lists)", param_hint="--wait")
     if not wait and (timeout is not None or interval is not None):
         raise typer.BadParameter("--timeout and --interval only work together with --wait", param_hint="--timeout" if timeout is not None else "--interval")
-    if interval is not None and interval <= 0:
-        raise typer.BadParameter("Must be greater than 0", param_hint="--interval")
-    if timeout is not None and timeout < 0:
-        raise typer.BadParameter("Must be 0 (wait forever) or greater", param_hint="--timeout")
+    _check_poll_options(interval, timeout)
     # only passed on with --for-me, so a plain search calls the backends exactly as before.
     # --take wants one match out of the same scan a plain --for-me does: --limit then sizes the scan, not the result
     resolved_agent = _resolve_agent(agent) if for_me else None
@@ -914,6 +912,15 @@ def _find_repo_hint(target: AdoRemote | GitHubRemote) -> str:
         f"This work item is in the Azure DevOps project {target.project}, not necessarily the current repo -- "
         "find (and clone) the repo it concerns with `bdt find-repo <repo name>`."
     )
+
+
+def _check_poll_options(interval: float | None, timeout: float | None) -> None:
+    """`--interval` / `--timeout` of the polling commands: finite numbers (nan/inf would poll forever or crash `sleep`);
+    a timeout of 0 means wait forever."""
+    if interval is not None and not (math.isfinite(interval) and interval > 0):
+        raise typer.BadParameter("Must be a number greater than 0", param_hint="--interval")
+    if timeout is not None and not (math.isfinite(timeout) and timeout >= 0):
+        raise typer.BadParameter("Must be a number, 0 (wait forever) or greater", param_hint="--timeout")
 
 
 def _github_item_remote(item: dict) -> GitHubRemote:
@@ -1088,10 +1095,7 @@ def issue_watch(
     block until someone answers. Prints the new comment(s) and exits 0; exits 4 if none arrived within
     --timeout. Progress notes go to stderr, so stdout holds only the comments (JSON lines with --json).
     """
-    if interval <= 0:
-        raise typer.BadParameter("Must be greater than 0", param_hint="--interval")
-    if timeout < 0:
-        raise typer.BadParameter("Must be 0 (wait forever) or greater", param_hint="--timeout")
+    _check_poll_options(interval, timeout)
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
         gh = require_gh()

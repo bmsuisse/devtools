@@ -7,6 +7,7 @@ import os
 import subprocess
 from unittest.mock import MagicMock
 
+import pytest
 from typer.testing import CliRunner
 
 from bmsdna.devtools import ado_issue, gh_issue, issue_watch as issue_watch_mod
@@ -802,3 +803,18 @@ def test_issue_watch_ado_fetch_converts_html_bodies(monkeypatch) -> None:
 def test_issue_watch_rejects_a_non_positive_interval(monkeypatch) -> None:
     _patch_watch(monkeypatch, [_comment(5)])
     assert runner.invoke(app, ["issue", "watch", "84", "--interval", "0"]).exit_code == 2
+
+
+@pytest.mark.parametrize("option", ["--timeout", "--interval"])
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_issue_search_wait_rejects_non_finite_numbers(monkeypatch, option: str, value: str) -> None:
+    _patch_take(monkeypatch, [{"number": 7}])
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--wait", option, value])
+
+    assert result.exit_code == 2
+
+
+@pytest.mark.parametrize("option", ["--timeout", "--interval"])
+def test_issue_watch_rejects_non_finite_numbers(option: str) -> None:
+    assert runner.invoke(app, ["issue", "watch", "84", option, "nan"]).exit_code == 2
