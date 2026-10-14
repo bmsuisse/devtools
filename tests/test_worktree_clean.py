@@ -182,6 +182,49 @@ def test_collect_worktrees_never_offers_main_worktree_or_protected_branches(tmp_
     assert not any(w.removable for w in worktrees if w.is_main or w.branch == "test")
 
 
+def test_collect_worktrees_flags_branch_merged_into_dev_but_not_main_as_removable(tmp_path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    _git(["branch", "dev"], cwd=repo)
+    path = add_worktree(repo, "landed-in-dev", base="dev")
+    (path / "feature.txt").write_text("feature")
+    _git(["add", "."], cwd=path)
+    _git(["commit", "-q", "-m", "feature"], cwd=path)
+    # "PR merged into dev": fast-forward dev to the feature commit, main stays behind.
+    _git(["branch", "-f", "dev", "landed-in-dev"], cwd=repo)
+
+    worktrees = collect_worktrees(repo, remote="origin")
+    feature = next(w for w in worktrees if w.branch == "landed-in-dev")
+
+    assert feature.merged_into == ["dev"]
+    assert feature.removable is True
+
+
+def test_collect_worktrees_keeps_branch_not_yet_in_dev_even_if_dev_exists(tmp_path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    _git(["branch", "dev"], cwd=repo)
+    path = add_worktree(repo, "wip-feature", base="dev")
+    (path / "wip.txt").write_text("wip")
+    _git(["add", "."], cwd=path)
+    _git(["commit", "-q", "-m", "wip"], cwd=path)
+
+    worktrees = collect_worktrees(repo, remote="origin")
+    feature = next(w for w in worktrees if w.branch == "wip-feature")
+
+    assert feature.merged_into == []
+    assert feature.removable is False
+
+
+def test_collect_worktrees_never_offers_dev_branch_worktree(tmp_path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    _git(["branch", "dev"], cwd=repo)
+    path = repo / ".worktrees" / "dev"
+    _git(["worktree", "add", str(path), "dev"], cwd=repo)
+
+    worktrees = collect_worktrees(repo, remote="origin")
+
+    assert not any(w.removable for w in worktrees if w.branch == "dev")
+
+
 def test_collect_worktrees_computes_db_names_when_pgdevkit_configured(tmp_path) -> None:
     repo = init_repo(tmp_path / "repo", pyproject="[tool.pgdevkit]\nname = 'ccmt'\n")
     add_worktree(repo, "my-feature")

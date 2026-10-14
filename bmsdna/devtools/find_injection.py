@@ -30,7 +30,7 @@ from .injection_frontend import (
 from .injection_python import check_python_sinks
 from .lint import _DEFAULT_EXCLUDE_DIR_NAMES, _iter_files
 from .lint_findings import Finding, render_findings
-from .lint_sql import check_sql_file, require_sqlglot
+from .lint_sql import check_sql_file, load_sql_functions, require_sqlglot
 from .lint_typescript import DEFAULT_TS_EXCLUDE_DIR_NAMES, is_excluded_ts_file
 
 SQL_INJECTION_RULES = frozenset(
@@ -163,8 +163,8 @@ def _filter_ignored(findings: list[Finding]) -> list[Finding]:
     return kept
 
 
-def _scan_python(path: Path) -> list[Finding]:
-    sql = [f for f in check_sql_file(path, review=True) if f.rule in SQL_INJECTION_RULES or f.rule in ("sql-unverified-call", "sql-unverified-cast")]
+def _scan_python(path: Path, sql_functions: frozenset[str] = frozenset()) -> list[Finding]:
+    sql = [f for f in check_sql_file(path, review=True, sql_functions=sql_functions) if f.rule in SQL_INJECTION_RULES or f.rule in ("sql-unverified-call", "sql-unverified-cast")]
     return sql + check_python_sinks(path)
 
 
@@ -297,6 +297,7 @@ def run(
     root = (root or Path.cwd()).resolve()
     configured = [str(d) for d in load_bdt_table("lint", root).get("exclude_dirs", []) or []]
     scope = _ScanFilter(root, configured + list(exclude or []), respect_gitignore)
+    sql_functions = load_sql_functions(root)
     findings: list[Finding] = []
     changed: list[Path] = []
 
@@ -318,7 +319,7 @@ def run(
     if py_files:
         require_sqlglot()
     for path in py_files:
-        findings.extend(_scan_python(path))
+        findings.extend(_scan_python(path, sql_functions))
     for path in fe_files:
         findings.extend(check_frontend_file(path))
 

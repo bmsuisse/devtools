@@ -22,7 +22,7 @@ from .lint_models import (
     DEFAULT_FIELD_THRESHOLD,
     check_models_file,
 )
-from .lint_sql import check_sql_file, require_sqlglot
+from .lint_sql import check_sql_file, load_sql_functions, require_sqlglot
 from .lint_tooling import check_tooling
 from .lint_typescript import (
     DEFAULT_NON_JSON_MARKERS,
@@ -143,8 +143,9 @@ def run(paths: list[str], *, root: Path | None = None, skip_tooling_check: bool 
     findings: list[Finding] = [
         Finding(path, 0, "lint-path-not-found", f"'{path}' doesn't exist -- nothing was scanned for it.") for path in missing_paths
     ]
+    sql_functions = load_sql_functions(root)
     for path in python_files:
-        findings.extend(check_sql_file(path))
+        findings.extend(check_sql_file(path, sql_functions=sql_functions))
         findings.extend(
             check_models_file(
                 path,

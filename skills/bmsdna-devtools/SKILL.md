@@ -144,7 +144,7 @@ vendor a git submodule under that path.
 
 ## Static checks
 
-- `bdt lint [paths]` -- SQL/psycopg rules (`.execute()`, pgdevkit `fetch_*`/`execute`, `PostgresJsonResponse`, arrowbricks `execute_streamed`/`query_agent`/`stream_query_json`), pydantic-model placement, hand-wired HTTP in TypeScript, baseline tooling.
+- `bdt lint [paths]` -- SQL/psycopg rules (`.execute()`, pgdevkit `fetch_*`/`execute`, `PostgresJsonResponse`, arrowbricks `execute_streamed`/`query_agent`/`stream_query_json`, and your own helpers listed in `[tool.bdt.lint] sql_functions` -- their first parameter must be the SQL; all with the same rules, Databricks SQL included: non-trivial SQL lives in a `.sql` file), pydantic-model placement, hand-wired HTTP in TypeScript, baseline tooling.
 - `uv run bdt dead-code` -- dead code a linter can't see, configured under `[tool.bdt.dead_code]` in pyproject.toml:
   `.sql` files no Python code loads (`sql_roots`) and FastAPI routes that neither non-generated frontend code nor a
   `url_for(...)` call uses (`[[tool.bdt.dead_code.apps]]`: app or openapi file, frontends, excludes, optional `baseline`;

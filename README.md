@@ -482,8 +482,9 @@ bdt cleanup worktree [path] [--keep-db] [--confirm]
 
 The first two recursively scan every git repo under `root` (default: `.`)
 for worktrees. `bdt cleanup worktrees` prunes the ones fully merged into
-`<remote>/main`/`<remote>/test` (falling back to local `main`/`test` if no
-such remote refs exist) — e.g. a tree of `.worktrees/<branch>` directories
+`<remote>/main`/`<remote>/test`/`<remote>/dev` (falling back to local
+`main`/`test`/`dev` if no such remote refs exist; a branch that landed in
+`dev` counts even though it hasn't reached `main` yet) — e.g. a tree of `.worktrees/<branch>` directories
 accumulated across several repos over time. `bdt cleanup orphaned-dbs` has no
 `--remote`/merge-status notion at all: it just finds pgdevkit test DBs with
 no matching *live* git worktree, regardless of whether that worktree was
@@ -497,7 +498,7 @@ from inside the worktree in question, regardless of its merge status.
 `cleanup db` only drops that worktree's own pgdevkit test DB(s), leaving the
 worktree itself alone; `cleanup worktree` removes the worktree too (and,
 unless `--keep-db`, its DB(s) along with it) — refusing the main checkout, a
-protected branch (`main`/`test`), a locked worktree, or a dirty one
+protected branch (`main`/`test`/`dev`), a locked worktree, or a dirty one
 (submodules included). Since these two act on a single worktree a human
 picked out by hand, rather than scanning for candidates, they default to an
 interactive `y/N` confirmation instead of `--yes`; pass `--confirm` to skip
@@ -686,12 +687,13 @@ it can't see through).
 **arrowbricks** (the Databricks SQL client): `Cursor.execute`/`execute_streamed`, `DatabricksClient.query_agent`/`stream_query_json`
 and the free `arrowbricks.stream_query_json(client, sql)` are checked as well. `execute_streamed`/`query_agent`/`stream_query_json`
 are matched by name (the free function's SQL is its *second* argument; the method's is the first; `sql=` as keyword works too).
-Only the injection rules apply there -- an f-string/concatenation/`%`/`.format()` is flagged and the fix suggests an
-arrowbricks t-string (`{value}` binds a named parameter, `{name:i}` quotes an identifier) or literal SQL with
-`parameters=[...]` (`params=[...]` on `query_agent`/`stream_query_json`) for `:name` markers. The postgres house style (`sql-inline-too-complex`, `sql-positional-param`, `sql-forbidden-join`) is not applied to
-them, since Databricks SQL isn't postgres. The SQL is also parsed as Databricks SQL (backticks, `QUALIFY`, ...), so such
-statements are no longer missed; a plain `.execute()` (incl. `execute(sql=...)`) gets that extra dialect only in a file that
-imports `arrowbricks`, and keeps the postgres rules there (it may be a psycopg cursor too). The free function is recognised
+All SQL gets the same rules, whatever the dialect: an f-string/concatenation/`%`/`.format()` is flagged (the fix suggests an
+arrowbricks t-string -- `{value}` binds a named parameter, `{name:i}` quotes an identifier -- or literal SQL with
+`parameters=[...]` (`params=[...]` on `query_agent`/`stream_query_json`) for `:name` markers), and the house style applies too:
+`sql-inline-too-complex` (non-trivial Databricks SQL belongs in its own `.sql` file, loaded with `load_sql()`),
+`sql-forbidden-join` (not looking into string literals or comments) and, except in a call known to be arrowbricks -- where `%s` is no placeholder -- `sql-positional-param`. The SQL is parsed as postgres first, then as Databricks SQL (backticks,
+`QUALIFY`, ...); a plain `.execute()` (incl. `execute(sql=...)`) gets that extra dialect only in a file that
+imports `arrowbricks` (it may be a psycopg cursor too). The free function is recognised
 under `from arrowbricks import stream_query_json as x` and `arrowbricks[._streaming].stream_query_json(...)`.
 Like pgdevkit's helpers the three names match by name wherever they are called (a client injected from another module is the
 common case), so an unrelated `agent.query_agent(f"select ...")` whose text parses as SQL is flagged too.
@@ -706,6 +708,19 @@ import, is never flagged. Aliased imports of the other helpers (`fetch_all as fa
 project's own module (`from app.db import execute`; call it as `db.execute(...)` or import it from `pgdevkit.db`
 instead), a subclass of `PostgresJsonResponse` under another name, and CCMT2's pre-pgdevkit
 `PostgresJsonResponse("postgres", sql)`, whose first argument is a connection source, not SQL.
+
+**Project helpers.** Your own functions that take SQL (a repo-specific `run_query(sql, conn)`, `fetch_rows(sql, ...)`) can
+be checked like `.execute()` by naming them in `pyproject.toml`:
+
+```toml
+[tool.bdt.lint]
+sql_functions = ["run_query", "app.db.fetch_rows"]
+```
+
+The one convention `bdt lint` relies on: **the SQL is the helper's first parameter** (the first positional argument; a
+`query=`/`sql=` keyword is accepted if there is none). Calls are matched by name, bare or as a method/attribute (`db.run_query(...)`; a
+dotted entry matches by its last segment, as `.execute()` does), so keep the names specific. The setting is read by
+`bdt lint` and `bdt find-injection`; a malformed value (not a list of names) stops the run with a message.
 
 - **`sql-inline-too-complex`** — more than a trivial (≤4 line) query, or a
   JOIN/CTE/subquery/aggregation, inline instead of `load_sql()`/a `.sql` file.
@@ -777,7 +792,7 @@ names to skip, beyond the built-in `.venv`/`node_modules`/etc. list),
 `pydantic_field_threshold` (default 5), `pydantic_base_classes` (default
 `["BaseModel", "PostgresTableModel"]`), `pydantic_allowed_subdirs` (default
 `["models", "schemas", "dto"]`), `pydantic_api_dir_names` (default `["api"]`),
-`ts_exclude_globs` (repo-relative globs of TypeScript files to skip, e.g.
+`sql_functions` (your own SQL-taking helpers, see above), `ts_exclude_globs` (repo-relative globs of TypeScript files to skip, e.g.
 `["src/legacy/*"]`), `ts_non_json_markers` (extra strings that mark a call's
 enclosing block as non-JSON traffic).
 
