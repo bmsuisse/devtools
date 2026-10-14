@@ -632,3 +632,22 @@ def test_lacks_build_policy_fails_open_on_request_error() -> None:
     session.get.side_effect = requests.exceptions.Timeout("slow")
 
     assert lacks_build_policy(session, REMOTE, "main") is False
+
+
+def test_run_wait_checks_build_policy_only_once(monkeypatch) -> None:
+    _no_builds(monkeypatch, {"pullRequestId": 1, "title": "feat: x", "status": "active", "isDraft": False})
+    calls: list[str] = []
+    monkeypatch.setattr("bmsdna.devtools.pr_build.lacks_build_policy", lambda session, remote, branch: calls.append(branch) or False)
+    sleeps: list[float] = []
+
+    def sleep(secs):
+        sleeps.append(secs)
+        if len(sleeps) == 3:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr("bmsdna.devtools.pr_build.time.sleep", sleep)
+
+    with pytest.raises(KeyboardInterrupt):
+        run(REMOTE, "fake-pat", "main", wait=True, source_branch="feature-x")
+
+    assert calls == ["main"]

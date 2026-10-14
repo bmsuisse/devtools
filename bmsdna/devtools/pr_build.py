@@ -802,6 +802,7 @@ def run(
             baseline_completed_ids[def_id] = max(baseline_completed_ids.get(def_id, 0), b["id"])
 
     draft_notice_shown = False
+    policy_checked = False
     heartbeat = PollHeartbeat()
     while True:
         pr = _poll_or_exit(fetch_pr)
@@ -862,7 +863,13 @@ def run(
             # No build policy on the target means CI will never be triggered for this PR, so
             # polling for a build would never end -- fail instead of hanging. With a policy the
             # build just hasn't been queued yet (e.g. right after a push), so keep waiting.
-            if wait and target_branch and lacks_build_policy(session, remote, target_branch):
+            # Checked once per run: the policy doesn't change between polls, and each lookup is two API calls.
+            if wait and target_branch and not policy_checked:
+                policy_checked = True
+                missing_policy = lacks_build_policy(session, remote, target_branch)
+            else:
+                missing_policy = False
+            if missing_policy:
                 sys.exit(
                     f"{msg}\n\nNo build policy is configured on target branch '{target_branch}', so no PR build "
                     "will ever run -- `--wait` would poll forever. Add a Build validation branch policy, or "
