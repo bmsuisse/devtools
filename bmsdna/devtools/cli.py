@@ -7,6 +7,7 @@ import sys
 import tomllib
 import uuid
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
@@ -30,7 +31,17 @@ from . import pr_build, pr_info as pr_info_mod, pr_issue_link, pr_labels, pull a
 from .ado_auth import auth_header
 from .bdt_config import find_pyproject, load_bdt_table
 from .cli_tools import CLI_TIMEOUT_SECS, detect_agent_session, require_az, require_gh
-from .gitrepo import AdoRemote, GitHubRemote, UnknownRemoteError, current_branch, current_remote, head_commit_subject
+from .gitrepo import (
+    AdoRemote,
+    GitHubRemote,
+    NotGitHubRemoteError,
+    UnknownRemoteError,
+    current_branch,
+    current_remote,
+    head_commit_subject,
+    origin_url,
+    parse_remote,
+)
 from .lint_findings import render_findings
 
 # Non-ASCII output (checkmarks, en-dashes in ADO project names, etc.) needs a
@@ -730,16 +741,31 @@ def issue_search(
         help="With --for-me: the agent to look for mentions of, e.g. claude, codex, goose. Default: detected "
         "from the environment (CLAUDECODE, AI_AGENT, CODEX_*, GOOSE_*, ...); without any, only @Agent matches.",
     ),
+    take: bool = typer.Option(
+        False,
+        "--take",
+        help="With --for-me: return only the first matching issue/work item and claim it in the same go, "
+        "like `issue take` does (--limit then only sizes how many candidates are scanned). With --org-wide the claim is "
+        "posted on the match's own repo / project.",
+    ),
 ) -> None:
     """Search (or, with no keywords, just list) issues / work items, defaulting to open issues
     from the last 30 days (Azure DevOps or GitHub, auto-detected).
     """
     if state not in ("open", "closed", "all"):
         raise typer.BadParameter("Must be one of: open, closed, all", param_hint="--state")
+    if take and not for_me:
+        raise typer.BadParameter("--take only works together with --for-me", param_hint="--take")
+    if take and limit < 1:
+        raise typer.BadParameter("--take needs --limit of at least 1 (it sizes the candidates scanned)", param_hint="--limit")
+    # only passed on with --for-me, so a plain search calls the backends exactly as before.
+    # --take wants one match out of the same scan a plain --for-me does: --limit then sizes the scan, not the result
+    search_extra: dict = {"comment_filter": agent_mentions.last_comment_filter(_resolve_agent(agent))} if for_me else {}
+    if take:
+        search_extra["scan_limit"] = limit
+        limit = 1
     since = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%Y-%m-%d") if since_days > 0 else None
     tags_or_labels = _merge_tags_and_labels(tag, label) or []
-    # only passed on with --for-me, so a plain search calls the backends exactly as before
-    search_extra = {"comment_filter": agent_mentions.last_comment_filter(_resolve_agent(agent))} if for_me else {}
 
     # --org/--github-org are only ever consulted as a *fallback*, when `current_remote()` itself
     # fails (no git repo, no origin remote, or a remote that's neither GitHub nor Azure DevOps) --
@@ -766,16 +792,60 @@ def issue_search(
 
     if isinstance(remote, GitHubRemote):
         resolved_board = gh_issue.resolve_board(board)
-        gh_issue.search(
+        items = gh_issue.search(
             require_gh(), remote.owner, remote.repo, keywords or [], since, limit, state, board=resolved_board, org_wide=org_wide, labels=tags_or_labels, **search_extra
         )
+        found = (_github_item_remote(items[0]) if org_wide else remote, items[0]["number"]) if items else None
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
         resolved_board = ado_issue.resolve_board(board)
-        ado_issue.search(
+        items = ado_issue.search(
             session, remote, keywords or [], since=since, board=resolved_board, top=limit, state=state, org_wide=org_wide, tags=tags_or_labels, **search_extra
         )
+        project = items[0]["fields"].get("System.TeamProject") if items and org_wide else None
+        found = (replace(remote, project=project) if project else remote, items[0]["id"]) if items else None
+
+    if take and found is not None:
+        # an --org-wide match can live in any repo / project of the org: claim it where it is, not in the current one
+        target, number = found
+        user = _current_user(target)
+        if not _take(target, number, f"{issue_do_mod.TAKEN_PREFIX} {user}", pat, user=user):
+            raise typer.Exit(1)
+        if org_wide and target != remote:
+            typer.echo(_find_repo_hint(target))
+
+
+def _origin_is(clone: Path, target: GitHubRemote) -> bool:
+    """Is `clone`'s `origin` the GitHub repo `target`? (A same-named repo of another owner is not.)"""
+    try:
+        origin = parse_remote(origin_url(str(clone)))
+    except (SystemExit, UnknownRemoteError, NotGitHubRemoteError):
+        return False
+    return isinstance(origin, GitHubRemote) and (origin.owner.lower(), origin.repo.lower()) == (target.owner.lower(), target.repo.lower())
+
+
+def _find_repo_hint(target: AdoRemote | GitHubRemote) -> str:
+    """Where a claimed `--org-wide` match lives and where its repo is: the local clone when there is one, else how to get
+    it (`bdt find-repo`) -- it is usually not the checkout `bdt` ran in. An Azure DevOps work item belongs to a project,
+    not a repo, so there is no clone to name."""
+    if isinstance(target, GitHubRemote):
+        root = find_repo_mod.work_dir()
+        candidates = find_repo_mod.find_local(target.repo, root) if root.is_dir() else []
+        clones = [p for p in candidates if p.name.lower() == target.repo.lower() and _origin_is(p, target)]
+        if clones:
+            return f"This issue is in {target.owner}/{target.repo}, not the current repo -- local clone: {', '.join(str(p) for p in clones)}"
+        return f"This issue is in {target.owner}/{target.repo}, not the current repo, and not cloned yet -- find (and clone) it with `bdt find-repo {target.repo}`."
+    return (
+        f"This work item is in the Azure DevOps project {target.project}, not necessarily the current repo -- "
+        "find (and clone) the repo it concerns with `bdt find-repo <repo name>`."
+    )
+
+
+def _github_item_remote(item: dict) -> GitHubRemote:
+    """The repo an `--org-wide` GitHub search result (`repository.nameWithOwner`) lives in."""
+    owner, _, repo = item["repository"]["nameWithOwner"].partition("/")
+    return GitHubRemote(owner, repo)
 
 
 def _resolve_agent(agent: str | None) -> str | None:

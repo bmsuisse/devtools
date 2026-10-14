@@ -343,7 +343,7 @@ Issues are how people and coding agents talk to each other: someone comments `@C
 at this?` on an issue, and the agent finds it; the agent asks a question in an issue and waits for the answer.
 
 ```bash
-bdt issue search --for-me [--agent claude] [--state all] [--limit 10]
+bdt issue search --for-me [--agent claude] [--state all] [--limit 10] [--take]
 bdt issue watch 84 [--timeout 900] [--interval 20] [--since-comment ID] [--for-me] [--skip-own] [--json]
 ```
 
@@ -356,6 +356,13 @@ Only the newest comment counts, so once someone (including the agent, e.g. with 
 mention, the issue drops out of the list. The newest comment isn't part of the list output of `gh`/Azure DevOps,
 so this costs one extra request per candidate; candidates are scanned in recently-updated order (up to 10x
 `--limit` on GitHub, 200 on Azure DevOps) until `--limit` have matched.
+
+Add **`--take`** to pick up work in one go: it returns only the first matching issue and claims it like
+`bdt issue take` does (a `Taken by <you>` comment, with the usual agent-session note). `--limit` then only sizes
+how many recently-updated candidates are scanned (the same scan as without `--take`). It requires `--for-me`. The claim becomes the issue's newest comment, so it drops out of later
+`--for-me` searches and a second run returns the next issue. With `--org-wide` the claim is posted on the match's own
+repo (GitHub) / project (Azure DevOps), not the current one, and the output names your local clone of that repo, or -- if it isn't cloned -- tells you to get it with `bdt find-repo <name>`. With no match nothing is claimed and the exit code is
+still 0 (the output says "No matching ... found"); it exits 1 only if someone else holds the claim.
 
 Which agent is calling is detected from the environment, first match wins: `--agent NAME` (or the `BDT_AGENT`
 environment variable, to pin it), `CLAUDECODE=1` (Claude), the agent-agnostic `AI_AGENT` convention (first
