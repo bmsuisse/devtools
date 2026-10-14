@@ -94,6 +94,7 @@ session-link comment instead.
 ```bash
 bdt issue search --for-me                  # open issues whose LAST comment says @Claude / @Codex / @Goose (you) or @Agent (everyone)
 bdt issue search --for-me --take           # same, but only the first match, and claim it (like `bdt issue take`) in one go
+bdt issue search --for-me --take --wait    # nothing to do? block until an issue is addressed to you (exit 4 after --timeout, default 900 s)
 bdt issue watch 84 --since-comment 123 --skip-own --json --timeout 1800
 ```
 
@@ -105,6 +106,12 @@ guesses wrong or you are an agent it doesn't know.
 
 `--take` (needs `--for-me`; with `--org-wide` the claim goes to the match's own repo, and the output names the local clone, else hints at `bdt find-repo` to get it) returns only the first match and claims it like `bdt issue take`, so don't
 run `issue take` afterwards; `--limit` then only sizes the scan. No match: nothing is claimed, exit 0.
+
+`--wait` (needs `--for-me`) is for an agent with nothing to do: it repeats the search every `--interval` seconds (default 20) until
+something matches, then behaves like a run that found it right away (with `--take` it claims the first match), so just work on
+the issue it printed / claimed. Exit code 4 means `--timeout` (default 900 s, `0` = forever) passed with nothing addressed to you --
+not an error: run it again or stop. Stdout is the normal search output, progress goes to stderr; keep the command's own timeout longer
+than `--timeout`.
 
 To ask a human something without stopping, comment the question on the issue (`bdt issue comment add N --message
 "@person ..."`, which prints `(comment #ID)`), then `bdt issue watch N --since-comment ID --skip-own`
