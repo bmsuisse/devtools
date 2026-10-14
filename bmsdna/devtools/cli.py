@@ -31,7 +31,17 @@ from . import pr_build, pr_info as pr_info_mod, pr_issue_link, pr_labels, pull a
 from .ado_auth import auth_header
 from .bdt_config import find_pyproject, load_bdt_table
 from .cli_tools import CLI_TIMEOUT_SECS, detect_agent_session, require_az, require_gh
-from .gitrepo import AdoRemote, GitHubRemote, UnknownRemoteError, current_branch, current_remote, head_commit_subject
+from .gitrepo import (
+    AdoRemote,
+    GitHubRemote,
+    NotGitHubRemoteError,
+    UnknownRemoteError,
+    current_branch,
+    current_remote,
+    head_commit_subject,
+    origin_url,
+    parse_remote,
+)
 from .lint_findings import render_findings
 
 # Non-ASCII output (checkmarks, en-dashes in ADO project names, etc.) needs a
@@ -746,6 +756,8 @@ def issue_search(
         raise typer.BadParameter("Must be one of: open, closed, all", param_hint="--state")
     if take and not for_me:
         raise typer.BadParameter("--take only works together with --for-me", param_hint="--take")
+    if take and limit < 1:
+        raise typer.BadParameter("--take needs --limit of at least 1 (it sizes the candidates scanned)", param_hint="--limit")
     # only passed on with --for-me, so a plain search calls the backends exactly as before.
     # --take wants one match out of the same scan a plain --for-me does: --limit then sizes the scan, not the result
     search_extra: dict = {"comment_filter": agent_mentions.last_comment_filter(_resolve_agent(agent))} if for_me else {}
@@ -804,13 +816,23 @@ def issue_search(
             typer.echo(_find_repo_hint(target))
 
 
+def _origin_is(clone: Path, target: GitHubRemote) -> bool:
+    """Is `clone`'s `origin` the GitHub repo `target`? (A same-named repo of another owner is not.)"""
+    try:
+        origin = parse_remote(origin_url(str(clone)))
+    except (SystemExit, UnknownRemoteError, NotGitHubRemoteError):
+        return False
+    return isinstance(origin, GitHubRemote) and (origin.owner.lower(), origin.repo.lower()) == (target.owner.lower(), target.repo.lower())
+
+
 def _find_repo_hint(target: AdoRemote | GitHubRemote) -> str:
     """Where a claimed `--org-wide` match lives and where its repo is: the local clone when there is one, else how to get
     it (`bdt find-repo`) -- it is usually not the checkout `bdt` ran in. An Azure DevOps work item belongs to a project,
     not a repo, so there is no clone to name."""
     if isinstance(target, GitHubRemote):
         root = find_repo_mod.work_dir()
-        clones = [p for p in find_repo_mod.find_local(target.repo, root) if p.name.lower() == target.repo.lower()] if root.is_dir() else []
+        candidates = find_repo_mod.find_local(target.repo, root) if root.is_dir() else []
+        clones = [p for p in candidates if p.name.lower() == target.repo.lower() and _origin_is(p, target)]
         if clones:
             return f"This issue is in {target.owner}/{target.repo}, not the current repo -- local clone: {', '.join(str(p) for p in clones)}"
         return f"This issue is in {target.owner}/{target.repo}, not the current repo, and not cloned yet -- find (and clone) it with `bdt find-repo {target.repo}`."

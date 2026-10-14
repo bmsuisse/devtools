@@ -4,6 +4,7 @@ listing) and the CLI wiring. The mention matching and the watch loop themselves 
 
 import json
 import os
+import subprocess
 from unittest.mock import MagicMock
 
 from typer.testing import CliRunner
@@ -390,10 +391,16 @@ def test_issue_search_take_org_wide_claims_the_match_in_its_own_repo(monkeypatch
     assert "not cloned yet" in result.output and "bdt find-repo otherrepo" in result.output
 
 
+def _git_clone_stub(path, origin: str) -> None:
+    path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(["git", "-C", str(path), "remote", "add", "origin", origin], check=True)
+
+
 def test_issue_search_take_org_wide_names_the_local_clone_when_there_is_one(monkeypatch, tmp_path) -> None:
     clone = tmp_path / "github" / "otherrepo"
-    (clone / ".git").mkdir(parents=True)
-    (tmp_path / "github" / "otherrepo-docs" / ".git").mkdir(parents=True)  # a substring match is not the repo
+    _git_clone_stub(clone, "https://github.com/otherorg/otherrepo.git")
+    _git_clone_stub(tmp_path / "github" / "otherrepo-docs", "https://github.com/otherorg/otherrepo-docs.git")  # a substring match is not the repo
     item = {"number": 7, "repository": {"nameWithOwner": "otherorg/otherrepo"}}
     _patch_take(monkeypatch, [item])
     monkeypatch.setattr("bmsdna.devtools.cli.find_repo_mod.work_dir", lambda: tmp_path)
@@ -403,6 +410,28 @@ def test_issue_search_take_org_wide_names_the_local_clone_when_there_is_one(monk
     assert result.exit_code == 0, result.output
     assert f"local clone: {clone}" in result.output
     assert "otherrepo-docs" not in result.output and "find-repo" not in result.output
+
+
+def test_issue_search_take_org_wide_ignores_a_same_named_clone_of_another_owner(monkeypatch, tmp_path) -> None:
+    _git_clone_stub(tmp_path / "github" / "otherrepo", "https://github.com/myorg/otherrepo.git")
+    item = {"number": 7, "repository": {"nameWithOwner": "otherorg/otherrepo"}}
+    _patch_take(monkeypatch, [item])
+    monkeypatch.setattr("bmsdna.devtools.cli.find_repo_mod.work_dir", lambda: tmp_path)
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--org-wide"])
+
+    assert result.exit_code == 0, result.output
+    assert "local clone" not in result.output and "bdt find-repo otherrepo" in result.output
+
+
+def test_issue_search_take_rejects_a_limit_below_one(monkeypatch) -> None:
+    taken: list = []
+    _patch_take(monkeypatch, [{"number": 7}], taken=taken)
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--limit", "0"])
+
+    assert result.exit_code == 2
+    assert taken == []
 
 
 def test_issue_search_take_org_wide_on_azure_devops_claims_in_the_items_project(monkeypatch) -> None:
