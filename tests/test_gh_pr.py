@@ -291,6 +291,8 @@ def test_set_draft_converts_ready_pr_to_draft(monkeypatch) -> None:
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
+        if "list" in cmd:  # no open PR for the branch: `gh pr view` resolves it
+            return MagicMock(returncode=0, stdout="[]", stderr="")
         if "view" in cmd:
             return MagicMock(returncode=0, stdout=json.dumps({"number": 42, "isDraft": False}), stderr="")
         return MagicMock(returncode=0, stdout="", stderr="")
@@ -306,6 +308,8 @@ def test_set_draft_no_op_when_already_draft(monkeypatch) -> None:
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
+        if "list" in cmd:
+            return MagicMock(returncode=0, stdout="[]", stderr="")
         return MagicMock(returncode=0, stdout=json.dumps({"number": 42, "isDraft": True}), stderr="")
 
     monkeypatch.setattr("bmsdna.devtools.gh_pr.subprocess.run", fake_run)

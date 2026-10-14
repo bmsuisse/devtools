@@ -17,9 +17,12 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 from . import pr_issue_link
 from .cli_tools import CLI_TIMEOUT_SECS, EXIT_NEEDS_APPROVAL, PollHeartbeat, detect_agent_session, ensure_agent_session_note, is_claude_code
+from .gitrepo import current_branch
+from .pr_choice import PrCandidate, choose_pr
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 PR_VIEW_FIELDS = "number,title,baseRefName,headRefName,mergeable,statusCheckRollup,isDraft"
@@ -87,7 +90,7 @@ def _run(args: list[str], *, timeout: float = CLI_TIMEOUT_SECS, **kwargs) -> sub
         sys.exit(f"`{' '.join(args)}` timed out after {timeout:.0f}s -- stalled network, or needs an interactive login?")
 
 
-def _run_gh_json(gh: str, args: list[str]) -> dict:
+def _run_gh_json(gh: str, args: list[str]) -> Any:
     r = _run([gh, *args], capture_output=True, encoding="utf-8")
     if r.returncode != 0:
         sys.exit((r.stderr or r.stdout).strip() or f"`gh {' '.join(args)}` failed")
@@ -101,9 +104,29 @@ def _pr_id_args(pr_id: int | None) -> list[str]:
     return [str(pr_id)] if pr_id is not None else []
 
 
+def resolve_pr_id(gh: str, pr_id: int | None, target: str | None = None) -> int | None:
+    """The number of the PR to act on: `pr_id` if given, else the open PR from the current branch
+    (`target` narrows it to one into that base branch; several are ambiguous: see `choose_pr`).
+
+    None if the branch has no open PR (and no `target` was asked for): the caller then lets `gh`
+    resolve it as before, which also finds a closed/merged one. Call it once, before any polling.
+    """
+    if pr_id is not None:
+        return pr_id
+    branch = current_branch()
+    args = ["pr", "list", "--head", branch, "--state", "open", "--json", "number,title,baseRefName,url"]
+    prs = _run_gh_json(gh, [*args, *(["--base", target] if target else [])])
+    if not prs:
+        if target:
+            sys.exit(f"No open PR found from '{branch}' → '{target}'")
+        return None
+    candidates = [PrCandidate(p["number"], p["title"], p["baseRefName"], p["url"]) for p in prs]
+    return prs[choose_pr(branch, candidates)]["number"]
+
+
 def get_pr(gh: str, pr_id: int | None = None, fields: str = PR_VIEW_FIELDS) -> dict:
-    """The PR for the current branch, however `gh` resolves it — there's no
-    target-branch filter on `gh pr view` the way ADO's search API has one.
+    """The PR for the current branch, however `gh` resolves it (callers pass the `resolve_pr_id`
+    result as `pr_id`, which settles which PR it is when the branch has several).
 
     If `pr_id` is given, resolves that PR directly instead -- lets a caller act on a
     specific PR without needing its branch checked out locally at all.
@@ -562,7 +585,7 @@ def publish(gh: str, pr_id: int | None = None) -> None:
     print("\nRun `bdt pr status --wait` to watch the PR's CI.")
 
 
-def set_draft(gh: str, pr_id: int | None = None) -> bool:
+def set_draft(gh: str, pr_id: int | None = None, target: str | None = None) -> bool:
     """Convert the current branch's ready PR -- or `pr_id`'s, if given -- back to a draft
     (`gh pr ready --undo`).
 
@@ -570,6 +593,7 @@ def set_draft(gh: str, pr_id: int | None = None) -> bool:
     a caller announcing "converted to draft" shouldn't do so for a PR that
     already was one.
     """
+    pr_id = resolve_pr_id(gh, pr_id, target)
     pr = get_pr(gh, pr_id)
     if pr.get("isDraft"):
         return False

@@ -35,7 +35,7 @@ CLI to install rather than trying to work around it.
 ## Checking PR build/check status
 
 ```bash
-bdt pr status [--target-branch dev] [--wait]
+bdt pr status [--target-branch BRANCH] [--pr-id N] [--wait]
 ```
 
 Finds the PR opened from the current branch and prints build/check status,
@@ -48,10 +48,13 @@ error message for `mergeStatus=conflicts` (ADO) or `mergeable=CONFLICTING`
 (GitHub) and tell the user to resolve conflicts rather than assuming CI is
 just slow.
 
-`--target-branch` only applies on Azure DevOps (its search API needs one to
-find the right PR); on GitHub, `gh pr view` always resolves the PR for the
-current branch regardless, so the flag is ignored there — the PR's actual
-base branch is shown in the output instead.
+`pr status`, `info`, `retry`, `publish`, `update`, `comment` (and `issue take`
+without a number) find the PR opened from the current branch into **any**
+target; `--target`/`--target-branch` only narrows it. With several open PRs
+for the branch (e.g. into `dev` and `main`) they ask which one on a terminal,
+and **fail listing the candidates when non-interactive** (you, as an agent):
+re-run with `--pr-id N` or `--target BRANCH`; never guess. One open PR is used
+without asking. Only `pr create` and `pr watch-deploy` default their target to `dev`.
 
 Auth: Azure DevOps works with no setup if the caller is already `az
 login`'d (only pass `--pat`/`AZURE_DEVOPS_EXT_PAT`/`AZURE_DEVOPS_PAT` if there's no `az` session
