@@ -805,9 +805,15 @@ def issue_search(
 
 
 def _find_repo_hint(target: AdoRemote | GitHubRemote) -> str:
-    """Where a claimed `--org-wide` match lives, and how to get its repo: it is usually not the checkout `bdt` ran in."""
+    """Where a claimed `--org-wide` match lives and where its repo is: the local clone when there is one, else how to get
+    it (`bdt find-repo`) -- it is usually not the checkout `bdt` ran in. An Azure DevOps work item belongs to a project,
+    not a repo, so there is no clone to name."""
     if isinstance(target, GitHubRemote):
-        return f"This issue is in {target.owner}/{target.repo}, not the current repo -- find (and clone) it with `bdt find-repo {target.repo}`."
+        root = find_repo_mod.work_dir()
+        clones = [p for p in find_repo_mod.find_local(target.repo, root) if p.name.lower() == target.repo.lower()] if root.is_dir() else []
+        if clones:
+            return f"This issue is in {target.owner}/{target.repo}, not the current repo -- local clone: {', '.join(str(p) for p in clones)}"
+        return f"This issue is in {target.owner}/{target.repo}, not the current repo, and not cloned yet -- find (and clone) it with `bdt find-repo {target.repo}`."
     return (
         f"This work item is in the Azure DevOps project {target.project}, not necessarily the current repo -- "
         "find (and clone) the repo it concerns with `bdt find-repo <repo name>`."

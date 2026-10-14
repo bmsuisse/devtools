@@ -100,7 +100,7 @@ usual `search` filters (keywords, `--label`, `--state`, `--org-wide`, ...). Whic
 environment (`CLAUDECODE`, `AI_AGENT`, `CODEX_*`, `GOOSE_*`, ...); pass `--agent NAME` or set `BDT_AGENT` if it
 guesses wrong or you are an agent it doesn't know.
 
-`--take` (needs `--for-me`; with `--org-wide` the claim goes to the match's own repo, and the output hints at `bdt find-repo` to get it) returns only the first match and claims it like `bdt issue take`, so don't
+`--take` (needs `--for-me`; with `--org-wide` the claim goes to the match's own repo, and the output names the local clone, else hints at `bdt find-repo` to get it) returns only the first match and claims it like `bdt issue take`, so don't
 run `issue take` afterwards; `--limit` then only sizes the scan. No match: nothing is claimed, exit 0.
 
 To ask a human something without stopping, comment the question on the issue (`bdt issue comment add N --message

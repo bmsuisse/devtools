@@ -378,16 +378,32 @@ def test_issue_search_take_requires_for_me(monkeypatch) -> None:
     assert taken == []
 
 
-def test_issue_search_take_org_wide_claims_the_match_in_its_own_repo(monkeypatch) -> None:
+def test_issue_search_take_org_wide_claims_the_match_in_its_own_repo(monkeypatch, tmp_path) -> None:
     taken: list = []
     item = {"number": 7, "repository": {"nameWithOwner": "otherorg/otherrepo"}}
     _patch_take(monkeypatch, [item], taken=taken)
+    monkeypatch.setattr("bmsdna.devtools.cli.find_repo_mod.work_dir", lambda: tmp_path)
 
     result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--org-wide"])
 
     assert result.exit_code == 0, result.output
     assert [(r, n) for r, n, _ in taken] == [(GitHubRemote("otherorg", "otherrepo"), 7)]
-    assert "bdt find-repo otherrepo" in result.output
+    assert "not cloned yet" in result.output and "bdt find-repo otherrepo" in result.output
+
+
+def test_issue_search_take_org_wide_names_the_local_clone_when_there_is_one(monkeypatch, tmp_path) -> None:
+    clone = tmp_path / "github" / "otherrepo"
+    (clone / ".git").mkdir(parents=True)
+    (tmp_path / "github" / "otherrepo-docs" / ".git").mkdir(parents=True)  # a substring match is not the repo
+    item = {"number": 7, "repository": {"nameWithOwner": "otherorg/otherrepo"}}
+    _patch_take(monkeypatch, [item])
+    monkeypatch.setattr("bmsdna.devtools.cli.find_repo_mod.work_dir", lambda: tmp_path)
+
+    result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--org-wide"])
+
+    assert result.exit_code == 0, result.output
+    assert f"local clone: {clone}" in result.output
+    assert "otherrepo-docs" not in result.output and "find-repo" not in result.output
 
 
 def test_issue_search_take_org_wide_on_azure_devops_claims_in_the_items_project(monkeypatch) -> None:
