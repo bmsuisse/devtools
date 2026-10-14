@@ -61,6 +61,10 @@ stage/check needs a reviewer plus a link to act on it, and exits **3**
 build/check has already failed, that's reported instead (exit 1) even when
 one is also waiting on approval.
 
+On Azure DevOps, `--wait` on a PR with no builds yet also checks that the target branch has an enabled
+Build validation policy; if it doesn't, no build will ever run, so it exits 1 with an error instead of
+polling forever (a failed policy lookup is ignored and the wait continues).
+
 **Azure DevOps**: org/project/repo are auto-detected from
 `git remote get-url origin` (handles SSH, `dev.azure.com` HTTPS, and
 `*.visualstudio.com` HTTPS forms). Auth is an explicit PAT (`--pat` or

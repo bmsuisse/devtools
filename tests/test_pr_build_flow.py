@@ -20,6 +20,7 @@ from bmsdna.devtools.pr_build import (
     ensure_session_note,
     get_builds_for_branch,
     get_pr,
+    lacks_build_policy,
     retry,
     retry_failed_build,
     run,
@@ -578,3 +579,56 @@ def test_get_pr_without_target_does_not_filter_on_it() -> None:
     assert "searchCriteria.targetRefName" not in seen[0]
     get_pr(Sess(), REMOTE, "feat", "main")
     assert seen[1]["searchCriteria.targetRefName"] == "refs/heads/main"
+
+
+def _no_builds(monkeypatch, pr: dict) -> None:
+    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock())
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda session, remote, source, target: pr)
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_builds_for_pr", lambda session, remote, source, pr_id: [])
+
+
+def test_run_wait_exits_with_error_when_target_has_no_build_policy(monkeypatch) -> None:
+    """Without a build policy no PR build is ever queued, so --wait would poll forever."""
+    _no_builds(monkeypatch, {"pullRequestId": 1, "title": "feat: x", "status": "active", "isDraft": False})
+    monkeypatch.setattr("bmsdna.devtools.pr_build.lacks_build_policy", lambda session, remote, branch: branch == "main")
+    monkeypatch.setattr("bmsdna.devtools.pr_build.time.sleep", lambda s: pytest.fail("must not keep polling"))
+
+    with pytest.raises(SystemExit) as exc:
+        run(REMOTE, "fake-pat", "main", wait=True, source_branch="feature-x")
+
+    assert "No build policy is configured on target branch 'main'" in str(exc.value)
+
+
+def test_run_wait_keeps_polling_when_target_has_build_policy(monkeypatch) -> None:
+    """With a policy the build is just not queued yet -- keep waiting (here: sleep once, then stop)."""
+    _no_builds(monkeypatch, {"pullRequestId": 1, "title": "feat: x", "status": "active", "isDraft": False})
+    monkeypatch.setattr("bmsdna.devtools.pr_build.lacks_build_policy", lambda session, remote, branch: False)
+
+    class StopPolling(Exception):
+        pass
+
+    def stop(_secs):
+        raise StopPolling
+
+    monkeypatch.setattr("bmsdna.devtools.pr_build.time.sleep", stop)
+
+    with pytest.raises(StopPolling):
+        run(REMOTE, "fake-pat", "main", wait=True, source_branch="feature-x")
+
+
+def test_run_without_wait_does_not_check_build_policy(monkeypatch, capsys) -> None:
+    _no_builds(monkeypatch, {"pullRequestId": 1, "title": "feat: x", "status": "active", "isDraft": False})
+    monkeypatch.setattr("bmsdna.devtools.pr_build.lacks_build_policy", lambda *a: pytest.fail("not needed without --wait"))
+    monkeypatch.setattr("bmsdna.devtools.pr_build.deploy_build_hint", lambda session, remote, target: None)
+
+    run(REMOTE, "fake-pat", "main", wait=False, source_branch="feature-x")
+
+    assert "No builds found" in capsys.readouterr().out
+
+
+def test_lacks_build_policy_fails_open_on_request_error() -> None:
+    """A failed lookup means "unknown": --wait must keep polling, not abort."""
+    session = MagicMock()
+    session.get.side_effect = requests.exceptions.Timeout("slow")
+
+    assert lacks_build_policy(session, REMOTE, "main") is False

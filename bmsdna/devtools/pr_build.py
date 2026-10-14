@@ -93,6 +93,23 @@ def policy_configs_include_branch(configs: list, repo_id: str, branch: str, defa
     return False
 
 
+def _build_policy_lookup(session: requests.Session, remote: AdoRemote, branch: str) -> bool:
+    """Whether `branch` has an enabled Build policy. Raises on request failure."""
+    r = session.get(
+        f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}",
+        params={"api-version": "7.1"},
+        timeout=HTTP_TIMEOUT_SECS,
+    )
+    r.raise_for_status()
+    repo = r.json()
+
+    r = session.get(f"{_base_url(remote)}/_apis/policy/configurations", params={"api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS)
+    r.raise_for_status()
+    configs = r.json().get("value", [])
+
+    return policy_configs_include_branch(configs, repo.get("id"), branch, repo.get("defaultBranch"))
+
+
 def has_build_policy(session: requests.Session, remote: AdoRemote, branch: str) -> bool:
     """Best-effort check for whether `branch` has an enabled Build policy configured.
 
@@ -101,21 +118,22 @@ def has_build_policy(session: requests.Session, remote: AdoRemote, branch: str) 
     (return False) rather than blocking PR creation.
     """
     try:
-        r = session.get(
-            f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}",
-            params={"api-version": "7.1"},
-            timeout=HTTP_TIMEOUT_SECS,
-        )
-        r.raise_for_status()
-        repo = r.json()
-
-        r = session.get(f"{_base_url(remote)}/_apis/policy/configurations", params={"api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS)
-        r.raise_for_status()
-        configs = r.json().get("value", [])
+        return _build_policy_lookup(session, remote, branch)
     except (requests.RequestException, SystemExit):
         return False
 
-    return policy_configs_include_branch(configs, repo.get("id"), branch, repo.get("defaultBranch"))
+
+def lacks_build_policy(session: requests.Session, remote: AdoRemote, branch: str) -> bool:
+    """True only when the policy lookup succeeded and `branch` has no enabled Build policy.
+
+    The opposite fail-open of `has_build_policy`: `pr status --wait` uses it to give up on a
+    PR that will never get a build, so a failed lookup (auth, permissions, network) must
+    mean "unknown, keep polling" rather than aborting a wait that might be fine.
+    """
+    try:
+        return not _build_policy_lookup(session, remote, branch)
+    except (requests.RequestException, SystemExit):
+        return False
 
 
 def merge_conflict_message(pr: dict) -> str | None:
@@ -841,6 +859,15 @@ def run(
                 return
         else:
             msg += " | No builds found."
+            # No build policy on the target means CI will never be triggered for this PR, so
+            # polling for a build would never end -- fail instead of hanging. With a policy the
+            # build just hasn't been queued yet (e.g. right after a push), so keep waiting.
+            if wait and target_branch and lacks_build_policy(session, remote, target_branch):
+                sys.exit(
+                    f"{msg}\n\nNo build policy is configured on target branch '{target_branch}', so no PR build "
+                    "will ever run -- `--wait` would poll forever. Add a Build validation branch policy, or "
+                    "drop --wait."
+                )
             if not wait:
                 print(msg)
                 # No PR-triggered builds at all is itself a settled state (e.g. this
