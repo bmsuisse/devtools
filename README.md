@@ -39,9 +39,13 @@ GitHub — whichever `origin` points at.
 bdt pr status [--target-branch BRANCH] [--wait]
 ```
 
-The `--target` / `--target-branch` option of `pr create/retry/publish/update/comment/watch-deploy` and `commit`
-defaults to `dev`; pass `--target main` (or whatever your PRs go into) to override. `pr status`, `pr info` and
-`issue take` only look a PR up, so by default they don't filter on the target branch at all.
+Every command that acts on an existing PR (`pr status/info/retry/publish/update/comment`, `issue take` without
+a number, and the draft conversion of `commit`) finds the PR opened from the current branch **into any target**:
+`--target` / `--target-branch` is only an optional filter. If the branch has **several open PRs** (say one into
+`dev` and one into `main`) it asks which one on a terminal, and fails listing them (id, target, title) when not
+interactive (an agent, CI): pass `--pr-id N` or `--target BRANCH` then. Exactly one open PR is used without asking.
+Only `pr create` and `pr watch-deploy`, which need a branch rather than a PR, default `--target` / `--target-branch`
+to `dev`.
 
 If the PR can't be merged, that's reported immediately instead of polling
 for builds/checks that will never run — e.g. on Azure DevOps:
@@ -64,16 +68,17 @@ one is also waiting on approval.
 caller's own `az login` — never embed a PAT literal in a script or CI file.
 `--target-branch` optionally restricts the lookup to PRs into that branch (default: any).
 
-**GitHub**: uses `gh`'s own auth (`gh auth login`) and always resolves the
-PR opened from the current branch — `gh pr view` has no target-branch
-filter, so `--target-branch` is ignored here; the PR's actual base branch
+**GitHub**: uses `gh`'s own auth (`gh auth login`) and resolves the open
+PR opened from the current branch (`gh pr list --head`, narrowed by
+`--target-branch` to that base branch if given; with none open, `gh pr view`
+finds a merged/closed one); the PR's actual base branch
 is shown in the output. Check status is computed from
 `gh pr view --json statusCheckRollup` rather than `gh pr checks --json`,
 since the latter flag isn't available in all `gh` releases.
 
 Pass `--pr-id <number>` to check a specific PR directly instead of resolving
 it from the current branch — useful when that PR's branch isn't checked out
-locally at all. `bdt pr retry`, `pr publish`, `pr update`, and `pr comment`
+locally at all (it also settles which PR when several are open for the branch). `bdt pr retry`, `pr publish`, `pr update`, and `pr comment`
 all accept the same option, for the same reason. (`pr watch-deploy` doesn't:
 it watches a branch-triggered build/workflow run, not any particular PR.)
 
@@ -103,7 +108,7 @@ PR opened from the current branch — not a whole new build/run. Whenever `bdt
 pr status` reports a failure, it prints a hint to run this.
 
 ```bash
-bdt pr retry [--target-branch dev]
+bdt pr retry [--target-branch BRANCH] [--pr-id N]
 ```
 
 No build/run ID needed — like `bdt pr status`, it resolves the PR (and its
@@ -608,8 +613,9 @@ If the pushed commit's type is `feat` and the current branch's PR is
 already published (not a draft), it's converted back to draft — a feature
 needs a fresh review pass before CI/merge, not just whatever review
 happened before the commit existed. Run `bdt pr publish` when it's ready
-again. Pass `--target`/`--pat` to resolve the PR on Azure DevOps (GitHub
-always resolves the current branch's PR directly).
+again. The PR is found like for `bdt pr status` (any target; `--target` narrows it, `--pat` for Azure DevOps).
+This step is best-effort, so with several open PRs for the branch a non-interactive run skips it rather than
+guessing; on a terminal it asks which one.
 
 Set `IS_BMS_AI_SANDBOX=1` to skip the push step (commit only) — used when
 an AI coding sandbox pushes on its own schedule separately. The draft
