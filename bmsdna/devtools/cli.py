@@ -1415,14 +1415,14 @@ def find_repo_cmd(
 @cleanup_app.command("worktrees")
 def cleanup_worktrees(
     root: Path = typer.Argument(Path("."), help="Root folder to scan for git repositories (recursively)"),
-    remote: str = typer.Option("origin", "--remote", help="Remote name whose main/test branches count as 'merged into' (falls back to local main/test if no such remote refs exist)"),
+    remote: str = typer.Option("origin", "--remote", help="Remote name whose main/test/dev branches count as 'merged into' (falls back to local main/test/dev if no such remote refs exist)"),
     keep_dbs: bool = typer.Option(False, "--keep-dbs", help="Don't drop a removed worktree's pgdevkit test DB(s) along with it"),
     yes: bool = typer.Option(False, "--yes", help="Actually remove; without this, only prints what would be removed"),
     pg_host: str = _PG_HOST_OPTION,
     pg_port: int = _PG_PORT_OPTION,
     pg_user: str | None = _PG_USER_OPTION,
 ) -> None:
-    """Find and remove git worktrees fully merged into main/test (and their pgdevkit test DB(s)), across every repo under root."""
+    """Find and remove git worktrees fully merged into main/test/dev (and their pgdevkit test DB(s)), across every repo under root."""
     worktree_mod.clean_worktrees(
         root, remote=remote, keep_dbs=keep_dbs, yes=yes, pg_host=pg_host, pg_port=pg_port, pg_user=pg_user or pgdevkit_constants.USER
     )
@@ -1475,7 +1475,7 @@ def cleanup_worktree(
     """Remove this one worktree (and, unless --keep-db, its pgdevkit test DB(s)) -- regardless of merge status.
 
     Meant to be run from inside the worktree to remove (default path is '.'). Refuses to touch
-    the main checkout, a protected branch (main/test), a locked worktree, or a dirty one. Always
+    the main checkout, a protected branch (main/test/dev), a locked worktree, or a dirty one. Always
     requires an explicit confirmation -- pass --confirm to skip the interactive prompt.
     """
     worktree_mod.clean_current_worktree(

@@ -1,7 +1,7 @@
 """Create a git worktree for a new branch, mirroring the `just worktree`
 recipes -- and, separately, `bdt cleanup worktrees` / `bdt cleanup
 orphaned-dbs` / `bdt cleanup db` / `bdt cleanup worktree`: pruning worktrees
-already merged into main/test (and their pgdevkit-managed Postgres test
+already merged into main/test/dev (and their pgdevkit-managed Postgres test
 DB(s), see testdb.py), sweeping for test DBs whose worktree is already gone
 some other way, dropping a single still-live worktree's own test DB(s) on
 demand, and tearing down one specific still-live worktree (regardless of
@@ -45,7 +45,7 @@ _SKIP_DIRS = {
 
 # A worktree on one of these branches is never offered for removal, merged
 # or not -- they're the long-lived branches everything else merges into.
-PROTECTED_BRANCHES = {"main", "test"}
+PROTECTED_BRANCHES = {"main", "test", "dev"}
 
 
 def _run(cmd: list[str], cwd: Path) -> None:
@@ -237,14 +237,14 @@ class Worktree:
 
 def collect_worktrees(repo: Path, remote: str) -> list[Worktree]:
     """List every worktree of `repo`, each annotated with which of
-    `<remote>/main`, `<remote>/test` (falling back to local `main`/`test` if
-    no such remote refs exist) its HEAD is merged into, and which pgdevkit
+    `<remote>/main`, `<remote>/test`, `<remote>/dev` (falling back to local
+    `main`/`test`/`dev` if no such remote refs exist) its HEAD is merged into, and which pgdevkit
     test DB name(s) it's expected to own."""
     entries = _parse_worktree_list(repo)
     if not entries:
         return []
 
-    candidate_refs = [f"{remote}/main", f"{remote}/test", "main", "test"]
+    candidate_refs = [f"{remote}/main", f"{remote}/test", f"{remote}/dev", "main", "test", "dev"]
     existing_refs = [r for r in candidate_refs if _ref_exists(repo, r)]
 
     worktrees: list[Worktree] = []
@@ -308,8 +308,8 @@ def remove_worktree(wt: Worktree, *, drop_dbs: bool, pg_host: str, pg_port: int,
 
 
 def clean_worktrees(root: Path, *, remote: str, keep_dbs: bool, yes: bool, pg_host: str, pg_port: int, pg_user: str) -> None:
-    """Find every worktree merged into `<remote>/main`/`<remote>/test` (or
-    local main/test) across every repo found under `root`, and remove them
+    """Find every worktree merged into `<remote>/main`/`<remote>/test`/`<remote>/dev`
+    (or local main/test/dev) across every repo found under `root`, and remove them
     (and, unless `keep_dbs`, their pgdevkit test DB(s)) -- but only when
     `yes` is set. Without it, this just prints what would be removed, same
     as `bdt issue delete` requiring an explicit `--yes` rather than an
@@ -337,7 +337,7 @@ def clean_worktrees(root: Path, *, remote: str, keep_dbs: bool, yes: bool, pg_ho
             if wt.locked:
                 reason.append("locked")
             if not wt.merged_into:
-                reason.append("not merged into main/test")
+                reason.append("not merged into main/test/dev")
             if reason:
                 skipped_notes.append(f"  skip {wt.path} ({', '.join(reason)})")
 
@@ -347,10 +347,10 @@ def clean_worktrees(root: Path, *, remote: str, keep_dbs: bool, yes: bool, pg_ho
         print()
 
     if not candidates:
-        print("No worktrees are fully merged into main/test. Nothing to do.")
+        print("No worktrees are fully merged into main/test/dev. Nothing to do.")
         return
 
-    print(f"Worktrees merged into {remote}/main or {remote}/test (removable):")
+    print(f"Worktrees merged into {remote}/main, {remote}/test or {remote}/dev (removable):")
     for wt in candidates:
         db_note = f", dbs: {', '.join(sorted(wt.db_names))}" if wt.db_names and not keep_dbs else ""
         print(f"  {wt.path}  (repo: {wt.repo}, branch: {wt.branch}{db_note})")
@@ -500,7 +500,7 @@ def clean_current_worktree(path: Path, *, confirm: bool, keep_db: bool, pg_host:
     plus, unless `keep_db`, its own pgdevkit test DB(s) -- meant to be run
     from inside that worktree, mirroring `clean_current_db`. Unlike
     `clean_worktrees`, this is an explicit, single-worktree teardown: it
-    doesn't require "merged into main/test" status, only that `path` isn't
+    doesn't require "merged into main/test/dev" status, only that `path` isn't
     the main checkout, isn't on a protected branch, and is clean (submodules
     included -- see `_is_dirty`).
 
