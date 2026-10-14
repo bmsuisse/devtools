@@ -1,6 +1,9 @@
 from pathlib import Path
 
-from bmsdna.devtools.lint_sql import check_sql_file
+import pytest
+
+from bmsdna.devtools.lint import run as lint_run
+from bmsdna.devtools.lint_sql import check_sql_file, load_sql_functions
 
 
 def _findings(source: str, path: Path) -> list:
@@ -960,24 +963,40 @@ async def a(cur, t):
     assert _rules(_findings("from arrowbricks import connect\n" + body, tmp_path / "ab.py")) == {"sql-fstring-injection"}
 
 
-def test_postgres_house_style_is_not_applied_to_arrowbricks_calls(tmp_path: Path) -> None:
+def test_house_style_is_applied_to_arrowbricks_calls_like_to_any_other_sql(tmp_path: Path) -> None:
     sql = "select a.x, b.y from a right join b on a.id = b.id where a.k = %s and a.m in (select m from c)\\n"
     source = f'''
 async def a(client, cur, x):
     await client.query_agent("{sql}")
     await cur.execute("{sql}")
-    await client.query_agent(f"select 1 from t where id = {{x}}")  # recognised: the injection rules do apply
+    await client.query_agent(f"select 1 from t where id = {{x}}")
 '''
     findings = _findings(source, tmp_path / "a.py")
-    assert {(f.line, f.rule) for f in findings} == {
-        (4, "sql-forbidden-join"),  # only the plain .execute() gets the psycopg house style, as before
-        (4, "sql-positional-param"),
-        (4, "sql-inline-too-complex"),
-        (5, "sql-fstring-injection"),
-    }
+    house_style = {"sql-forbidden-join", "sql-inline-too-complex"}
+    assert {(f.line, f.rule) for f in findings} == (
+        {(line, rule) for line in (3, 4) for rule in house_style}
+        | {(4, "sql-positional-param")}  # `%s` is no placeholder in a call known to be Databricks
+        | {(5, "sql-fstring-injection")}
+    )
 
 
-def test_long_sql_variable_passed_to_an_arrowbricks_call_is_not_too_complex(tmp_path: Path) -> None:
+def test_databricks_only_syntax_gets_the_complexity_rule_too(tmp_path: Path) -> None:
+    # Backticks and QUALIFY only parse as Databricks SQL: a long query like this must live in a .sql file as well.
+    source = '''
+async def a(client):
+    await client.query_agent("""
+        select `a`, `b`
+        from `t`
+        where `c` > 0
+        qualify row_number() over (partition by `a` order by `b`) = 1
+        order by `a`
+    """)
+    await client.query_agent("select `a` from `t`")
+'''
+    assert [(f.line, f.rule) for f in _findings(source, tmp_path / "a.py")] == [(3, "sql-inline-too-complex")]
+
+
+def test_long_sql_variable_passed_to_an_arrowbricks_call_is_too_complex_once(tmp_path: Path) -> None:
     source = '''
 LONG_SQL = """
     with a as (select 1 as x),
@@ -989,8 +1008,9 @@ LONG_SQL = """
 async def a(client, cur):
     await client.query_agent(LONG_SQL)
 '''
-    assert _findings(source, tmp_path / "a.py") == []
-    assert _rules(_findings(source.replace("client.query_agent(", "cur.execute("), tmp_path / "b.py")) == {"sql-inline-too-complex"}
+    for target in ("client.query_agent(", "cur.execute("):
+        findings = _findings(source.replace("client.query_agent(", target), tmp_path / "a.py")
+        assert [(f.line, f.rule) for f in findings] == [(2, "sql-inline-too-complex")]  # reported at the assignment, not again at the call
 
 
 def test_unsafe_sql_is_checked_like_cast_literal_string(tmp_path: Path) -> None:
@@ -1084,3 +1104,96 @@ async def f2(cur):
 '''.replace("LONG_SQL_PLACEHOLDER", '"""select a.x, b.x from a join b on a.x < b.x where a.x > 0"""')
     findings = _findings(source, tmp_path / "a.py")
     assert [f.rule for f in findings] == ["sql-inline-too-complex", "sql-inline-too-complex"]
+
+
+# --- project SQL helpers: [tool.bdt.lint] sql_functions ---------------------------------------------------------------------
+
+
+def _helper_findings(source: str, path: Path, names: tuple[str, ...] = ("run_query",)) -> list:
+    path.write_text(source)
+    return check_sql_file(path, sql_functions=names)
+
+
+def test_project_helper_takes_its_sql_as_the_first_argument(tmp_path: Path) -> None:
+    source = '''
+def a(conn, x):
+    run_query(f"select * from t where id = {x}", conn)
+    db.run_query("select a.x from a join b on a.id = b.id")
+    run_query(sql=f"select * from t where id = {x}")
+    run_query("select 1", f"{x}")
+'''
+    findings = _helper_findings(source, tmp_path / "a.py")
+    assert sorted((f.line, f.rule) for f in findings) == [(3, "sql-fstring-injection"), (4, "sql-inline-too-complex"), (5, "sql-fstring-injection")]
+
+
+def test_project_helper_is_ignored_unless_configured(tmp_path: Path) -> None:
+    source = '''
+def a(conn, x):
+    run_query(f"select * from t where id = {x}", conn)
+'''
+    assert _helper_findings(source, tmp_path / "a.py", names=()) == []
+    assert _helper_findings(source, tmp_path / "b.py", names=("other_helper",)) == []
+
+
+def test_project_helper_checks_resolved_variables_and_stays_quiet_on_parameters(tmp_path: Path) -> None:
+    source = '''
+def a(conn, x, sql):
+    query = "select * from t where id = " + x
+    run_query(query, conn)
+    run_query(sql, conn)
+    run_query(*args)
+    run_query(load_sql("a", "b"), conn)
+'''
+    assert [(f.line, f.rule) for f in _helper_findings(source, tmp_path / "a.py")] == [(4, "sql-concat-injection")]
+
+
+def test_project_helper_sql_may_be_databricks_in_an_arrowbricks_file(tmp_path: Path) -> None:
+    source = '''
+from arrowbricks import connect
+
+def a(conn, t):
+    run_query(f"select `a` from `{t}` qualify row_number() over (order by `a`) = 1", conn)
+'''
+    assert [f.rule for f in _helper_findings(source, tmp_path / "a.py")] == ["sql-fstring-injection"]
+
+
+def test_load_sql_functions_reads_the_lint_table(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.lint]\nsql_functions = ["run_query", "app.db.fetch_rows"]\n')
+    assert load_sql_functions(tmp_path) == {"run_query", "fetch_rows"}
+    (tmp_path / "pyproject.toml").write_text("[tool.bdt.lint]\n")
+    assert load_sql_functions(tmp_path) == frozenset()
+
+
+@pytest.mark.parametrize("value", ['"run_query"', "[1]", '[""]'])
+def test_load_sql_functions_rejects_a_malformed_setting(tmp_path: Path, value: str) -> None:
+    (tmp_path / "pyproject.toml").write_text(f"[tool.bdt.lint]\nsql_functions = {value}\n")
+    with pytest.raises(SystemExit, match="sql_functions"):
+        load_sql_functions(tmp_path)
+
+
+def test_bdt_lint_run_uses_the_configured_helpers(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.lint]\nsql_functions = ["run_query"]\nskip_tooling_check = true\n')
+    (tmp_path / "a.py").write_text('def a(conn, x):\n    run_query(f"select * from t where id = {x}", conn)\n')
+    result = lint_run([], root=tmp_path)
+    assert [(f.rule, f.line) for f in result.findings] == [("sql-fstring-injection", 2)]
+
+
+def test_forbidden_join_is_not_found_in_string_literals_or_comments(tmp_path: Path) -> None:
+    source = '''
+async def a(client, cur):
+    await client.query_agent("select 'right join' as note, `a` from `t`")
+    await cur.execute("select 'cross apply' as note from t")
+    await cur.execute("select a from t -- right join later")
+    await cur.execute("select a /* join lateral */ from t")
+    await cur.execute("select a from t right join u on t.id = u.id")
+'''
+    assert [f.line for f in _findings(source, tmp_path / "a.py") if f.rule == "sql-forbidden-join"] == [7]
+
+
+def test_percent_s_is_only_a_positional_param_where_it_can_be_a_placeholder(tmp_path: Path) -> None:
+    source = '''
+async def a(client, cur):
+    await client.query_agent("select a from t where b like \\'%s%\\'")
+    await cur.execute("select a from t where b = %s")
+'''
+    assert [(f.line, f.rule) for f in _findings(source, tmp_path / "a.py")] == [(4, "sql-positional-param")]
