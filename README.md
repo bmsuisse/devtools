@@ -482,8 +482,9 @@ bdt cleanup worktree [path] [--keep-db] [--confirm]
 
 The first two recursively scan every git repo under `root` (default: `.`)
 for worktrees. `bdt cleanup worktrees` prunes the ones fully merged into
-`<remote>/main`/`<remote>/test` (falling back to local `main`/`test` if no
-such remote refs exist) — e.g. a tree of `.worktrees/<branch>` directories
+`<remote>/main`/`<remote>/test`/`<remote>/dev` (falling back to local
+`main`/`test`/`dev` if no such remote refs exist; a branch that landed in
+`dev` counts even though it hasn't reached `main` yet) — e.g. a tree of `.worktrees/<branch>` directories
 accumulated across several repos over time. `bdt cleanup orphaned-dbs` has no
 `--remote`/merge-status notion at all: it just finds pgdevkit test DBs with
 no matching *live* git worktree, regardless of whether that worktree was
@@ -497,7 +498,7 @@ from inside the worktree in question, regardless of its merge status.
 `cleanup db` only drops that worktree's own pgdevkit test DB(s), leaving the
 worktree itself alone; `cleanup worktree` removes the worktree too (and,
 unless `--keep-db`, its DB(s) along with it) — refusing the main checkout, a
-protected branch (`main`/`test`), a locked worktree, or a dirty one
+protected branch (`main`/`test`/`dev`), a locked worktree, or a dirty one
 (submodules included). Since these two act on a single worktree a human
 picked out by hand, rather than scanning for candidates, they default to an
 interactive `y/N` confirmation instead of `--yes`; pass `--confirm` to skip
