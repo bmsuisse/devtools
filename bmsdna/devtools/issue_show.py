@@ -7,9 +7,14 @@ Backend-agnostic: `gh_issue.get_details` / `ado_issue.get_details` fetch the ite
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass, field
 
 from .issue_watch import Comment, format_comment
+
+# Control characters other than newline and tab: issue text is written by anyone, and a raw ESC sequence
+# printed to a terminal can rewrite what it shows (or trigger terminal features).
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
 
 @dataclass(frozen=True)
@@ -35,7 +40,7 @@ def _refs(numbers: list[int]) -> str:
 
 
 def format_details(details: IssueDetails, *, as_json: bool = False) -> str:
-    """The issue as one JSON document (`as_json`) or as readable text."""
+    """The issue as one JSON document (`as_json`, values unchanged) or as readable text (control characters shown escaped)."""
     if as_json:
         return json.dumps(asdict(details), ensure_ascii=False, indent=2)
     lines = [f"#{details.number} [{details.state}] {details.title}", details.url]
@@ -57,4 +62,4 @@ def format_details(details: IssueDetails, *, as_json: bool = False) -> str:
         lines += ["", f"Comments ({len(details.comments)}):"]
         for comment in details.comments:
             lines += ["", format_comment(comment)]
-    return "\n".join(lines)
+    return _CONTROL_CHARS_RE.sub(lambda m: f"\\x{ord(m.group()):02x}", "\n".join(lines))

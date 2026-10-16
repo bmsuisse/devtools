@@ -17,6 +17,7 @@ from bmsdna.devtools.ado_issue import (
     delete,
     delete_comment,
     get_details,
+    list_all_comments,
     search,
     update,
     update_comment,
@@ -647,3 +648,20 @@ def test_get_details_of_a_bare_work_item() -> None:
     assert details.tags == []
     assert details.comments == []
     assert details.body == ""
+
+
+def test_list_all_comments_follows_the_continuation_token() -> None:
+    pages = [
+        {"comments": [{"id": 1, "text": "one"}], "continuationToken": "tok"},
+        {"comments": [{"id": 2, "text": "two", "createdBy": {"displayName": "Bob"}}]},
+    ]
+    session = MagicMock()
+    session.get.side_effect = [FakeResponse(p) for p in pages]
+
+    comments = list_all_comments(session, REMOTE, 123)
+
+    assert [(c["id"], c["body"]) for c in comments] == [(1, "one"), (2, "two")]
+    first, second = (call.kwargs["params"] for call in session.get.call_args_list)
+    assert first["order"] == "asc"
+    assert "continuationToken" not in first
+    assert second["continuationToken"] == "tok"

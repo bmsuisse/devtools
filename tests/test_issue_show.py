@@ -46,3 +46,14 @@ def test_format_details_json_is_one_document_with_all_fields() -> None:
     assert data["blocked_by"] == [7]
     assert data["fields"]["Type"] == "Bug"
     assert data["comments"] == [{"id": 1, "author": "Bob", "created_at": "2026-01-02", "url": "https://example.test/12#c1", "body": "first"}]
+
+
+def test_format_details_text_escapes_terminal_control_characters_but_json_keeps_them() -> None:
+    evil = IssueDetails(number=1, title="t\x1b[2J", state="New", url="u", body="line1\nline2\ttab\x07", tags=[])
+
+    text = format_details(evil)
+
+    assert "\x1b" not in text and "\x07" not in text
+    assert "t\\x1b[2J" in text
+    assert "line1\nline2\ttab" in text
+    assert json.loads(format_details(evil, as_json=True))["title"] == "t\x1b[2J"

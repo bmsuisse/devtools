@@ -356,7 +356,7 @@ def get_details(session: requests.Session, remote: AdoRemote, work_item_id: int)
         blocked_by=linked(BLOCKED_BY_REL),
         blocks=linked(BLOCKS_REL),
         related=linked(RELATED_REL),
-        comments=to_comments(list_comments(session, remote, work_item_id), is_html=True),
+        comments=to_comments(list_all_comments(session, remote, work_item_id), is_html=True),
     )
 
 
@@ -490,16 +490,38 @@ def list_comments(session: requests.Session, remote: AdoRemote, work_item_id: in
     )
     r.raise_for_status()
     url = edit_url(remote, work_item_id)
-    return [
-        {
-            "id": c["id"],
-            "author": (c.get("createdBy") or {}).get("displayName") or "unknown",
-            "created_at": c.get("createdDate") or "",
-            "url": url,
-            "body": c.get("text") or "",
-        }
-        for c in reversed(r.json().get("comments") or [])
-    ]
+    return [_comment_dict(c, url) for c in reversed(r.json().get("comments") or [])]
+
+
+def _comment_dict(comment: dict, url: str) -> dict:
+    return {
+        "id": comment["id"],
+        "author": (comment.get("createdBy") or {}).get("displayName") or "unknown",
+        "created_at": comment.get("createdDate") or "",
+        "url": url,
+        "body": comment.get("text") or "",
+    }
+
+
+def list_all_comments(session: requests.Session, remote: AdoRemote, work_item_id: int) -> list[dict]:
+    """Every comment on the work item, oldest first, as `list_comments` returns them -- which is
+    capped to the newest `_LIST_COMMENTS_TOP`, enough for a watcher but not for showing the item.
+    """
+    url = edit_url(remote, work_item_id)
+    comments: list[dict] = []
+    token: str | None = None
+    while True:
+        params = {"api-version": COMMENTS_API_VERSION, "$top": 200, "order": "asc"}
+        if token:
+            params["continuationToken"] = token
+        r = session.get(f"{_base_url(remote)}/_apis/wit/workItems/{work_item_id}/comments", params=params)
+        r.raise_for_status()
+        body = r.json()
+        comments += [_comment_dict(c, url) for c in body.get("comments") or []]
+        next_token = body.get("continuationToken")
+        if not next_token or next_token == token:
+            return comments
+        token = next_token
 
 
 def update_comment(session: requests.Session, remote: AdoRemote, work_item_id: int, comment_id: int, text: str) -> dict:
