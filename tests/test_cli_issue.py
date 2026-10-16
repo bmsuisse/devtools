@@ -18,6 +18,7 @@ GitHub issue #49:
 
 import re
 
+import pytest
 from typer.testing import CliRunner
 
 from bmsdna.devtools.cli import _merge_tags_and_labels, app
@@ -333,3 +334,44 @@ def test_issue_update_omitting_tag_and_label_leaves_ado_tags_untouched(monkeypat
     assert result.exit_code == 0, result.output
     assert captured["tags"] is None
     assert captured["remove_tags"] is None
+
+
+def _ado_remote_with_config(monkeypatch, tmp_path, config: str) -> None:
+    (tmp_path / "pyproject.toml").write_text(config)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: AdoRemote("myorg", "MyProj", "myrepo"))
+    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+
+
+def test_issue_create_ado_fails_without_board_when_required(monkeypatch, tmp_path) -> None:
+    _ado_remote_with_config(monkeypatch, tmp_path, "[tool.bdt.ado]\nrequire_board = true\n")
+    monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.create", lambda *a, **k: pytest.fail("must not create"))
+
+    result = runner.invoke(app, ["issue", "create", "--title", "t"])
+
+    assert result.exit_code != 0
+
+
+def test_issue_create_ado_uses_canonical_allowed_board(monkeypatch, tmp_path) -> None:
+    _ado_remote_with_config(monkeypatch, tmp_path, "[tool.bdt.ado]\nrequire_board = true\nallowed_boards = ['Data Team']\n")
+    captured: dict = {}
+
+    def fake_create(session, remote, work_item_type, title, description, board, tags, screenshot_paths, file_paths):
+        captured["board"] = board
+        return {"id": 1}
+
+    monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.create", fake_create)
+
+    result = runner.invoke(app, ["issue", "create", "--title", "t", "--board", "data team"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["board"] == "Data Team"
+
+
+def test_issue_update_ado_rejects_disallowed_board(monkeypatch, tmp_path) -> None:
+    _ado_remote_with_config(monkeypatch, tmp_path, "[tool.bdt.ado]\nallowed_boards = ['Data Team']\n")
+    monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.update", lambda *a, **k: pytest.fail("must not update"))
+
+    result = runner.invoke(app, ["issue", "update", "1", "--board", "Other Team"])
+
+    assert result.exit_code != 0

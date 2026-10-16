@@ -286,6 +286,19 @@ project's root area:
 board = "My Team"
 ```
 
+To make the board mandatory on `create`, or to restrict which boards may be
+used, add `require_board` and/or `allowed_boards` (team names, matched
+case-insensitively). `allowed_boards` is checked against `--board` and the
+configured default `board` alike, on both `create` and `update`; it doesn't
+force a board by itself — add `require_board = true` for that:
+
+```toml
+[tool.bdt.ado]
+board = "Data Team"
+require_board = true
+allowed_boards = ["Data Team", "Web Team"]
+```
+
 On `update`, `--board` only moves the item when you pass it explicitly — it
 never falls back to `pyproject.toml`, so an unrelated field update (e.g.
 just `--title`) can't silently relocate the item to a different board.

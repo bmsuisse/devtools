@@ -62,6 +62,38 @@ def resolve_board(board: str | None, start: Path | None = None) -> str | None:
     return board or load_bdt_table("ado", start).get("board")
 
 
+def check_board(board: str | None, start: Path | None = None, *, creating: bool = False) -> str | None:
+    """Enforce `[tool.bdt.ado]`'s `allowed_boards` / `require_board` on an already-resolved `board`
+    (see `resolve_board`) and return the board to use, in the casing the config spells it.
+
+    `allowed_boards` restricts the board (team) to one of the listed names, case-insensitively —
+    whether it came from `--board` or from the configured default `board`. `require_board` makes
+    `create` fail unless a board resolved at all; it's only checked when `creating`, since `update`
+    never touches the area unless `--board` is given explicitly.
+    """
+    config = load_bdt_table("ado", start)
+    allowed = config.get("allowed_boards", [])
+    # An explicitly configured but empty list is a misconfiguration, not "no restriction" — silently
+    # allowing every board would defeat the point of having configured an allowlist.
+    if "allowed_boards" in config and (not isinstance(allowed, list) or not allowed or not all(isinstance(a, str) for a in allowed)):
+        sys.exit("[tool.bdt.ado].allowed_boards in pyproject.toml must be a non-empty list of board/team names.")
+    require = config.get("require_board", False)
+    if not isinstance(require, bool):
+        sys.exit("[tool.bdt.ado].require_board in pyproject.toml must be true or false.")
+    if creating and require and not board:
+        hint = f" Allowed boards: {', '.join(allowed)}." if allowed else ""
+        sys.exit(
+            "An Azure Boards board is required to file a work item here: pass --board <team> "
+            f"or set [tool.bdt.ado].board in pyproject.toml.{hint}"
+        )
+    if board and allowed:
+        match = next((a for a in allowed if a.casefold() == board.casefold()), None)
+        if match is None:
+            sys.exit(f"Board '{board}' isn't allowed here (see [tool.bdt.ado].allowed_boards). Allowed boards: {', '.join(allowed)}.")
+        return match
+    return board
+
+
 def _org_url(remote: AdoRemote) -> str:
     return f"https://dev.azure.com/{quote(remote.org, safe='')}"
 

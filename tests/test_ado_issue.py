@@ -9,6 +9,7 @@ from bmsdna.devtools.ado_issue import (
     build_create_ops,
     build_search_wiql,
     build_update_ops,
+    check_board,
     edit_url,
     get_work_item_tags,
     get_work_items,
@@ -44,6 +45,63 @@ def test_resolve_board_none_when_neither_set(tmp_path) -> None:
 
 def test_resolve_board_none_when_no_pyproject(tmp_path) -> None:
     assert resolve_board(None, tmp_path / "nonexistent") is None
+
+
+def test_check_board_passes_through_without_config(tmp_path) -> None:
+    assert check_board("Any Team", tmp_path, creating=True) == "Any Team"
+    assert check_board(None, tmp_path, creating=True) is None
+
+
+def test_check_board_require_board_fails_create_without_board(tmp_path) -> None:
+    write_pyproject(tmp_path, "[tool.bdt.ado]\nrequire_board = true\n")
+    with pytest.raises(SystemExit, match="board is required"):
+        check_board(None, tmp_path, creating=True)
+    assert check_board("Some Team", tmp_path, creating=True) == "Some Team"
+
+
+def test_check_board_require_board_does_not_apply_to_update(tmp_path) -> None:
+    write_pyproject(tmp_path, "[tool.bdt.ado]\nrequire_board = true\n")
+    assert check_board(None, tmp_path) is None
+
+
+def test_check_board_allowed_boards_accepts_listed_case_insensitively(tmp_path) -> None:
+    write_pyproject(tmp_path, "[tool.bdt.ado]\nallowed_boards = ['Data Team', 'Web Team']\n")
+    assert check_board("web team", tmp_path, creating=True) == "Web Team"
+
+
+def test_check_board_allowed_boards_rejects_unlisted_and_names_the_allowed(tmp_path) -> None:
+    write_pyproject(tmp_path, "[tool.bdt.ado]\nallowed_boards = ['Data Team', 'Web Team']\n")
+    with pytest.raises(SystemExit, match="Data Team, Web Team"):
+        check_board("Other Team", tmp_path)
+
+
+def test_check_board_allowed_boards_does_not_require_a_board(tmp_path) -> None:
+    write_pyproject(tmp_path, "[tool.bdt.ado]\nallowed_boards = ['Data Team']\n")
+    assert check_board(None, tmp_path, creating=True) is None
+
+
+def test_check_board_validates_the_configured_default_board_too(tmp_path) -> None:
+    write_pyproject(tmp_path, "[tool.bdt.ado]\nboard = 'Old Team'\nallowed_boards = ['Data Team']\n")
+    with pytest.raises(SystemExit, match="isn't allowed"):
+        check_board(resolve_board(None, tmp_path), tmp_path, creating=True)
+
+
+def test_check_board_rejects_malformed_allowed_boards(tmp_path) -> None:
+    write_pyproject(tmp_path, "[tool.bdt.ado]\nallowed_boards = 'Data Team'\n")
+    with pytest.raises(SystemExit, match="non-empty list"):
+        check_board("Data Team", tmp_path)
+
+
+def test_check_board_rejects_empty_allowed_boards(tmp_path) -> None:
+    write_pyproject(tmp_path, "[tool.bdt.ado]\nallowed_boards = []\n")
+    with pytest.raises(SystemExit, match="non-empty list"):
+        check_board("Data Team", tmp_path)
+
+
+def test_check_board_rejects_non_boolean_require_board(tmp_path) -> None:
+    write_pyproject(tmp_path, "[tool.bdt.ado]\nrequire_board = 'false'\n")
+    with pytest.raises(SystemExit, match="true or false"):
+        check_board(None, tmp_path, creating=True)
 
 
 def test_build_create_ops_title_only() -> None:
