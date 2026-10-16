@@ -16,6 +16,7 @@ GitHub issue #49:
    tags vs GitHub labels), instead of being silently ignored by the other backend.
 """
 
+import json
 import re
 
 import pytest
@@ -242,7 +243,7 @@ def test_issue_create_merges_tag_and_label_for_github(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     captured: dict = {}
 
-    def fake_create(gh, owner, repo, title, description, labels, screenshot_paths, extra_args, file_paths=None, board=None):
+    def fake_create(gh, owner, repo, title, description, labels, screenshot_paths, extra_args, file_paths=None, board=None, parent=None, blocked_by=None):
         captured["labels"] = labels
         return None
 
@@ -260,7 +261,7 @@ def test_issue_create_merges_tag_and_label_for_ado(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
     captured: dict = {}
 
-    def fake_create(session, remote, work_item_type, title, description, board, tags, screenshot_paths, file_paths):
+    def fake_create(session, remote, work_item_type, title, description, board, tags, screenshot_paths, file_paths, iteration=None, parent=None, blocked_by=None):
         captured["tags"] = tags
         return {"id": 1}
 
@@ -278,7 +279,7 @@ def test_issue_update_merges_tag_label_and_remove_tag_remove_label_for_github(mo
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     captured: dict = {}
 
-    def fake_update(gh, number, title, description, add_labels, remove_labels, state):
+    def fake_update(gh, number, title, description, add_labels, remove_labels, state, parent=None, blocked_by=None):
         captured.update(add_labels=add_labels, remove_labels=remove_labels)
 
     monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.update", fake_update)
@@ -299,7 +300,7 @@ def test_issue_update_merges_tag_label_and_remove_tag_remove_label_for_ado(monke
     monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
     captured: dict = {}
 
-    def fake_update(session, remote, number, title, description, board, tags, remove_tags, state):
+    def fake_update(session, remote, number, title, description, board, tags, remove_tags, state, iteration=None, parent=None, blocked_by=None):
         captured.update(tags=tags, remove_tags=remove_tags)
         return {"id": number}
 
@@ -323,7 +324,7 @@ def test_issue_update_omitting_tag_and_label_leaves_ado_tags_untouched(monkeypat
     monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
     captured: dict = {}
 
-    def fake_update(session, remote, number, title, description, board, tags, remove_tags, state):
+    def fake_update(session, remote, number, title, description, board, tags, remove_tags, state, iteration=None, parent=None, blocked_by=None):
         captured.update(tags=tags, remove_tags=remove_tags)
         return {"id": number}
 
@@ -356,7 +357,7 @@ def test_issue_create_ado_uses_canonical_allowed_board(monkeypatch, tmp_path) ->
     _ado_remote_with_config(monkeypatch, tmp_path, "[tool.bdt.ado]\nrequire_board = true\nallowed_boards = ['Data Team']\n")
     captured: dict = {}
 
-    def fake_create(session, remote, work_item_type, title, description, board, tags, screenshot_paths, file_paths):
+    def fake_create(session, remote, work_item_type, title, description, board, tags, screenshot_paths, file_paths, iteration=None, parent=None, blocked_by=None):
         captured["board"] = board
         return {"id": 1}
 
@@ -375,3 +376,146 @@ def test_issue_update_ado_rejects_disallowed_board(monkeypatch, tmp_path) -> Non
     result = runner.invoke(app, ["issue", "update", "1", "--board", "Other Team"])
 
     assert result.exit_code != 0
+
+
+# -- issue show / --iteration / --parent / --blocked-by -----------------------
+
+
+def _github(monkeypatch) -> None:
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GitHubRemote("owner", "repo"))
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+
+
+def test_issue_show_github_prints_text_and_json(monkeypatch) -> None:
+    from bmsdna.devtools.issue_show import IssueDetails
+
+    _github(monkeypatch)
+    details = IssueDetails(number=7, title="Widget", state="OPEN", url="https://github.com/owner/repo/issues/7", body="It breaks", tags=["bug"], parent=3)
+    captured: dict = {}
+
+    def fake_get_details(gh, owner, repo, number):
+        captured.update(owner=owner, repo=repo, number=number)
+        return details
+
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.get_details", fake_get_details)
+
+    text = runner.invoke(app, ["issue", "show", "7"])
+    as_json = runner.invoke(app, ["issue", "show", "7", "--json"])
+
+    assert text.exit_code == 0, text.output
+    assert captured == {"owner": "owner", "repo": "repo", "number": 7}
+    assert "#7 [OPEN] Widget" in text.output
+    assert "Parent: #3" in text.output
+    assert as_json.exit_code == 0, as_json.output
+    assert json.loads(as_json.output)["parent"] == 3
+
+
+def test_issue_show_ado(monkeypatch) -> None:
+    from bmsdna.devtools.issue_show import IssueDetails
+
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: AdoRemote("myorg", "MyProj", "myrepo"))
+    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    captured: dict = {}
+
+    def fake_get_details(session, remote, number):
+        captured.update(remote=remote, number=number)
+        return IssueDetails(number=number, title="Task", state="Active", url="u", body="", tags=[], fields={"Iteration": "MyProj\\Sprint 1"})
+
+    monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.get_details", fake_get_details)
+
+    result = runner.invoke(app, ["issue", "show", "12"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["number"] == 12
+    assert "Iteration: MyProj\\Sprint 1" in result.output
+
+
+def test_issue_create_ado_passes_iteration_parent_and_blockers(monkeypatch) -> None:
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: AdoRemote("myorg", "MyProj", "myrepo"))
+    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    captured: dict = {}
+
+    def fake_create(session, remote, work_item_type, title, description, board, tags, screenshot_paths, file_paths, iteration=None, parent=None, blocked_by=None):
+        captured.update(iteration=iteration, parent=parent, blocked_by=blocked_by)
+        return {"id": 1}
+
+    monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.create", fake_create)
+
+    result = runner.invoke(
+        app, ["issue", "create", "--title", "t", "--iteration", "MyProj\\Sprint 1", "--parent", "5", "--blocked-by", "7", "--blocked-by", "8"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {"iteration": "MyProj\\Sprint 1", "parent": 5, "blocked_by": [7, 8]}
+
+
+def test_issue_create_ado_iteration_defaults_to_pyproject(monkeypatch, tmp_path) -> None:
+    _ado_remote_with_config(monkeypatch, tmp_path, "[tool.bdt.ado]\niteration = 'MyProj\\Sprint 9'\n")
+    captured: dict = {}
+
+    def fake_create(session, remote, work_item_type, title, description, board, tags, screenshot_paths, file_paths, iteration=None, parent=None, blocked_by=None):
+        captured["iteration"] = iteration
+        return {"id": 1}
+
+    monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.create", fake_create)
+
+    assert runner.invoke(app, ["issue", "create", "--title", "t"]).exit_code == 0
+    assert captured["iteration"] == "MyProj\\Sprint 9"
+    assert runner.invoke(app, ["issue", "create", "--title", "t", "--iteration", "MyProj\\Sprint 1"]).exit_code == 0
+    assert captured["iteration"] == "MyProj\\Sprint 1"
+
+
+def test_issue_update_ado_iteration_does_not_default_to_pyproject(monkeypatch, tmp_path) -> None:
+    _ado_remote_with_config(monkeypatch, tmp_path, "[tool.bdt.ado]\niteration = 'MyProj\\Sprint 9'\n")
+    captured: dict = {}
+
+    def fake_update(session, remote, number, title, description, board, tags, remove_tags, state, iteration=None, parent=None, blocked_by=None):
+        captured.update(iteration=iteration, parent=parent, blocked_by=blocked_by)
+
+    monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.update", fake_update)
+
+    assert runner.invoke(app, ["issue", "update", "1", "--title", "t"]).exit_code == 0
+    assert captured["iteration"] is None
+    result = runner.invoke(app, ["issue", "update", "1", "--iteration", "MyProj\\Sprint 2", "--parent", "5", "--blocked-by", "7"])
+    assert result.exit_code == 0, result.output
+    assert captured == {"iteration": "MyProj\\Sprint 2", "parent": 5, "blocked_by": [7]}
+
+
+def test_issue_create_github_passes_parent_and_blockers(monkeypatch) -> None:
+    _github(monkeypatch)
+    captured: dict = {}
+
+    def fake_create(gh, owner, repo, title, description, labels, screenshot_paths, extra_args, file_paths=None, board=None, parent=None, blocked_by=None):
+        captured.update(parent=parent, blocked_by=blocked_by)
+
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.create", fake_create)
+
+    result = runner.invoke(app, ["issue", "create", "--title", "t", "--parent", "5", "--blocked-by", "7"])
+
+    assert result.exit_code == 0, result.output
+    assert captured == {"parent": 5, "blocked_by": [7]}
+
+
+def test_issue_update_github_passes_parent_and_blockers(monkeypatch) -> None:
+    _github(monkeypatch)
+    captured: dict = {}
+
+    def fake_update(gh, number, title, description, add_labels, remove_labels, state, parent=None, blocked_by=None):
+        captured.update(parent=parent, blocked_by=blocked_by)
+
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.update", fake_update)
+
+    result = runner.invoke(app, ["issue", "update", "1", "--parent", "5", "--blocked-by", "7", "--blocked-by", "8"])
+
+    assert result.exit_code == 0, result.output
+    assert captured == {"parent": 5, "blocked_by": [7, 8]}
+
+
+def test_issue_create_and_update_github_reject_iteration(monkeypatch) -> None:
+    """GitHub issues have no iteration (Azure DevOps only): usage error (2), nothing created."""
+    _github(monkeypatch)
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.create", lambda *a, **k: pytest.fail("must not create"))
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.update", lambda *a, **k: pytest.fail("must not update"))
+
+    assert runner.invoke(app, ["issue", "create", "--title", "t", "--iteration", "Sprint 1"]).exit_code == 2
+    assert runner.invoke(app, ["issue", "update", "1", "--iteration", "Sprint 1"]).exit_code == 2

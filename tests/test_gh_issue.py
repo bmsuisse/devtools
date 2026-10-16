@@ -10,6 +10,7 @@ from bmsdna.devtools.gh_issue import (
     comment,
     create,
     ensure_pr_available_label,
+    get_details,
     parse_comment_id,
     parse_issue_number,
     resolve_board,
@@ -493,3 +494,118 @@ def test_add_pr_available_label_adds_the_label_to_the_issue(monkeypatch) -> None
     edit_cmd = next(cmd for cmd in captured_cmds if cmd[1:3] == ["issue", "edit"])
     assert edit_cmd[3] == "42"
     assert edit_cmd[edit_cmd.index("--add-label") + 1] == "pr-available"
+
+
+def _fake_gh(monkeypatch, responses: dict[str, str] | None = None) -> list[list[str]]:
+    """Capture every `gh` call; `responses` maps a subcommand ("issue view", "api", ...) to its stdout."""
+    cmds: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        cmds.append(cmd)
+        return MagicMock(returncode=0, stdout=(responses or {}).get(" ".join(cmd[1:3]), ""), stderr="")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
+    return cmds
+
+
+def test_create_with_parent_and_blockers_passes_the_gh_flags(monkeypatch) -> None:
+    cmds = _fake_gh(monkeypatch, {"issue create": "https://github.com/owner/repo/issues/42\n"})
+
+    create("gh", "owner", "repo", "Title", "body", [], [], [], parent=5, blocked_by=[7, 8, 7])
+
+    create_cmd = cmds[0]
+    assert create_cmd[create_cmd.index("--parent") + 1] == "5"
+    assert [create_cmd[i + 1] for i, arg in enumerate(create_cmd) if arg == "--blocked-by"] == ["7", "8"]
+
+
+def test_create_without_links_omits_the_link_flags(monkeypatch) -> None:
+    cmds = _fake_gh(monkeypatch, {"issue create": "https://github.com/owner/repo/issues/42\n"})
+
+    create("gh", "owner", "repo", "Title", "body", [], [], [])
+
+    assert "--parent" not in cmds[0]
+    assert "--blocked-by" not in cmds[0]
+
+
+_NO_LINKS = '{"parent": null, "blockedBy": {"nodes": [], "totalCount": 0}}'
+
+
+def test_update_links_parent_and_blockers_that_are_missing(monkeypatch) -> None:
+    cmds = _fake_gh(monkeypatch, {"issue view": _NO_LINKS})
+
+    update("gh", 42, parent=5, blocked_by=[7, 8])
+
+    assert cmds[0] == ["gh", "issue", "view", "42", "--json", "parent,blockedBy"]
+    assert cmds[1] == ["gh", "issue", "edit", "42", "--parent", "5", "--add-blocked-by", "7", "--add-blocked-by", "8"]
+    assert len(cmds) == 2
+
+
+def test_update_skips_links_that_already_exist(monkeypatch, capsys) -> None:
+    current = '{"parent": {"number": 5}, "blockedBy": {"nodes": [{"number": 7}], "totalCount": 1}}'
+    cmds = _fake_gh(monkeypatch, {"issue view": current})
+
+    update("gh", 42, parent=5, blocked_by=[7])
+
+    assert [c[1:3] for c in cmds] == [["issue", "view"]]  # no edit at all
+    assert "nothing to do" in capsys.readouterr().out
+
+
+def test_update_only_adds_the_blockers_that_are_missing_and_replaces_a_different_parent(monkeypatch) -> None:
+    current = '{"parent": {"number": 4}, "blockedBy": {"nodes": [{"number": 7}], "totalCount": 1}}'
+    cmds = _fake_gh(monkeypatch, {"issue view": current})
+
+    update("gh", 42, parent=5, blocked_by=[7, 8])
+
+    assert cmds[1] == ["gh", "issue", "edit", "42", "--parent", "5", "--add-blocked-by", "8"]
+
+
+def test_update_links_alongside_other_fields_in_one_edit(monkeypatch) -> None:
+    cmds = _fake_gh(monkeypatch, {"issue view": _NO_LINKS})
+
+    update("gh", 42, title="New", blocked_by=[7])
+
+    assert cmds[1] == ["gh", "issue", "edit", "42", "--title", "New", "--add-blocked-by", "7"]
+
+
+def test_update_rejects_linking_an_issue_to_itself(monkeypatch) -> None:
+    cmds = _fake_gh(monkeypatch)
+
+    with pytest.raises(SystemExit):
+        update("gh", 42, parent=42)
+    assert cmds == []
+
+
+def test_get_details_maps_gh_json_and_comments(monkeypatch) -> None:
+    view = (
+        '{"number": 42, "title": "Widget", "state": "OPEN", "url": "https://github.com/owner/repo/issues/42", "body": "It breaks",'
+        ' "labels": [{"name": "bug"}], "assignees": [{"login": "jane"}], "milestone": {"title": "v1"},'
+        ' "parent": {"number": 5}, "subIssues": {"nodes": [{"number": 9}], "totalCount": 1},'
+        ' "blockedBy": {"nodes": [{"number": 7}], "totalCount": 1}, "blocking": {"nodes": [{"number": 10}], "totalCount": 1}}'
+    )
+    comments = '{"id": 1, "author": "bob", "created_at": "2026-01-02", "url": "https://github.com/owner/repo/issues/42#issuecomment-1", "body": "hi"}'
+    cmds = _fake_gh(monkeypatch, {"issue view": view, "api --paginate": comments})
+
+    details = get_details("gh", "owner", "repo", 42)
+
+    assert cmds[0][:5] == ["gh", "issue", "view", "42", "--repo"]
+    assert cmds[0][5] == "owner/repo"
+    assert (details.number, details.title, details.state, details.body) == (42, "Widget", "OPEN", "It breaks")
+    assert details.tags == ["bug"]
+    assert details.fields == {"Assignees": "jane", "Milestone": "v1"}
+    assert (details.parent, details.children, details.blocked_by, details.blocks) == (5, [9], [7], [10])
+    assert [(c.id, c.author, c.body) for c in details.comments] == [(1, "bob", "hi")]
+
+
+def test_get_details_of_a_bare_issue(monkeypatch) -> None:
+    view = (
+        '{"number": 1, "title": "t", "state": "CLOSED", "url": "u", "body": "", "labels": [], "assignees": [], "milestone": null,'
+        ' "parent": null, "subIssues": {"nodes": [], "totalCount": 0}, "blockedBy": {"nodes": [], "totalCount": 0},'
+        ' "blocking": {"nodes": [], "totalCount": 0}}'
+    )
+    _fake_gh(monkeypatch, {"issue view": view})
+
+    details = get_details("gh", "owner", "repo", 1)
+
+    assert details.parent is None
+    assert details.children == details.blocked_by == details.blocks == []
+    assert details.comments == []

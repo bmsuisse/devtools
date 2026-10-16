@@ -26,6 +26,7 @@ from . import find_repo as find_repo_mod
 from . import issue_do as issue_do_mod
 from . import issue_watch as issue_watch_mod
 from . import gh_issue, gh_pr
+from . import issue_show as issue_show_mod
 from . import find_injection as find_injection_mod
 from . import lint as lint_mod
 from . import logs as logs_mod
@@ -209,6 +210,15 @@ def _merge_tags_and_labels(tag: list[str] | None, label: list[str] | None) -> li
             seen.add(value.casefold())
             merged.append(value)
     return merged
+
+
+def _reject_ado_only_options(**options: object) -> None:
+    """GitHub has no counterpart of these `issue create/update` options (Azure DevOps only): fail up front
+    instead of silently dropping them."""
+    for name, value in options.items():
+        if value:
+            flag = "--" + name.replace("_", "-")
+            raise typer.BadParameter(f"{flag} is only supported for Azure DevOps work items, not GitHub issues.", param_hint=flag)
 
 
 def _link_and_label_github(gh: str, remote: GitHubRemote, issue_numbers: list[int]) -> None:
@@ -653,6 +663,18 @@ def issue_create(
     file: list[str] = typer.Option(
         [], "--file", help="Path to an arbitrary file to attach to the issue / work item as a linked attachment (repeatable)"
     ),
+    iteration: str | None = typer.Option(
+        None,
+        "--iteration",
+        help=r"Iteration (sprint) Path to set, e.g. 'MyProject\Sprint 1' (Azure DevOps only; overrides \[tool.bdt.ado].iteration "
+        "in pyproject.toml). Work items without one don't show on the team backlog in Basic-process projects.",
+    ),
+    parent: int | None = typer.Option(
+        None, "--parent", help="Make the new issue / work item a child (sub-issue) of this issue / work item ID"
+    ),
+    blocked_by: list[int] = typer.Option(
+        [], "--blocked-by", help="Issue / work item ID blocking the new one -- its predecessor on Azure DevOps (repeatable)"
+    ),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -672,15 +694,20 @@ def issue_create(
     tags_or_labels = _merge_tags_and_labels(tag, label) or []
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
+        _reject_ado_only_options(iteration=iteration)
         resolved_board = gh_issue.resolve_board(board)
         gh_issue.create(
-            require_gh(), remote.owner, remote.repo, title, description, tags_or_labels, screenshot, args or [], file_paths=file, board=resolved_board
+            require_gh(), remote.owner, remote.repo, title, description, tags_or_labels, screenshot, args or [], file_paths=file, board=resolved_board,
+            parent=parent, blocked_by=blocked_by,
         )
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
         resolved_board = ado_issue.check_board(ado_issue.resolve_board(board), creating=True)
-        ado_issue.create(session, remote, type_, title, description, resolved_board, tags_or_labels, screenshot, file)
+        ado_issue.create(
+            session, remote, type_, title, description, resolved_board, tags_or_labels, screenshot, file,
+            iteration=ado_issue.resolve_iteration(iteration), parent=parent, blocked_by=blocked_by,
+        )
 
 
 @issue_app.command("search")
@@ -1131,6 +1158,30 @@ issue_app.command("watch")(issue_watch)
 app.command("watch-issue", help="Alias for `bdt issue watch`")(issue_watch)
 
 
+@issue_app.command("show")
+def issue_show(
+    number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
+    as_json: bool = typer.Option(False, "--json", help="Print one JSON document instead of text"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else falls back to `az` login)",
+    ),
+) -> None:
+    """Show an issue / work item (Azure DevOps or GitHub, auto-detected): state, title, description, tags,
+    area / iteration (Azure DevOps), links to other issues / work items (parent, children, blocked by, blocks) and comments.
+    """
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        details = gh_issue.get_details(require_gh(), remote.owner, remote.repo, number)
+    else:
+        session = requests.Session()
+        session.headers.update(auth_header(pat))
+        details = ado_issue.get_details(session, remote, number)
+    typer.echo(issue_show_mod.format_details(details, as_json=as_json))
+
+
 @issue_app.command("update")
 def issue_update(
     number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
@@ -1170,6 +1221,20 @@ def issue_update(
     remove_label: list[str] | None = typer.Option(
         None, "--remove-label", help="Tag/label to remove (repeatable). Alias for --remove-tag."
     ),
+    iteration: str | None = typer.Option(
+        None,
+        "--iteration",
+        help=r"Move the work item to this Iteration (sprint) Path, e.g. 'MyProject\Sprint 1' (Azure DevOps only). Like --board, "
+        r"only applied when given here -- it does not fall back to \[tool.bdt.ado].iteration.",
+    ),
+    parent: int | None = typer.Option(
+        None,
+        "--parent",
+        help="Make this issue / work item a child (sub-issue) of this issue / work item ID; on Azure DevOps, replaces its current parent",
+    ),
+    blocked_by: list[int] = typer.Option(
+        [], "--blocked-by", help="Issue / work item ID blocking this one -- its predecessor on Azure DevOps (repeatable). Already-set links are left alone."
+    ),
     pat: str | None = typer.Option(
         None,
         "--pat",
@@ -1182,11 +1247,15 @@ def issue_update(
     removals = _merge_tags_and_labels(remove_tag, remove_label)
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
-        gh_issue.update(require_gh(), number, title, description, tags_or_labels, removals, state)
+        _reject_ado_only_options(iteration=iteration)
+        gh_issue.update(require_gh(), number, title, description, tags_or_labels, removals, state, parent, blocked_by)
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
-        ado_issue.update(session, remote, number, title, description, ado_issue.check_board(board), tags_or_labels, removals, state)
+        ado_issue.update(
+            session, remote, number, title, description, ado_issue.check_board(board), tags_or_labels, removals, state,
+            iteration=iteration, parent=parent, blocked_by=blocked_by,
+        )
 
 
 @issue_app.command("delete")

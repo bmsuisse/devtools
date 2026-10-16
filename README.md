@@ -233,11 +233,14 @@ create prints a reminder to run `bdt pr status` afterward to check whether
 the CI build passes. This is a best-effort check — failures reading policy
 config (auth, permissions) fail open and simply skip the reminder.
 
-## `bdt issue create` / `update` / `delete`, `bdt issue comment add` / `update` / `delete`
+## `bdt issue create` / `show` / `update` / `delete`, `bdt issue comment add` / `update` / `delete`
 
 ```bash
 bdt issue create --title "Nightly job fails" --description "..." --type Bug --screenshot before.png
+bdt issue create --title "Add retries" --type Task --iteration 'MyProject\Sprint 1' --parent 1200 --blocked-by 1210
+bdt issue show 1234 [--json]
 bdt issue update 1234 --state Resolved --tag fixed
+bdt issue update 1234 --iteration 'MyProject\Sprint 2' --parent 1200 --blocked-by 1210 --blocked-by 1211
 bdt issue delete 1234 --yes
 
 bdt issue comment add 1234 --message "Repro'd, see attached" --screenshot repro.png
@@ -249,6 +252,17 @@ Creates/updates/deletes an issue (GitHub) or work item (Azure DevOps), and
 adds/edits/deletes comments on one, auto-detected from `origin` like `bdt pr
 *`. `bdt issue comment add` prints the new comment's ID so you can pass it to
 `update`/`delete` later.
+
+`issue show NUMBER` prints one issue / work item: state, title, URL, description, tags, links to other
+issues (parent, children, blocked by, blocks; related on Azure DevOps), the Azure DevOps Type / Area /
+Iteration / Assigned to (GitHub: assignees, milestone) and all comments (Azure DevOps HTML is shown as plain
+text). `--json` prints the same as one JSON document (`number, title, state, url, body, tags, fields,
+parent, children, blocked_by, blocks, related, comments`).
+
+`--parent ID` and `--blocked-by ID` (repeatable) on `create` and `update` link the item to its parent and to
+the issues / work items that block it, on both backends. On `update` only the links that are missing are
+added, so repeating a command is harmless (like `--tag`); `--parent` replaces a different current parent.
+They only ever add links: removing one still goes through the web UI.
 
 Destructive commands (`issue delete`, `issue comment delete`) require an
 explicit `--yes` — there's no interactive confirmation prompt, since `bdt` is
@@ -275,6 +289,17 @@ defaults to HTML via the REST API, where a raw `![]()` would just show as
 literal text, but the work item Discussion/Comments control has always
 rendered Markdown. `issue delete` soft-deletes to the project's Recycle Bin
 (restorable, not permanent).
+
+`--iteration <path>` on `create` and `update` sets `System.IterationPath`, e.g. `'MyProject\Sprint 1'` (in
+Basic-process projects a work item without an iteration doesn't show on the team backlog). It is Azure DevOps
+only: on a GitHub repo it fails with a usage error (exit 2) instead of being ignored. On `create` it defaults
+to `[tool.bdt.ado].iteration` from `pyproject.toml`; on `update` it is only applied when given. `bdt` doesn't
+look up the board team's current iteration, so name the path yourself:
+
+```toml
+[tool.bdt.ado]
+iteration = 'MyProject\Sprint 1'   # single quotes: TOML takes the backslash literally
+```
 
 `--board <team>` sets the work item's Area Path to that Azure Boards team's
 default, so it shows up on that team's board — a CLI flag beats
@@ -314,6 +339,11 @@ Comment update/delete go through `gh api` directly (`gh issue` has no
 subcommand for editing/deleting an arbitrary comment by ID). Extra arguments
 to `bdt issue create` pass through to `gh issue create`, e.g.
 `bdt issue create --title "..." -- --assignee @me`.
+
+`--parent` / `--blocked-by` use GitHub's sub-issues and issue dependencies (`gh issue create --parent` /
+`--blocked-by`, `gh issue edit --parent` / `--add-blocked-by`), which need a recent `gh`; `issue show` reads
+them with `gh issue view --json parent,subIssues,blockedBy,blocking`. `--iteration` isn't supported: a
+GitHub Projects (v2) iteration is a per-project field, not a property of the issue.
 
 `--board <name>` on `create` adds the issue to that GitHub Projects (v2)
 board by title (needs a token with the `project` scope — `gh auth refresh -s
