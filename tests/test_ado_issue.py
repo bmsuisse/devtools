@@ -88,8 +88,20 @@ def test_check_board_validates_the_configured_default_board_too(tmp_path) -> Non
 
 def test_check_board_rejects_malformed_allowed_boards(tmp_path) -> None:
     write_pyproject(tmp_path, "[tool.bdt.ado]\nallowed_boards = 'Data Team'\n")
-    with pytest.raises(SystemExit, match="must be a list"):
+    with pytest.raises(SystemExit, match="non-empty list"):
         check_board("Data Team", tmp_path)
+
+
+def test_check_board_rejects_empty_allowed_boards(tmp_path) -> None:
+    write_pyproject(tmp_path, "[tool.bdt.ado]\nallowed_boards = []\n")
+    with pytest.raises(SystemExit, match="non-empty list"):
+        check_board("Data Team", tmp_path)
+
+
+def test_check_board_rejects_non_boolean_require_board(tmp_path) -> None:
+    write_pyproject(tmp_path, "[tool.bdt.ado]\nrequire_board = 'false'\n")
+    with pytest.raises(SystemExit, match="true or false"):
+        check_board(None, tmp_path, creating=True)
 
 
 def test_build_create_ops_title_only() -> None:

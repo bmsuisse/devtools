@@ -72,10 +72,15 @@ def check_board(board: str | None, start: Path | None = None, *, creating: bool 
     never touches the area unless `--board` is given explicitly.
     """
     config = load_bdt_table("ado", start)
-    allowed = config.get("allowed_boards") or []
-    if not isinstance(allowed, list) or not all(isinstance(a, str) for a in allowed):
-        sys.exit("[tool.bdt.ado].allowed_boards in pyproject.toml must be a list of board/team names.")
-    if creating and config.get("require_board") and not board:
+    allowed = config.get("allowed_boards", [])
+    # An explicitly configured but empty list is a misconfiguration, not "no restriction" — silently
+    # allowing every board would defeat the point of having configured an allowlist.
+    if "allowed_boards" in config and (not isinstance(allowed, list) or not allowed or not all(isinstance(a, str) for a in allowed)):
+        sys.exit("[tool.bdt.ado].allowed_boards in pyproject.toml must be a non-empty list of board/team names.")
+    require = config.get("require_board", False)
+    if not isinstance(require, bool):
+        sys.exit("[tool.bdt.ado].require_board in pyproject.toml must be true or false.")
+    if creating and require and not board:
         hint = f" Allowed boards: {', '.join(allowed)}." if allowed else ""
         sys.exit(
             "An Azure Boards board is required to file a work item here: pass --board <team> "
