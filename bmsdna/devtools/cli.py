@@ -679,7 +679,7 @@ def issue_create(
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
-        resolved_board = ado_issue.resolve_board(board)
+        resolved_board = ado_issue.check_board(ado_issue.resolve_board(board), creating=True)
         ado_issue.create(session, remote, type_, title, description, resolved_board, tags_or_labels, screenshot, file)
 
 
@@ -1186,7 +1186,7 @@ def issue_update(
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
-        ado_issue.update(session, remote, number, title, description, board, tags_or_labels, removals, state)
+        ado_issue.update(session, remote, number, title, description, ado_issue.check_board(board), tags_or_labels, removals, state)
 
 
 @issue_app.command("delete")
