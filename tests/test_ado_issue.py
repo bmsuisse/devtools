@@ -5,8 +5,11 @@ import pytest
 from bmsdna.devtools.ado_issue import (
     add_pr_available_tag,
     add_tag,
+    BLOCKED_BY_REL,
+    PARENT_REL,
     build_attach_ops,
     build_create_ops,
+    build_relation_ops,
     build_search_wiql,
     build_update_ops,
     check_board,
@@ -15,6 +18,7 @@ from bmsdna.devtools.ado_issue import (
     get_work_items,
     html_url,
     resolve_board,
+    resolve_iteration,
     run_wiql,
     search,
     upload_attachment,
@@ -437,3 +441,85 @@ def test_add_pr_available_tag_uses_the_shared_label_constant() -> None:
     ops = session.patch.call_args.kwargs["json"]
     tags_op = next(op for op in ops if op["path"] == "/fields/System.Tags")
     assert tags_op["value"] == "pr-available"
+
+
+def test_resolve_iteration_param_wins_over_pyproject(tmp_path) -> None:
+    write_pyproject(tmp_path, "[tool.bdt.ado]\niteration = 'MyProj\\Sprint 1'\n")
+    assert resolve_iteration("MyProj\\Sprint 2", tmp_path) == "MyProj\\Sprint 2"
+
+
+def test_resolve_iteration_falls_back_to_pyproject(tmp_path) -> None:
+    write_pyproject(tmp_path, "[tool.bdt.ado]\niteration = 'MyProj\\Sprint 1'\n")
+    assert resolve_iteration(None, tmp_path) == "MyProj\\Sprint 1"
+
+
+def test_resolve_iteration_none_when_neither_given(tmp_path) -> None:
+    write_pyproject(tmp_path, "[tool.bdt.ado]\nboard = 'Team'\n")
+    assert resolve_iteration(None, tmp_path) is None
+
+
+def test_build_create_ops_sets_iteration_path() -> None:
+    ops = build_create_ops("Title", iteration_path="MyProj\\Sprint 1")
+    assert {"op": "add", "path": "/fields/System.IterationPath", "value": "MyProj\\Sprint 1"} in ops
+
+
+def test_build_update_ops_sets_iteration_path_only_when_given() -> None:
+    assert build_update_ops(iteration_path="MyProj\\Sprint 1") == [
+        {"op": "add", "path": "/fields/System.IterationPath", "value": "MyProj\\Sprint 1"}
+    ]
+    assert build_update_ops(title="t") == [{"op": "add", "path": "/fields/System.Title", "value": "t"}]
+
+
+def test_build_create_and_update_ops_append_relation_ops_after_the_fields() -> None:
+    relation_ops = build_relation_ops(REMOTE, parent=5)
+    assert build_create_ops("Title", relation_ops=relation_ops)[-1] == relation_ops[0]
+    assert build_update_ops(title="t", relation_ops=relation_ops)[-1] == relation_ops[0]
+
+
+def _link(rel: str, work_item_id: int) -> dict:
+    # what `$expand=relations` returns: the link target is addressed by its API url, usually via the project's GUID
+    return {"rel": rel, "url": f"https://dev.azure.com/myorg/0000-guid/_apis/wit/workItems/{work_item_id}", "attributes": {}}
+
+
+def test_build_relation_ops_links_parent_and_blockers_as_reverse_links() -> None:
+    ops = build_relation_ops(REMOTE, parent=5, blocked_by=[7, 8])
+
+    assert ops == [
+        {"op": "add", "path": "/relations/-", "value": {"rel": "System.LinkTypes.Hierarchy-Reverse", "url": "https://dev.azure.com/myorg/_apis/wit/workItems/5"}},
+        {"op": "add", "path": "/relations/-", "value": {"rel": "System.LinkTypes.Dependency-Reverse", "url": "https://dev.azure.com/myorg/_apis/wit/workItems/7"}},
+        {"op": "add", "path": "/relations/-", "value": {"rel": "System.LinkTypes.Dependency-Reverse", "url": "https://dev.azure.com/myorg/_apis/wit/workItems/8"}},
+    ]
+
+
+def test_build_relation_ops_nothing_requested_is_empty() -> None:
+    assert build_relation_ops(REMOTE) == []
+    assert build_relation_ops(REMOTE, blocked_by=[]) == []
+
+
+def test_build_relation_ops_dedupes_repeated_blockers() -> None:
+    assert len(build_relation_ops(REMOTE, blocked_by=[7, 7])) == 1
+
+
+def test_build_relation_ops_skips_links_that_already_exist() -> None:
+    existing = [_link("AttachedFile", 99), _link(PARENT_REL, 5), _link(BLOCKED_BY_REL, 7)]
+
+    assert build_relation_ops(REMOTE, parent=5, blocked_by=[7], existing=existing) == []
+    ops = build_relation_ops(REMOTE, parent=5, blocked_by=[7, 8], existing=existing)
+    assert [op["value"]["url"].rsplit("/", 1)[-1] for op in ops] == ["8"]
+
+
+def test_build_relation_ops_blocked_by_does_not_match_a_link_of_another_type() -> None:
+    # #7 is already this item's *child*, which doesn't make it a blocker
+    existing = [_link("System.LinkTypes.Hierarchy-Forward", 7)]
+    assert len(build_relation_ops(REMOTE, blocked_by=[7], existing=existing)) == 1
+
+
+def test_build_relation_ops_replaces_a_different_parent() -> None:
+    existing = [_link("AttachedFile", 99), _link(PARENT_REL, 4)]
+
+    ops = build_relation_ops(REMOTE, parent=5, existing=existing)
+
+    assert ops[0] == {"op": "remove", "path": "/relations/1"}  # index in the full relations list, attachments included
+    assert ops[1]["value"]["rel"] == PARENT_REL
+    assert ops[1]["value"]["url"].endswith("/workItems/5")
+    assert len(ops) == 2

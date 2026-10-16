@@ -16,6 +16,7 @@ from bmsdna.devtools.ado_issue import (
     create,
     delete,
     delete_comment,
+    get_details,
     search,
     update,
     update_comment,
@@ -491,3 +492,158 @@ def test_update_with_nothing_given_still_errors() -> None:
 
     with pytest.raises(SystemExit):
         update(session, REMOTE, 42)
+
+
+def _parent_link(work_item_id: int) -> dict:
+    return {"rel": "System.LinkTypes.Hierarchy-Reverse", "url": f"https://dev.azure.com/myorg/guid/_apis/wit/workItems/{work_item_id}"}
+
+
+def _blocker_link(work_item_id: int) -> dict:
+    return {"rel": "System.LinkTypes.Dependency-Reverse", "url": f"https://dev.azure.com/myorg/guid/_apis/wit/workItems/{work_item_id}"}
+
+
+def test_create_sets_iteration_parent_and_blockers_in_the_create_patch() -> None:
+    session = make_session()
+
+    create(session, REMOTE, "Task", "Do it", None, None, [], [], iteration="MyProj\\Sprint 1", parent=5, blocked_by=[7, 8])
+
+    ops = session.post.call_args.kwargs["json"]
+    assert {"op": "add", "path": "/fields/System.IterationPath", "value": "MyProj\\Sprint 1"} in ops
+    relations = [op["value"] for op in ops if op["path"] == "/relations/-"]
+    assert [(r["rel"], r["url"].rsplit("/", 1)[-1]) for r in relations] == [
+        ("System.LinkTypes.Hierarchy-Reverse", "5"),
+        ("System.LinkTypes.Dependency-Reverse", "7"),
+        ("System.LinkTypes.Dependency-Reverse", "8"),
+    ]
+    session.get.assert_not_called()  # nothing to read first on a new work item
+
+
+def test_create_without_iteration_or_links_sends_neither() -> None:
+    session = make_session()
+
+    create(session, REMOTE, "Task", "Do it", None, None, [], [])
+
+    ops = session.post.call_args.kwargs["json"]
+    assert [op["path"] for op in ops] == ["/fields/System.Title"]
+
+
+def test_update_iteration_only_patches_the_field_without_reading_relations() -> None:
+    session = make_session()
+
+    update(session, REMOTE, 123, iteration="MyProj\\Sprint 2")
+
+    session.get.assert_not_called()
+    assert session.patch.call_args.kwargs["json"] == [
+        {"op": "add", "path": "/fields/System.IterationPath", "value": "MyProj\\Sprint 2"}
+    ]
+
+
+def test_update_parent_and_blockers_read_relations_then_add_the_missing_links() -> None:
+    session = make_session(get_map={"/_apis/wit/workitems/123": {"relations": []}})
+
+    update(session, REMOTE, 123, parent=5, blocked_by=[7])
+
+    get = session.get.call_args
+    assert get.args[0].endswith("/myorg/MyProj/_apis/wit/workitems/123")
+    assert get.kwargs["params"]["$expand"] == "relations"
+    ops = session.patch.call_args.kwargs["json"]
+    assert [(op["op"], op["value"]["rel"], op["value"]["url"]) for op in ops] == [
+        ("add", "System.LinkTypes.Hierarchy-Reverse", "https://dev.azure.com/myorg/_apis/wit/workItems/5"),
+        ("add", "System.LinkTypes.Dependency-Reverse", "https://dev.azure.com/myorg/_apis/wit/workItems/7"),
+    ]
+
+
+def test_update_relations_already_present_is_a_noop() -> None:
+    """Like `add_tag`: re-running the same link update neither PATCHes nor fails on a duplicate link."""
+    session = make_session(get_map={"/_apis/wit/workitems/123": {"relations": [_parent_link(5), _blocker_link(7)]}})
+
+    result = update(session, REMOTE, 123, parent=5, blocked_by=[7])
+
+    assert result is None
+    session.patch.assert_not_called()
+
+
+def test_update_only_adds_the_blockers_that_are_missing() -> None:
+    session = make_session(get_map={"/_apis/wit/workitems/123": {"relations": [_blocker_link(7)]}})
+
+    update(session, REMOTE, 123, blocked_by=[7, 8])
+
+    ops = session.patch.call_args.kwargs["json"]
+    assert [op["value"]["url"].rsplit("/", 1)[-1] for op in ops] == ["8"]
+
+
+def test_update_replaces_a_different_parent() -> None:
+    session = make_session(get_map={"/_apis/wit/workitems/123": {"relations": [{"rel": "AttachedFile", "url": "https://x/attachments/1"}, _parent_link(4)]}})
+
+    update(session, REMOTE, 123, parent=5)
+
+    ops = session.patch.call_args.kwargs["json"]
+    assert ops[0] == {"op": "remove", "path": "/relations/1"}
+    assert ops[1]["value"]["url"].endswith("/workItems/5")
+
+
+def test_update_relations_already_present_still_applies_other_given_fields() -> None:
+    session = make_session(get_map={"/_apis/wit/workitems/123": {"relations": [_parent_link(5)]}})
+
+    update(session, REMOTE, 123, title="New title", parent=5)
+
+    assert session.patch.call_args.kwargs["json"] == [{"op": "add", "path": "/fields/System.Title", "value": "New title"}]
+
+
+def test_update_rejects_linking_a_work_item_to_itself() -> None:
+    session = make_session()
+
+    with pytest.raises(SystemExit):
+        update(session, REMOTE, 123, parent=123)
+    with pytest.raises(SystemExit):
+        update(session, REMOTE, 123, blocked_by=[123])
+    session.patch.assert_not_called()
+
+
+def test_get_details_collects_fields_links_and_comments() -> None:
+    work_item = {
+        "id": 123,
+        "fields": {
+            "System.Title": "Widget is broken",
+            "System.State": "Active",
+            "System.WorkItemType": "Bug",
+            "System.AreaPath": "MyProj\\Team",
+            "System.IterationPath": "MyProj\\Sprint 1",
+            "System.Tags": "a; b",
+            "System.Description": "<div>It <b>breaks</b><br>often</div>",
+            "System.AssignedTo": {"displayName": "Jane Doe"},
+        },
+        "relations": [
+            {"rel": "AttachedFile", "url": "https://dev.azure.com/myorg/_apis/wit/attachments/abc"},
+            _parent_link(5),
+            {"rel": "System.LinkTypes.Hierarchy-Forward", "url": "https://dev.azure.com/myorg/guid/_apis/wit/workItems/9"},
+            _blocker_link(7),
+            {"rel": "System.LinkTypes.Dependency-Forward", "url": "https://dev.azure.com/myorg/guid/_apis/wit/workItems/10"},
+            {"rel": "System.LinkTypes.Related", "url": "https://dev.azure.com/myorg/guid/_apis/wit/workItems/11"},
+        ],
+    }
+    comments = {"comments": [{"id": 2, "text": "<div>second</div>", "createdBy": {"displayName": "Bob"}, "createdDate": "2026-01-02"}]}
+    session = make_session(get_map={"/_apis/wit/workitems/123": work_item, "/_apis/wit/workItems/123/comments": comments})
+
+    details = get_details(session, REMOTE, 123)
+
+    assert (details.number, details.title, details.state) == (123, "Widget is broken", "Active")
+    assert details.url == "https://dev.azure.com/myorg/MyProj/_workitems/edit/123"
+    assert details.tags == ["a", "b"]
+    assert details.body == "It breaks\noften"
+    assert details.fields == {"Type": "Bug", "Area": "MyProj\\Team", "Iteration": "MyProj\\Sprint 1", "Assigned to": "Jane Doe"}
+    assert (details.parent, details.children, details.blocked_by, details.blocks, details.related) == (5, [9], [7], [10], [11])
+    assert [(c.id, c.author, c.body) for c in details.comments] == [(2, "Bob", "second")]
+
+
+def test_get_details_of_a_bare_work_item() -> None:
+    session = make_session(
+        get_map={"/_apis/wit/workitems/123": {"fields": {"System.Title": "t", "System.State": "New"}}, "/_apis/wit/workItems/123/comments": {"comments": []}}
+    )
+
+    details = get_details(session, REMOTE, 123)
+
+    assert details.parent is None
+    assert details.tags == []
+    assert details.comments == []
+    assert details.body == ""

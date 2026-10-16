@@ -28,6 +28,8 @@ from pathlib import Path
 from .bdt_config import load_bdt_table
 from .cli_tools import ensure_agent_session_note
 from .gh_pr import push_assets
+from .issue_show import IssueDetails
+from .issue_watch import to_comments
 from .pr_issue_link import PR_AVAILABLE_LABEL
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
@@ -138,12 +140,15 @@ def create(
     extra_args: list[str],
     file_paths: list[str] | None = None,
     board: str | None = None,
+    parent: int | None = None,
+    blocked_by: list[int] | None = None,
 ) -> None:
     """Create a GitHub issue, then (if any) attach screenshots/files as a follow-up edit.
 
     `board` adds the issue to that GitHub Projects (v2) board by title (`gh issue create
     --project` takes a name, not a number -- unlike board-scoped search, which needs the number
-    to query the board's items).
+    to query the board's items). `parent` makes it a sub-issue of that issue and `blocked_by`
+    marks it as blocked by those issues (`gh issue create --parent` / `--blocked-by`).
     """
     file_paths = file_paths or []
     body = ensure_agent_session_note(body, also_check=title)
@@ -152,6 +157,10 @@ def create(
         args += ["--label", label]
     if board:
         args += ["--project", board]
+    if parent is not None:
+        args += ["--parent", str(parent)]
+    for blocker in dict.fromkeys(blocked_by or []):
+        args += ["--blocked-by", str(blocker)]
     args += extra_args
 
     url = _run_gh(gh, args)
@@ -369,7 +378,13 @@ def update(
     add_labels: list[str] | None = None,
     remove_labels: list[str] | None = None,
     state: str | None = None,
+    parent: int | None = None,
+    blocked_by: list[int] | None = None,
 ) -> None:
+    """`parent` / `blocked_by` link the issue to its parent issue / the issues blocking it, adding
+    only what isn't there yet (see `_link_args`) -- like Azure DevOps' `add_tag`, so repeating an
+    update doesn't send, or fail on, a link that already exists.
+    """
     args = ["issue", "edit", str(number)]
     if title is not None:
         args += ["--title", title]
@@ -379,14 +394,74 @@ def update(
         args += ["--add-label", label]
     for label in remove_labels or []:
         args += ["--remove-label", label]
+    has_link_change = parent is not None or bool(blocked_by)
+    if has_link_change:
+        if number == parent or number in (blocked_by or []):
+            sys.exit(f"Issue #{number} can't be linked to itself.")
+        args += _link_args(gh, number, parent, blocked_by)
     if len(args) == 3 and state is None:
-        sys.exit("Nothing to update — provide at least one of --title, --description, --label, --remove-label, --state.")
+        if not has_link_change:
+            sys.exit(
+                "Nothing to update — provide at least one of --title, --description, --label, --remove-label, --state, "
+                "--parent, --blocked-by."
+            )
+        print(f"Issue #{number}: already linked as requested — nothing to do.")
+        return
 
     if len(args) > 3:
         _run_gh(gh, args)
     if state is not None:
         _set_state(gh, number, state)
     print(f"Updated issue #{number}")
+
+
+def _numbers(connection: dict | None) -> list[int]:
+    """The issue numbers of a `gh issue view --json` connection field (`{"nodes": [{"number": ...}]}`)."""
+    return [n["number"] for n in (connection or {}).get("nodes") or [] if n.get("number") is not None]
+
+
+def _link_args(gh: str, number: int, parent: int | None, blocked_by: list[int] | None) -> list[str]:
+    """The `gh issue edit` flags still needed to link issue `number` to `parent` and to `blocked_by`."""
+    current = json.loads(_run_gh(gh, ["issue", "view", str(number), "--json", "parent,blockedBy"]))
+    args: list[str] = []
+    if parent is not None and parent != (current.get("parent") or {}).get("number"):
+        args += ["--parent", str(parent)]
+    already_blocked_by = set(_numbers(current.get("blockedBy")))
+    for blocker in dict.fromkeys(blocked_by or []):
+        if blocker not in already_blocked_by:
+            args += ["--add-blocked-by", str(blocker)]
+    return args
+
+
+def get_details(gh: str, owner: str, repo: str, number: int) -> IssueDetails:
+    """What `bdt issue show` prints for an issue: its fields, links (parent / sub-issues / blocked-by /
+    blocking) and comments."""
+    out = _run_gh(
+        gh,
+        [
+            "issue", "view", str(number), "--repo", f"{owner}/{repo}", "--json",
+            "number,title,state,url,body,labels,assignees,milestone,parent,subIssues,blockedBy,blocking",
+        ],
+    )
+    data = json.loads(out)
+    parent = data.get("parent") or {}
+    return IssueDetails(
+        number=data["number"],
+        title=data["title"],
+        state=data["state"],
+        url=data["url"],
+        body=data.get("body") or "",
+        tags=[label["name"] for label in data.get("labels") or []],
+        fields={
+            "Assignees": ", ".join(a["login"] for a in data.get("assignees") or []),
+            "Milestone": (data.get("milestone") or {}).get("title"),
+        },
+        parent=parent.get("number"),
+        children=_numbers(data.get("subIssues")),
+        blocked_by=_numbers(data.get("blockedBy")),
+        blocks=_numbers(data.get("blocking")),
+        comments=to_comments(list_comments(gh, owner, repo, number)),
+    )
 
 
 def delete(gh: str, number: int) -> None:
