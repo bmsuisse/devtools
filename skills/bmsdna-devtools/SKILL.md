@@ -35,7 +35,7 @@ CLI to install rather than trying to work around it.
 ## Checking PR build/check status
 
 ```bash
-bdt pr status [--target-branch BRANCH] [--pr-id N] [--wait]
+bdt pr status [--target-branch BRANCH] [--pr-id N] [--wait [--timeout SECONDS]]
 ```
 
 Finds the PR opened from the current branch and prints build/check status,
@@ -47,6 +47,10 @@ immediately instead of waiting for builds that will never run — check the
 error message for `mergeStatus=conflicts` (ADO) or `mergeable=CONFLICTING`
 (GitHub) and tell the user to resolve conflicts rather than assuming CI is
 just slow.
+
+Where your shell tool has a time limit shorter than CI (it kills the command and drops its output), run
+`bdt pr status --wait --timeout 540` (seconds, below the limit): after that long it prints the current state and
+exits 4 — just run the same command again to keep waiting. Exit 3 = a stage needs a human's approval.
 
 `pr status`, `info`, `retry`, `publish`, `update`, `comment` (and `issue take`
 without a number) find the PR opened from the current branch into **any**

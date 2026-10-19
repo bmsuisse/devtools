@@ -32,7 +32,7 @@ def test_pr_status_with_pr_id_passes_it_to_gh_pr_run(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     captured = {}
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.run", lambda gh, wait, pr_id=None: captured.update(gh=gh, wait=wait, pr_id=pr_id))
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.run", lambda gh, wait, pr_id=None, timeout=0: captured.update(gh=gh, wait=wait, pr_id=pr_id))
 
     result = runner.invoke(app, ["pr", "status", "--pr-id", "99"])
 
@@ -144,7 +144,7 @@ def test_pr_status_with_pr_id_skips_branch_resolution_for_ado(monkeypatch) -> No
     captured = {}
     monkeypatch.setattr(
         "bmsdna.devtools.cli.pr_build.run",
-        lambda remote, pat, target_branch, wait, pr_id=None: captured.update(remote=remote, pr_id=pr_id),
+        lambda remote, pat, target_branch, wait, pr_id=None, timeout=0: captured.update(remote=remote, pr_id=pr_id),
     )
 
     result = runner.invoke(app, ["pr", "status", "--pr-id", "99"])
