@@ -37,7 +37,7 @@ from .ado_auth import auth_header
 from .bdt_config import find_pyproject, load_bdt_table
 from .cli_tools import CLI_TIMEOUT_SECS, EXIT_WAIT_TIMEOUT, detect_agent_session, require_gh
 from .github_api import GitHubClient
-from .pr_create_args import PrCreateArgsError, parse_pr_create_args, resolve_body, unsupported_notes
+from .pr_create_args import PrCreateArgsError, extract_labels, parse_pr_create_args, resolve_body, unsupported_notes
 from .usage.cli import usage_app
 from .gitrepo import (
     AdoRemote,
@@ -227,16 +227,16 @@ def _reject_ado_only_options(**options: object) -> None:
             raise typer.BadParameter(f"{flag} is only supported for Azure DevOps work items, not GitHub issues.", param_hint=flag)
 
 
-def _link_and_label_github(gh: GitHubClient, remote: GitHubRemote, issue_numbers: list[int]) -> None:
+def _link_and_label_github(gh: GitHubClient, remote: GitHubRemote, issue_numbers: list[int], pr_id: int | None = None) -> None:
     """Link every issue in `issue_numbers`, plus every issue `find_issue_refs_in_body` finds in
-    the PR's actual body, to the current branch's PR, and label each `pr-available`.
+    the PR's actual body, to PR `pr_id` (else the current branch's PR), and label each `pr-available`.
 
     Best-effort per issue -- one bad/inaccessible issue number shouldn't stop the others from
     being linked/labeled; failures are collected and surfaced together to the caller (which
     wraps this in `_after_create`, so they're reported as a warning, not a failed `pr create`).
     A no-op (no `gh` calls at all) when there's nothing to link.
     """
-    pr_number, body = gh_pr.get_pr_body(gh)
+    pr_number, body = gh_pr.get_pr_body(gh, pr_id)
     all_numbers = list(dict.fromkeys([*issue_numbers, *pr_issue_link.find_issue_refs_in_body(body, remote)]))
     if not all_numbers:
         return
@@ -339,7 +339,7 @@ def pr_create(
             print(f"Auto-applying label '{auto_label}' for scope '{scope}' ([tool.bdt.pr.scope_labels])")
             label = [*label, auto_label]
 
-    missing_groups = pr_labels.missing_label_groups(pr_labels.required_label_groups(), label)
+    missing_groups = pr_labels.missing_label_groups(pr_labels.required_label_groups(), [*label, *extract_labels(args or [])])
     if missing_groups:
         raise typer.BadParameter(pr_labels.format_missing_groups_error(missing_groups), param_hint="--label")
 
@@ -351,6 +351,8 @@ def pr_create(
         body_text = resolve_body(options)
     except PrCreateArgsError as e:
         raise typer.BadParameter(str(e), param_hint="ARGS") from e
+    # Resolved once (`--body-file -` can only be read from stdin once): later steps use `options.body` as is.
+    options.body, options.body_file = body_text, None
     for note in unsupported_notes(options, host):
         print(f"Note: {note}", file=sys.stderr)
     title = title if title is not None else options.title
@@ -374,11 +376,16 @@ def pr_create(
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
         returncode, pr_url = gh_pr.create(gh, target, [], draft=draft, labels=label, title=title, description=description, options=options)
+        if options.dry_run:
+            # Nothing was created: no attachments, issue links or labels may touch whatever PR the branch already has.
+            raise typer.Exit(returncode)
         build_policy = gh_pr.has_build_policy(gh, target)
+        # The PR just created, by number: `--head` may name a branch other than the checked-out one.
+        created = gh_pr.number_from_url(pr_url)
         if returncode == 0 and (screenshot or file):
-            _after_create(lambda: gh_pr.add_attachments(gh, remote.owner, remote.repo, source_branch, screenshot, file), "attaching screenshots/files")
+            _after_create(lambda: gh_pr.add_attachments(gh, remote.owner, remote.repo, source_branch, screenshot, file, pr_id=created), "attaching screenshots/files")
         if returncode == 0:
-            _after_create(lambda: _link_and_label_github(gh, remote, issue_numbers), "linking issue(s) / setting 'pr-available' label")
+            _after_create(lambda: _link_and_label_github(gh, remote, issue_numbers, pr_id=created), "linking issue(s) / setting 'pr-available' label")
     else:
         ado = replace(
             remote,
@@ -409,9 +416,10 @@ def pr_create(
             except (KeyError, TypeError):
                 pr_url = None
         build_policy = pr_build.has_build_policy(session, ado, target)
+        created_id = pr_json.get("pullRequestId") if returncode == 0 else None
         if returncode == 0 and (detect_agent_session() is not None or screenshot or file):
             def _finish() -> None:
-                pr = pr_build.get_pr(session, ado, source_branch, target)
+                pr = pr_build.get_pr_by_id(session, ado, created_id) if created_id else pr_build.get_pr(session, ado, source_branch, target)
                 if screenshot or file:
                     pr = pr_build.add_attachments(session, ado, pr, screenshot, file)
                 pr_build.ensure_session_note(session, ado, pr)
@@ -424,14 +432,14 @@ def pr_create(
             # would then silently skip it instead of at least warning, unlike every other
             # best-effort step here.
             def _link_issues() -> None:
-                pr = pr_build.get_pr(session, ado, source_branch, target)
+                pr = pr_build.get_pr_by_id(session, ado, created_id) if created_id else pr_build.get_pr(session, ado, source_branch, target)
                 _link_and_label_ado(session, ado, pr["pullRequestId"], pr.get("description") or "", issue_numbers)
 
             _after_create(_link_issues, "linking work item(s) / setting 'pr-available' tag")
 
     if returncode == 0 and pr_url:
         print(f"\n{pr_url}")
-        if options.web:
+        if options.web and not isinstance(remote, GitHubRemote):  # `gh_pr.create` opens GitHub's itself
             webbrowser.open(pr_url)
 
     if returncode == 0 and draft:

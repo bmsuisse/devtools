@@ -818,12 +818,18 @@ def ensure_session_note(gh: GitHubClient, pr_number: int | None = None) -> None:
         pass
 
 
-def get_pr_body(gh: GitHubClient) -> tuple[int, str]:
-    """(PR number, PR body) for the current branch's PR -- used by issue-linking, which needs
+def number_from_url(url: str | None) -> int | None:
+    """The PR number of a `.../pull/<n>` web URL (what `create` returns), None for anything else."""
+    match = re.search(r"/pull/(\d+)", url or "")
+    return int(match.group(1)) if match else None
+
+
+def get_pr_body(gh: GitHubClient, pr_id: int | None = None) -> tuple[int, str]:
+    """(PR number, PR body) for `pr_id`, else the current branch's PR -- used by issue-linking, which needs
     the body actually stored (e.g. autofilled from the commit message), not
     whatever a caller happened to pass to `pr create`.
     """
-    pr = _pr_rest(gh, None)
+    pr = _pr_rest(gh, pr_id)
     return pr["number"], pr["body"]
 
 
@@ -954,13 +960,14 @@ def add_attachments(
     branch: str,
     screenshot_paths: list[str] | None = None,
     file_paths: list[str] | None = None,
+    pr_id: int | None = None,
 ) -> None:
-    """Push screenshots/files to the `pr-assets` branch and append them to the current branch's PR
-    body in a single edit -- whether one or both kinds are given.
+    """Push screenshots/files to the `pr-assets` branch and append them to the body of PR `pr_id` (else the
+    current branch's PR) in a single edit -- whether one or both kinds are given.
     """
     screenshot_paths = screenshot_paths or []
     file_paths = file_paths or []
-    pr = _pr_rest(gh, None)
+    pr = _pr_rest(gh, pr_id)
     body: str = pr["body"]
     if screenshot_paths:
         body = build_screenshots_section(body, _screenshot_images(owner, repo, branch, screenshot_paths))

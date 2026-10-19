@@ -17,7 +17,7 @@ def _github(monkeypatch, *, body: str = "") -> list[dict]:
     monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feature-x")
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     monkeypatch.setattr("bmsdna.devtools.gh_pr.has_build_policy", lambda gh, target: False)
-    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr_body", lambda gh: (7, body))
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr_body", lambda gh, pr_id=None: (7, body))
     calls: list[dict] = []
 
     def fake_create(gh, target, extra_args, **kwargs):
@@ -36,6 +36,9 @@ def _ado(monkeypatch, *, description: str = "") -> list[dict]:
     monkeypatch.setattr("bmsdna.devtools.pr_build.has_build_policy", lambda session, remote, target: False)
     monkeypatch.setattr(
         "bmsdna.devtools.pr_build.get_pr", lambda session, remote, source_branch, target: {"pullRequestId": 456, "description": description}
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_pr_by_id", lambda session, remote, pr_id: {"pullRequestId": pr_id, "description": description}
     )
     calls: list[dict] = []
 
@@ -152,7 +155,7 @@ def test_pr_create_attaches_files_for_github(monkeypatch, tmp_path) -> None:
     _github(monkeypatch)
     captured: dict = {}
 
-    def fake_add_attachments(gh, owner, repo, branch, screenshot_paths, file_paths):
+    def fake_add_attachments(gh, owner, repo, branch, screenshot_paths, file_paths, pr_id=None):
         captured["file_paths"] = file_paths
 
     monkeypatch.setattr("bmsdna.devtools.gh_pr.add_attachments", fake_add_attachments)
@@ -368,3 +371,91 @@ def test_pr_create_ado_issue_link_isolates_systemexit_from_one_bad_work_item(mon
 
     assert result.exit_code == 0, result.output
     assert tagged == [30]  # the second --issue still got tagged despite the first raising
+
+
+# -- review regressions: dry run, created-PR targeting, stdin body, label groups --------------------------
+
+
+def test_github_dry_run_stops_before_any_post_create_step(monkeypatch, tmp_path) -> None:
+    calls = _github(monkeypatch, body="Fixes #5")
+
+    def dry_create(gh, target, extra_args, **kwargs):
+        calls.append({"dry": True})
+        return 0, None
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.create", dry_create)
+
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("a dry run must not touch any PR, issue or label")
+
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.add_attachments", must_not_run)
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr_body", must_not_run)
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.add_pr_available_label", must_not_run)
+    shot = tmp_path / "a.png"
+    shot.write_bytes(b"x")
+
+    result = runner.invoke(app, ["pr", "create", "--target", "main", "--issue", "10", "--screenshot", str(shot), "--", "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert {"dry": True} in calls
+
+
+def test_github_follow_ups_target_the_created_pr_not_the_checked_out_branch(monkeypatch, tmp_path) -> None:
+    _github(monkeypatch, body="autofilled")
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.create", lambda gh, target, extra_args, **kw: (0, "https://github.com/owner/repo/pull/42"))
+    seen: dict = {}
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.add_attachments", lambda gh, o, r, b, s, f, pr_id=None: seen.setdefault("attach", pr_id))
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr_body", lambda gh, pr_id=None: (seen.setdefault("body", pr_id), "autofilled"))
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.link_issue_to_pr", lambda gh, n, body, number: seen.setdefault("link", n) and body)
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.ensure_pr_available_label", lambda gh: None)
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.add_pr_available_label", lambda gh, number: None)
+    report = tmp_path / "r.pdf"
+    report.write_bytes(b"x")
+
+    result = runner.invoke(app, ["pr", "create", "--target", "main", "--issue", "10", "--file", str(report), "--", "--head", "other-branch"])
+
+    assert result.exit_code == 0, result.output
+    assert seen == {"attach": 42, "body": 42, "link": 42}
+
+
+def test_ado_follow_ups_use_the_created_pull_request_id(monkeypatch, tmp_path) -> None:
+    _ado(monkeypatch)
+    monkeypatch.setattr("bmsdna.devtools.cli.detect_agent_session", lambda: None)
+    by_id: list[int] = []
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_pr_by_id", lambda session, remote, pr_id: by_id.append(pr_id) or {"pullRequestId": pr_id, "description": ""}
+    )
+
+    def branch_lookup(*args, **kwargs):
+        raise AssertionError("the PR must be found by its id, not by the checked-out source branch")
+
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", branch_lookup)
+    monkeypatch.setattr("bmsdna.devtools.pr_build.link_work_item", lambda session, remote, pr_id, work_item_id: None)
+    monkeypatch.setattr("bmsdna.devtools.ado_issue.add_pr_available_tag", lambda session, remote, work_item_id: None)
+
+    result = runner.invoke(app, ["pr", "create", "--target", "test", "--issue", "20", "--", "--source-branch", "other-branch"])
+
+    assert result.exit_code == 0, result.output
+    assert by_id == [456]
+
+
+def test_body_file_stdin_is_read_once_and_reaches_the_pr(monkeypatch) -> None:
+    calls = _github(monkeypatch)
+
+    result = runner.invoke(app, ["pr", "create", "--target", "main", "--", "--body-file", "-"], input="piped description\n")
+
+    assert result.exit_code == 0, result.output
+    assert calls[0]["description"] == "piped description\n"
+    assert calls[0]["options"].body_file is None  # already resolved: gh_pr.create must not read stdin again
+
+
+def test_required_label_group_is_satisfied_by_a_passthrough_label(monkeypatch) -> None:
+    calls = _github(monkeypatch)
+    monkeypatch.setattr("bmsdna.devtools.cli.pr_labels.required_label_groups", lambda: {"risk": ["breaking", "non-breaking"]})
+
+    ok = runner.invoke(app, ["pr", "create", "--target", "main", "--", "--label", "breaking"])
+    missing = runner.invoke(app, ["pr", "create", "--target", "main", "--", "--title", "T"])
+
+    assert ok.exit_code == 0, ok.output
+    assert calls[0]["labels"] == ["breaking"]
+    assert missing.exit_code != 0 and "risk" in missing.output

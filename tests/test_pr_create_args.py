@@ -125,3 +125,28 @@ def test_unsupported_notes_per_host() -> None:
     assert "--bypass-policy is ignored on GitHub" in notes
     assert unsupported_notes(gh("--delete-source-branch", "false"), "github") == []
     assert unsupported_notes(gh("--assignee", "@me", "--milestone", "m", "--project", "p"), "github") == []
+
+
+def test_text_values_may_start_with_a_dash_unless_they_are_a_known_flag() -> None:
+    assert gh("--body", "- first change\n- second").body == "- first change\n- second"
+    assert ado("--description", "- bullet").body == "- bullet"
+    assert gh("-b", "-1 is wrong", "--draft").draft is True
+    assert gh("--title", "- odd title").title == "- odd title"
+    assert gh("--merge-commit-message", "-x").merge_commit_message == "-x"
+    assert gh("--body=- eq form").body == "- eq form"
+    with pytest.raises(PrCreateArgsError, match="--body needs a value"):
+        gh("--body", "--draft")  # a known flag where the value should be: a missing value
+    with pytest.raises(PrCreateArgsError, match="--title needs a value"):
+        gh("--title", "--label=x")
+
+
+def test_list_values_still_stop_at_the_next_option_so_unknown_flags_are_reported() -> None:
+    assert gh("--reviewer", "a", "b", "--draft").reviewers == ["a", "b"]
+    with pytest.raises(PrCreateArgsError, match="unsupported flag"):
+        gh("--reviewer", "a", "--bogus")
+
+
+def test_extract_labels_is_host_independent_and_lenient() -> None:
+    assert m.extract_labels(["--label", "bug", "-l", "a,b", "--labels=x", "--title", "T"]) == ["bug", "a", "b", "x"]
+    assert m.extract_labels(["--bogus", "--label", "bug", "--also-unknown"]) == ["bug"]  # no validation of the rest
+    assert m.extract_labels(["--title", "--label"]) == []

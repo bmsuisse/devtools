@@ -149,3 +149,18 @@ def test_build_create_body_makes_no_post() -> None:
     body = pr_build.build_create_body(session, REMOTE, "feat", "dev", title="t", draft=True, options=PrCreateOptions(reviewers=["a@x.com"]))
     assert body["reviewers"] == [{"id": "id-a"}] and body["isDraft"] is True
     session.post.assert_not_called()
+
+
+def test_auto_complete_identity_lookup_failure_is_a_warning_not_a_failed_create(capsys, monkeypatch) -> None:
+    session = _session()
+
+    def failing_lookup(session, remote):
+        raise SystemExit("connectionData failed (HTTP 401)")
+
+    monkeypatch.setattr(pr_build, "current_user_id", failing_lookup)
+
+    pr = _create(session, options=PrCreateOptions(auto_complete=True))
+
+    assert pr["pullRequestId"] == 7  # the PR exists, and is returned
+    assert "Warning: PR created, but setting auto-complete" in capsys.readouterr().err
+    session.patch.assert_not_called()

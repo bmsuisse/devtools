@@ -141,6 +141,31 @@ def _is_option(token: str) -> bool:
     return token.startswith("-") and len(token) > 1
 
 
+def _is_known_flag(token: str, flags: dict[str, tuple[str, str]]) -> bool:
+    return _is_option(token) and token.partition("=")[0] in flags
+
+
+_LABEL_FLAGS = ("--label", "--labels", "-l")
+
+
+def extract_labels(args: list[str]) -> list[str]:
+    """The labels given via `--label` / `--labels` / `-l` in `args`, without validating anything else -- the
+    spellings are the same on every host, so the required-label-group check can run before the remote is known."""
+    labels: list[str] = []
+    i = 0
+    while i < len(args):
+        name, eq, inline = args[i].partition("=")
+        i += 1
+        if name not in _LABEL_FLAGS:
+            continue
+        values = [inline] if eq else []
+        while not eq and i < len(args) and not _is_option(args[i]):
+            values.append(args[i])
+            i += 1
+        labels.extend(v.strip() for value in values for v in value.split(",") if v.strip())
+    return labels
+
+
 def parse_pr_create_args(args: list[str], host: Host) -> PrCreateOptions:
     """Parse `args` (`--opt value` and `--opt=value`) for `host`. List-like flags take every following value up to
     the next option (like `az`) and split on commas; a boolean flag takes an optional `true`/`false`. Raises
@@ -173,6 +198,11 @@ def parse_pr_create_args(args: list[str], host: Host) -> PrCreateOptions:
             values = [inline]
         else:
             values = []
+            # A text-like option's first value may start with '-' (`--body "- first change"`): only a token that is
+            # exactly a known flag counts as a missing value. Further values stop at any option-like token.
+            if kind in ("text", "lines") and i < len(args) and not _is_known_flag(args[i], flags):
+                values.append(args[i])
+                i += 1
             while i < len(args) and not _is_option(args[i]):
                 values.append(args[i])
                 i += 1

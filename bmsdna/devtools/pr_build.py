@@ -433,12 +433,13 @@ def create_pr(
         # Azure DevOps answers 200/203 with an HTML sign-in page when the credentials are rejected.
         sys.exit("Azure DevOps did not return JSON (credentials rejected? pass --pat / set AZURE_DEVOPS_EXT_PAT, or `az login`)")
 
-    update = completion_update(session, remote, options)
-    if update:
-        try:
+    try:
+        # Inside the handler: the identity lookup of --auto-complete can fail too, with the PR already created.
+        update = completion_update(session, remote, options)
+        if update:
             pr = {**pr, **_patch_pr(session, remote, pr["pullRequestId"], update)}
-        except (requests.RequestException, SystemExit, KeyError) as e:
-            print(f"Warning: PR created, but setting auto-complete / completion options failed: {e}", file=sys.stderr)
+    except (requests.RequestException, SystemExit, KeyError) as e:
+        print(f"Warning: PR created, but setting auto-complete / completion options failed: {e}", file=sys.stderr)
     return pr
 
 
