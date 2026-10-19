@@ -36,7 +36,7 @@ Find the PR opened from the current branch and report build/check status
 GitHub — whichever `origin` points at.
 
 ```bash
-bdt pr status [--target-branch BRANCH] [--wait]
+bdt pr status [--target-branch BRANCH] [--pr-id N] [--wait [--timeout SECONDS]]
 ```
 
 Every command that acts on an existing PR (`pr status/info/retry/publish/update/comment`, `issue take` without
@@ -60,6 +60,12 @@ stage/check needs a reviewer plus a link to act on it, and exits **3**
 (`bdt pr watch-deploy --wait`, below, behaves the same way). If another
 build/check has already failed, that's reported instead (exit 1) even when
 one is also waiting on approval.
+
+`--wait --timeout SECONDS` gives up after that long when the checks are still running: it prints the current
+state of every pipeline/check, ends with `Still running after N s. Re-run ... to keep waiting.` (the command pins `--pr-id` to the PR it watched) and exits **4**
+(like `issue watch`). Use it where the caller's own limit is shorter than CI, e.g. an agent's shell tool, which
+kills the command after a few minutes and discards its output; re-run the same command to keep waiting.
+Without `--timeout` (or with `0`) it waits until everything is done, as before. `--timeout` needs `--wait`.
 
 On Azure DevOps, `--wait` on a PR with no builds yet also checks that the target branch has an enabled
 Build validation policy; if it doesn't, no build will ever run, so it exits 1 with an error instead of
