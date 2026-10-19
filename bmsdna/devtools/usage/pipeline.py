@@ -245,6 +245,7 @@ def build(
     rows = ", ".join(f"('{_quote(m)}', {i}, {o}, {c})" for m, i, o, c in pricing.price_rows(prices))
     con.execute(_sql(
         "04_facts.sql",
+        SINCE=_quote(since),
         PRICE_ROWS=rows,
         FALLBACK_MODEL=pricing.FALLBACK_MODEL,
         CW5=str(pricing.CACHE_WRITE_5M_FACTOR),

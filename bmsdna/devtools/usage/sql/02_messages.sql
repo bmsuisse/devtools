@@ -41,7 +41,7 @@ SELECT
     arg_max(cache_write_tok, out_tok) AS cache_write_tok,
     arg_max(cache_write_1h_tok, out_tok) AS cache_write_1h_tok
 FROM rec_assistant
-WHERE ts >= TIMESTAMP '__SINCE__' AND provider IN (__PROVIDERS__)
+WHERE provider IN (__PROVIDERS__)
 GROUP BY mid;
 
 CREATE OR REPLACE TABLE tool_uses AS

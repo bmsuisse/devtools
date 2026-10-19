@@ -396,3 +396,71 @@ def test_report_renders_when_nothing_in_scope_has_a_price(tmp_path) -> None:
     html = report.write_report(c, tmp_path / "out").read_text()
 
     assert "have no price" in html
+
+
+# -- findings from the codex review of this PR ----------------------------------------------------------------------
+
+
+def test_since_drops_turns_before_the_cutoff(tmp_path) -> None:
+    proj = tmp_path / "proj"
+    sid = "55555555-5555-5555-5555-555555555555"
+    _write(proj / f"{sid}.jsonl", [_assistant("a", sid, 0, ("Skill", "t1", {"skill": "dev-workflow:dev-workflow"})), _assistant("b", sid, 1)])
+    c = duckdb.connect()
+
+    pipeline.build(c, proj, since="2026-10-01")
+    assert c.execute("SELECT count(*) FROM facts").fetchone() == (2,)
+
+    pipeline.build(c, proj, since="2026-10-02")
+    assert c.execute("SELECT count(*) FROM facts").fetchone() == (0,)
+
+
+def test_since_keeps_a_later_turn_of_an_earlier_workflow(tmp_path) -> None:
+    proj = tmp_path / "proj"
+    sid = "66666666-6666-6666-6666-666666666666"
+    early = {**_assistant("early", sid, 0, ("Skill", "t1", {"skill": "dev-workflow:dev-workflow"})), "timestamp": "2026-09-30T10:00:00.000Z"}
+    _write(proj / f"{sid}.jsonl", [early, _assistant("late", sid, 5, ("Edit", "t3", {"file_path": "/repo/src/a.py"}))])
+    c = duckdb.connect()
+
+    pipeline.build(c, proj, since="2026-10-01")
+
+    assert dict(c.execute("SELECT mid, phase FROM facts").fetchall()) == {"late": "implement"}
+
+
+def test_report_output_directory_may_contain_an_apostrophe(tmp_path) -> None:
+    from bmsdna.devtools.usage import report
+
+    _claude_logs(tmp_path)
+    c = duckdb.connect()
+    pipeline.build(c, tmp_path / "claude", None)
+    out = tmp_path / "Alice's report"
+
+    report.write_report(c, out)
+
+    assert (out / "report.html").exists() and (out / "facts.parquet").exists() and (out / "csv" / "v_steps.csv").exists()
+
+
+def test_text_from_the_logs_cannot_break_out_of_the_report(tmp_path) -> None:
+    """Agent descriptions / session titles come from the logs: they must stay text, never markup or script."""
+    from bmsdna.devtools.usage import report
+
+    evil = "</script><script>window.PWNED=1</script>"
+    proj = _claude_logs(tmp_path)
+    meta = next(proj.rglob("agent-AAA.meta.json"))
+    meta.write_text(meta.read_text().replace('"description": "review"', f'"description": {json.dumps(evil)}'))
+    main = proj / f"{CLAUDE_SESSION}.jsonl"
+    main.write_text(main.read_text() + json.dumps({"type": "ai-title", "sessionId": CLAUDE_SESSION, "aiTitle": evil}) + "\n")
+    c = duckdb.connect()
+    pipeline.build(c, proj, None)
+
+    html = report.write_report(c, tmp_path / "out").read_text()
+
+    assert "PWNED" in html  # it is in the report (as an escaped string), so this test is not vacuous
+    assert evil not in html and "<script>window.PWNED" not in html
+
+
+@pytest.mark.parametrize("bad", ["yesterday", "2026-13-01", "2026-10-01'; DROP TABLE x; --", ""])
+def test_cli_rejects_a_since_that_is_not_a_date(tmp_path, bad) -> None:
+    result = runner.invoke(app, ["usage", "analyze", "--logs", str(tmp_path), "--since", bad, "--db", str(tmp_path / "p.duckdb")])
+
+    assert result.exit_code == 2
+    assert "--since" in result.output

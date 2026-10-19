@@ -52,6 +52,8 @@ WITH base AS (
     LEFT JOIN ctx_img ci USING (mid)
     LEFT JOIN pricing pr ON pr.model = m.model
     LEFT JOIN pricing fb ON fb.model = '__FALLBACK_MODEL__'
+    -- only the report is cut at --since: a workflow that began earlier still has its start marker in msg_phase
+    WHERE m.ts >= TIMESTAMP '__SINCE__'
 )
 SELECT *,
     pin IS NOT NULL AS priced,

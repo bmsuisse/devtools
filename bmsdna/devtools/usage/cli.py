@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import date
 from pathlib import Path
 
 import typer
@@ -59,6 +60,10 @@ def analyze(
     """
     if scope not in ("workflow", "all"):
         raise typer.BadParameter("Must be 'workflow' or 'all'", param_hint="--scope")
+    try:
+        date.fromisoformat(since)
+    except ValueError:
+        raise typer.BadParameter("Must be a date like 2026-10-01", param_hint="--since") from None
     try:
         prices = dict(pricing.parse_price(p) for p in price)
     except ValueError as e:

@@ -21,6 +21,11 @@ VIEWS = ["v_summary", "v_providers", "v_steps", "v_steps_actor", "v_steps_token_
          "v_session_totals", "v_session_steps", "v_agents", "v_agent_types", "v_images"]
 
 
+def _sql_string(path: Path) -> str:
+    """`path` as a SQL string literal (a directory name may contain an apostrophe)."""
+    return "'" + str(path).replace("'", "''") + "'"
+
+
 def _rows(con: duckdb.DuckDBPyConnection, sql: str) -> list[dict]:
     cur = con.execute(sql)
     cols = [d[0] for d in cur.description]
@@ -294,8 +299,8 @@ def write_report(con: duckdb.DuckDBPyConnection, out_dir: Path) -> Path:
     csv_dir = out_dir / "csv"
     csv_dir.mkdir(exist_ok=True)
     for view in VIEWS:
-        con.execute(f"COPY (SELECT * FROM {view}) TO '{csv_dir / (view + '.csv')}' (HEADER)")
-    con.execute(f"COPY facts TO '{out_dir / 'facts.parquet'}' (FORMAT PARQUET)")
+        con.execute(f"COPY (SELECT * FROM {view}) TO {_sql_string(csv_dir / (view + '.csv'))} (HEADER)")
+    con.execute(f"COPY facts TO {_sql_string(out_dir / 'facts.parquet')} (FORMAT PARQUET)")
 
     s = _rows(con, "SELECT * FROM v_summary")[0]
     providers = _rows(con, "SELECT * FROM v_providers")
