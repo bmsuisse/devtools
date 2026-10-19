@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -20,6 +21,10 @@ import requests
 from .cli_tools import CLI_TIMEOUT_SECS, HTTP_TIMEOUT_SECS
 
 API_URL = "https://api.github.com"
+RETRY_ATTEMPTS = 3
+RETRY_BACKOFF_SECS = 1.0
+_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "PUT", "DELETE", "OPTIONS"})
+_TRANSIENT_STATUSES = frozenset({502, 503, 504})
 GH_TOKEN_HINT = "Set GH_TOKEN (or GITHUB_TOKEN) to a GitHub token, or run `gh auth login`."
 
 
@@ -86,9 +91,14 @@ class GitHubClient:
         remote = parse_github_remote(origin_url())
         self._owner, self._repo = remote.owner, remote.repo
 
-    def request(self, method: str, path: str, *, ok: tuple[int, ...] = (), **kwargs: Any) -> requests.Response:
+    def request(self, method: str, path: str, *, ok: tuple[int, ...] = (), retry: bool | None = None, **kwargs: Any) -> requests.Response:
         """`method path` (relative to the API root, or a full URL); exits with GitHub's error message on a non-2xx
-        status (except those listed in `ok`, which are returned for the caller to inspect)."""
+        status (except those listed in `ok`, which are returned for the caller to inspect).
+
+        A dropped connection / 502-504 is retried (`RETRY_ATTEMPTS` times, with backoff) for requests that are safe to
+        repeat: GET/HEAD/PUT/DELETE by default, anything else only with `retry=True` (a GraphQL query)."""
+        if retry is None:
+            retry = method.upper() in _IDEMPOTENT_METHODS
         if path.startswith("http"):
             url = path
             target, base = urlparse(url), urlparse(self.base_url)
@@ -97,10 +107,19 @@ class GitHubClient:
                 sys.exit(f"Refusing to send the GitHub token to {target.netloc or url!r}: not {base.netloc} over https")
         else:
             url = f"{self.base_url}/{path.lstrip('/')}"
-        try:
-            r = self.session.request(method, url, timeout=HTTP_TIMEOUT_SECS, **kwargs)
-        except requests.RequestException as e:
-            sys.exit(f"GitHub {method} {path} failed: {e}")
+        attempts = RETRY_ATTEMPTS if retry else 1
+        for attempt in range(1, attempts + 1):
+            try:
+                r = self.session.request(method, url, timeout=HTTP_TIMEOUT_SECS, **kwargs)
+            except requests.RequestException as e:
+                if attempt < attempts:
+                    time.sleep(RETRY_BACKOFF_SECS * attempt)
+                    continue
+                sys.exit(f"GitHub {method} {path} failed: {e}")
+            if r.status_code in _TRANSIENT_STATUSES and attempt < attempts:
+                time.sleep(RETRY_BACKOFF_SECS * attempt)
+                continue
+            break
         if r.status_code >= 400 and r.status_code not in ok:
             sys.exit(f"GitHub {method} {path} failed (HTTP {r.status_code}): {_error_message(r)}")
         return r
@@ -140,7 +159,8 @@ class GitHubClient:
         return out
 
     def graphql(self, query: str, **variables: Any) -> dict[str, Any]:
-        data = self.post("graphql", {"query": query, "variables": variables})
+        # a query is safe to repeat; a mutation is not
+        data = self.post("graphql", {"query": query, "variables": variables}, retry=not query.lstrip().startswith("mutation"))
         if data.get("errors"):
             sys.exit(f"GitHub GraphQL failed: {'; '.join(e.get('message', '?') for e in data['errors'])}")
         return data["data"]

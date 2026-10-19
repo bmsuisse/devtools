@@ -114,3 +114,67 @@ def test_absolute_url_on_the_api_host_is_sent(monkeypatch) -> None:
     client, calls = client_with(monkeypatch, [FakeResponse(200, {"ok": 1})])
     assert client.get("https://api.github.com/repos/o/r/issues?page=2") == {"ok": 1}
     assert calls[0][1] == "https://api.github.com/repos/o/r/issues?page=2"
+
+
+def test_get_retries_a_dropped_connection_then_succeeds(monkeypatch) -> None:
+    monkeypatch.setattr(github_api, "RETRY_BACKOFF_SECS", 0)
+    client = GitHubClient("tok", "o", "r")
+    responses = [requests.ConnectionError("reset"), requests.ConnectionError("reset"), FakeResponse(200, {"ok": 1})]
+    calls: list[str] = []
+
+    def flaky(method, url, **kwargs):
+        calls.append(method)
+        r = responses.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    monkeypatch.setattr(client.session, "request", flaky)
+    assert client.get("x") == {"ok": 1}
+    assert len(calls) == 3
+
+
+def test_get_gives_up_after_the_attempt_limit(monkeypatch) -> None:
+    monkeypatch.setattr(github_api, "RETRY_BACKOFF_SECS", 0)
+    client = GitHubClient("tok", "o", "r")
+    attempts: list[int] = []
+
+    def always_down(*a, **k):
+        attempts.append(1)
+        raise requests.ConnectionError("down")
+
+    monkeypatch.setattr(client.session, "request", always_down)
+    with pytest.raises(SystemExit, match="down"):
+        client.get("x")
+    assert len(attempts) == github_api.RETRY_ATTEMPTS
+
+
+def test_post_is_not_retried_but_a_graphql_query_is(monkeypatch) -> None:
+    monkeypatch.setattr(github_api, "RETRY_BACKOFF_SECS", 0)
+    client = GitHubClient("tok", "o", "r")
+    attempts: list[str] = []
+
+    def drop_then_ok(method, url, **kwargs):
+        attempts.append(method)
+        if len(attempts) % 2:
+            raise requests.ConnectionError("reset")
+        return FakeResponse(200, {"data": {"x": 1}})
+
+    monkeypatch.setattr(client.session, "request", drop_then_ok)
+    with pytest.raises(SystemExit):
+        client.post("repos/o/r/pulls", {"title": "t"})  # a create must never be repeated blindly
+    assert len(attempts) == 1
+    attempts.clear()
+    assert client.graphql("query { x }") == {"x": 1}
+    assert len(attempts) == 2
+    attempts.clear()
+    with pytest.raises(SystemExit):
+        client.graphql("mutation { y }")
+    assert len(attempts) == 1
+
+
+def test_503_is_retried(monkeypatch) -> None:
+    monkeypatch.setattr(github_api, "RETRY_BACKOFF_SECS", 0)
+    client, calls = client_with(monkeypatch, [FakeResponse(503, {"message": "unavailable"}), FakeResponse(200, {"ok": 1})])
+    assert client.get("x") == {"ok": 1}
+    assert len(calls) == 2
