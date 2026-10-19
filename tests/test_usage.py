@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import struct
 from pathlib import Path
 
@@ -16,6 +17,13 @@ from bmsdna.devtools.cli import app  # noqa: E402
 from bmsdna.devtools.usage import pipeline, pricing  # noqa: E402
 
 runner = CliRunner()
+
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def plain(result) -> str:
+    """The command's output without colour codes: CI renders typer's error box in colour, which splits option names."""
+    return ANSI.sub("", result.output)
 
 CLAUDE_SESSION = "11111111-1111-1111-1111-111111111111"
 OTHER_SESSION = "22222222-2222-2222-2222-222222222222"
@@ -463,4 +471,4 @@ def test_cli_rejects_a_since_that_is_not_a_date(tmp_path, bad) -> None:
     result = runner.invoke(app, ["usage", "analyze", "--logs", str(tmp_path), "--since", bad, "--db", str(tmp_path / "p.duckdb")])
 
     assert result.exit_code == 2
-    assert "--since" in result.output
+    assert "--since" in plain(result)
