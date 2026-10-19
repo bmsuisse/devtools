@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from fake_github import FakeGitHub
 import requests
 from typer.testing import CliRunner
 
@@ -248,13 +249,13 @@ def test_issue_take_note_includes_session_link_under_claude(monkeypatch) -> None
     _github_cli(monkeypatch)
     monkeypatch.setattr("bmsdna.devtools.cli._current_user", lambda remote: "octocat")
     monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: None)
-    bodies: list[str] = []
-    monkeypatch.setattr("bmsdna.devtools.gh_issue._run_gh", lambda gh, args: bodies.append(args[args.index("--body") + 1]) or "https://x/issues/12#issuecomment-1")
+    fake = FakeGitHub({"POST repos/owner/repo/issues/12/comments": {"id": 1, "html_url": "https://x/issues/12#issuecomment-1"}})
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: fake)
 
     result = runner.invoke(app, ["issue", "take", "12"])
 
     assert result.exit_code == 0, result.output
-    assert bodies == ["Taken by octocat\n\nClaude Session: https://claude.ai/code/session_abc"]
+    assert [p["body"] for p in fake.calls_to("POST")] == ["Taken by octocat\n\nClaude Session: https://claude.ai/code/session_abc"]
 
 
 def test_pr_info_on_azure_devops_passes_the_session_through(monkeypatch) -> None:
@@ -299,23 +300,24 @@ def test_target_options_default_to_dev_except_lookups_which_do_not_filter() -> N
 def _do_cli(monkeypatch, *, agent_env: bool = False) -> dict:
     """GitHub issue 12 with `gh` stubbed; records the posted comments and the started agent command."""
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
-    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     monkeypatch.setattr("bmsdna.devtools.cli._current_user", lambda remote: "octocat")
     monkeypatch.setattr("bmsdna.devtools.cli.issue_do_mod.fetch_github", lambda gh, n: ("add thing", "details"))
     monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: None)
     seen: dict = {"events": [], "bodies": []}
 
-    def run_gh(gh, args):
+    def post_comment(payload):
         seen["events"].append("comment")
-        seen["bodies"].append(args[args.index("--body") + 1])
-        return "https://x/issues/12#issuecomment-1"
+        seen["bodies"].append(payload["body"])
+        return {"id": 1, "html_url": "https://x/issues/12#issuecomment-1"}
+
+    fake = FakeGitHub({"POST repos/owner/repo/issues/12/comments": post_comment})
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: fake)
 
     def start(cmd, check=False):
         seen["events"].append("agent")
         seen["cmd"] = cmd
         return type("R", (), {"returncode": 0})()
 
-    monkeypatch.setattr("bmsdna.devtools.gh_issue._run_gh", run_gh)
     monkeypatch.setattr("bmsdna.devtools.issue_do.shutil.which", lambda a: "/bin/" + a)
     monkeypatch.setattr("bmsdna.devtools.issue_do.subprocess.run", start)
     if agent_env:
@@ -440,19 +442,22 @@ def test_issue_do_still_starts_the_agent_when_already_taken(monkeypatch) -> None
     assert seen["events"] == ["agent"]
 
 
-def test_gh_last_comment_reads_graphql(monkeypatch) -> None:
+def test_gh_last_comment_reads_graphql() -> None:
     from bmsdna.devtools import gh_issue
 
-    out = json.dumps({"data": {"repository": {"issue": {"comments": {"nodes": [{"body": "Taken by x"}]}}}}})
     seen = {}
-    monkeypatch.setattr(gh_issue, "_run_gh", lambda gh, args: seen.update(args=args) or out)
 
-    assert gh_issue.last_comment("gh", "o", "r", 5) == "Taken by x"
-    assert "number=5" in seen["args"] and "owner=o" in seen["args"]
+    def handler(query, variables):
+        seen.update(variables)
+        return {"repository": {"issue": {"comments": {"nodes": [{"body": "Taken by x"}]}}}}
 
-    empty = json.dumps({"data": {"repository": {"issue": {"comments": {"nodes": []}}}}})
-    monkeypatch.setattr(gh_issue, "_run_gh", lambda gh, args: empty)
-    assert gh_issue.last_comment("gh", "o", "r", 5) is None
+    assert gh_issue.last_comment(FakeGitHub(graphql=handler), "o", "r", 5) == "Taken by x"
+    assert seen == {"owner": "o", "repo": "r", "number": 5}
+
+    def empty(q, v):
+        return {"repository": {"issue": {"comments": {"nodes": []}}}}
+
+    assert gh_issue.last_comment(FakeGitHub(graphql=empty), "o", "r", 5) is None
 
 
 def test_ado_last_comment_asks_for_newest_first() -> None:

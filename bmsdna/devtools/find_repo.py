@@ -17,7 +17,7 @@ Env vars mirror that skill's so switching over needs no reconfiguration:
 
 from __future__ import annotations
 
-import json
+import base64
 import os
 import subprocess
 import sys
@@ -26,9 +26,13 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
+from urllib.parse import quote
+
+import requests
 
 from .ado_auth import auth_header
-from .cli_tools import require_az, require_gh
+from .cli_tools import HTTP_TIMEOUT_SECS, require_gh
+from .github_api import GitHubClient, resolve_token
 from .worktree import find_repos
 
 T = TypeVar("T")
@@ -68,39 +72,75 @@ class RemoteRepo:
     source: str = "ado"
 
 
-def _az(az: str, *args: str) -> tuple[bool, str]:
-    """Non-fatal `az ... -o json` run: (ok, stdout-on-success | stderr-on-failure).
+ADO_API_VERSION = "7.1"
+ADO_PAGE_SIZE = 100
 
-    Deliberately not one of the existing `run_az`/`_run_gh_json` helpers
-    elsewhere in this codebase -- those either exit on any failure or merge
-    stdout+stderr into one string, neither of which works for `find_remote`'s
-    per-project fan-out below, where one project failing (e.g. no access)
-    must not abort the whole org search, and stdout has to stay pure JSON.
+
+def _ado_get(url: str, headers: dict[str, str], params: dict[str, str | int] | None = None) -> tuple[bool, dict | str]:
+    """Non-fatal Azure DevOps REST GET: (True, parsed JSON) or (False, error message).
+
+    Non-fatal on purpose: `find_remote`'s per-project fan-out must survive one project
+    failing (e.g. no access) instead of aborting the whole org search.
     """
-    result = subprocess.run([az, *args, "-o", "json"], capture_output=True, text=True, check=False)
-    return result.returncode == 0, result.stdout if result.returncode == 0 else result.stderr
+    try:
+        r = requests.get(
+            url, headers=headers, params={"api-version": ADO_API_VERSION, **(params or {})}, timeout=HTTP_TIMEOUT_SECS
+        )
+    except requests.RequestException as e:
+        return False, str(e)
+    if r.status_code >= 400:
+        try:
+            msg = r.json().get("message") or r.reason
+        except (ValueError, AttributeError):
+            msg = r.reason
+        if r.status_code in (401, 203):
+            msg = f"{msg} (not authorized -- pass --pat / set AZURE_DEVOPS_EXT_PAT, or `az login`)"
+        return False, f"HTTP {r.status_code}: {msg}"
+    try:
+        return True, r.json()
+    except ValueError:
+        # Azure DevOps answers 200 with an HTML sign-in page when the credentials are rejected.
+        return False, "unexpected non-JSON response (credentials rejected?)"
 
 
-def find_remote(az: str, org: str, name: str) -> list[RemoteRepo]:
+def _ado_projects(org: str, headers: dict[str, str]) -> list[dict]:
+    projects: list[dict] = []
+    skip = 0
+    while True:
+        ok, data = _ado_get(
+            f"https://dev.azure.com/{quote(org)}/_apis/projects", headers, {"$top": ADO_PAGE_SIZE, "$skip": skip}
+        )
+        if not ok:
+            sys.exit(f"Listing Azure DevOps projects in '{org}' failed:\n{str(data).strip()}")
+        assert isinstance(data, dict)
+        page = data.get("value", [])
+        projects.extend(page)
+        if len(page) < ADO_PAGE_SIZE:
+            return projects
+        skip += len(page)
+
+
+def find_remote(org: str, name: str, pat: str | None = None) -> list[RemoteRepo]:
     """Search every project in `org` for a repo matching `name` -- see `_prefer_exact`.
 
     Azure DevOps has no "search repos by name across the whole org" API, so
     (as the old skill's script did) this lists every project and then every
     project's repos -- there's no cheaper way to do it. The per-project calls
-    run concurrently (each is just an `az` subprocess waiting on network I/O)
+    run concurrently (each is just an HTTP request waiting on network I/O)
     since with dozens of projects a serial fan-out is the dominant cost.
     """
-    ok, out = _az(az, "devops", "project", "list", "--org", f"https://dev.azure.com/{org}")
-    if not ok:
-        sys.exit(f"az devops project list failed (try `az login`?):\n{out.strip()}")
-    projects = json.loads(out)["value"]
+    headers = auth_header(pat)  # resolved once, shared by the worker threads
+    projects = _ado_projects(org, headers)
 
     def repos_for(project: dict) -> list[RemoteRepo]:
-        ok, out = _az(az, "repos", "list", "--org", f"https://dev.azure.com/{org}", "--project", project["name"])
+        ok, data = _ado_get(
+            f"https://dev.azure.com/{quote(org)}/{quote(project['name'])}/_apis/git/repositories", headers
+        )
         if not ok:
-            print(f"warning: couldn't list repos for project '{project['name']}': {out.strip()}", file=sys.stderr)
+            print(f"warning: couldn't list repos for project '{project['name']}': {str(data).strip()}", file=sys.stderr)
             return []
-        return [RemoteRepo(project["name"], r["name"], r["remoteUrl"]) for r in json.loads(out)]
+        assert isinstance(data, dict)
+        return [RemoteRepo(project["name"], r["name"], r["remoteUrl"]) for r in data.get("value", [])]
 
     all_repos: list[RemoteRepo] = []
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -110,24 +150,23 @@ def find_remote(az: str, org: str, name: str) -> list[RemoteRepo]:
     return _prefer_exact(all_repos, name, key=lambda r: r.name)
 
 
-def find_github(gh: str, org: str, name: str) -> list[RemoteRepo]:
+def find_github(client: GitHubClient, org: str, name: str) -> list[RemoteRepo]:
     """Search `org`'s GitHub repos for a match -- see `_prefer_exact`.
 
     Unlike Azure DevOps, GitHub has a single flat list of repos per org/user
-    (no per-project split), so `gh repo list` covers the whole org in one call.
+    (no per-project split), so one paginated listing covers the whole org. `org` may
+    also be a user account: `orgs/{org}/repos` 404s for those, so fall back to `users/{org}/repos`.
     """
-    result = subprocess.run(
-        [gh, "repo", "list", org, "--json", "name,url", "--limit", "1000"], capture_output=True, text=True, check=False
-    )
-    if result.returncode != 0:
-        sys.exit(f"gh repo list failed (try `gh auth login`?):\n{result.stderr.strip()}")
-
-    all_repos = [RemoteRepo(org, r["name"], r["url"], source="github") for r in json.loads(result.stdout)]
+    path = f"orgs/{quote(org)}/repos"
+    if client.request("GET", path, ok=(404,), params={"per_page": 1}).status_code == 404:
+        path = f"users/{quote(org)}/repos"
+    items = client.paginate(path, limit=1000)
+    all_repos = [RemoteRepo(org, r["name"], r["html_url"], source="github") for r in items]
     return _prefer_exact(all_repos, name, key=lambda r: r.name)
 
 
 def clone(remote_url: str, dest: Path, auth: dict[str, str] | None = None) -> subprocess.CompletedProcess:
-    """Clone `remote_url` (an HTTPS Azure DevOps URL) into `dest`.
+    """Clone `remote_url` (an HTTPS Azure DevOps or GitHub URL) into `dest`.
 
     `auth` (from `ado_auth.auth_header`) is passed to git as an HTTP
     Authorization header via `GIT_CONFIG_*` env vars rather than a
@@ -145,18 +184,15 @@ def clone(remote_url: str, dest: Path, auth: dict[str, str] | None = None) -> su
         sys.exit("'git' is required for this command but wasn't found on PATH.")
 
 
-def clone_github(gh: str, full_name: str, dest: Path) -> subprocess.CompletedProcess:
-    """Clone a GitHub repo via `gh repo clone`, so it authenticates the same way
-    `gh repo list` already did.
+def clone_github(full_name: str, dest: Path, token: str | None = None) -> subprocess.CompletedProcess:
+    """`git clone` a GitHub repo (`owner/name`) over HTTPS, authenticated with the GitHub token.
 
-    Deliberately not `clone()` + a hand-built header: `auth_header` (ADO's Basic-PAT-or-
-    `az`-Bearer-token helper) must never be sent to github.com, and `gh` already knows how
-    to authenticate its own git operations (private repos included).
+    The token goes in as an `http.extraheader` (Basic `x-access-token:<token>`, via `clone()`'s
+    env-var plumbing) -- never in the URL or argv. Deliberately not given `ado_auth.auth_header`:
+    an Azure DevOps credential must never be sent to github.com.
     """
-    try:
-        return subprocess.run([gh, "repo", "clone", full_name, str(dest)], check=False)
-    except FileNotFoundError:
-        sys.exit("'gh' is required for this command but wasn't found on PATH.")
+    basic = base64.b64encode(f"x-access-token:{token or resolve_token()}".encode()).decode()
+    return clone(f"https://github.com/{full_name}.git", dest, {"Authorization": f"Basic {basic}"})
 
 
 def run(
@@ -193,8 +229,7 @@ def run(
     with ThreadPoolExecutor(max_workers=2) as pool:
         searches = []
         if org:
-            az = require_az()
-            searches.append(pool.submit(find_remote, az, org, name))
+            searches.append(pool.submit(find_remote, org, name, pat))
         if github_org:
             gh = require_gh()
             searches.append(pool.submit(find_github, gh, github_org, name))
@@ -237,7 +272,7 @@ def run(
             return
 
     if match.source == "github":
-        result = clone_github(require_gh(), f"{match.project}/{match.name}", dest)
+        result = clone_github(f"{match.project}/{match.name}", dest)
     else:
         result = clone(match.remote_url, dest, auth_header(pat))
     if result.returncode != 0:

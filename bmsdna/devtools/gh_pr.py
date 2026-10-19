@@ -1,15 +1,16 @@
-"""GitHub PR merge/check status and creation via the `gh` CLI.
+"""GitHub PR merge/check status and creation over the GitHub REST + GraphQL API.
 
-Deliberately avoids `gh pr checks --json` — that flag was only added in a
-later `gh` release than some machines still run (confirmed missing on gh
-2.45.0). Everything here is built on `gh pr view --json ...`, whose --json
-support has been stable for a long time, plus statusCheckRollup entries
-categorized ourselves using GitHub's documented GraphQL enums.
+Built on `GitHubClient` (raw HTTP, see `github_api`). A PR is read through one GraphQL query
+(`get_pr`) because REST has no check-rollup / closing-issue / mergeable-state view of it; the
+result keeps the shape `gh pr view --json` used to return (`statusCheckRollup` entries with
+`__typename`/`status`/`conclusion`/`name`/`workflowName`/`detailsUrl`/`state`, ...), so the
+categorizing helpers below (`check_bucket`, ...) work on GitHub's documented GraphQL enums.
+Everything else (create/edit/comment/rerun/run list/ready) is plain REST, except toggling
+draft state, which only exists as a GraphQL mutation.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import subprocess
@@ -18,13 +19,17 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from . import pr_issue_link
 from .cli_tools import CLI_TIMEOUT_SECS, EXIT_NEEDS_APPROVAL, PollHeartbeat, detect_agent_session, ensure_agent_session_note, is_claude_code
+from .github_api import GitHubClient
 from .gitrepo import current_branch
 from .pr_choice import PrCandidate, choose_pr
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
+# `get_pr(fields=...)` selects keys of the dict one GraphQL query returns (see `_PR_QUERY`); `id` is the node id
+# (needed for the draft mutations), `body` the PR description.
 PR_VIEW_FIELDS = "number,title,baseRefName,headRefName,mergeable,statusCheckRollup,isDraft"
 # What `bdt pr info` needs on top of the check rollup: where to link to, and the issues GitHub says it closes.
 PR_INFO_FIELDS = "number,title,url,state,isDraft,closingIssuesReferences,statusCheckRollup"
@@ -35,7 +40,7 @@ PR_INFO_FIELDS = "number,title,url,state,isDraft,closingIssuesReferences,statusC
 # source branch, and link to them with a raw blob URL.
 SCREENSHOTS_BRANCH = "pr-assets"
 
-# `CLI_TIMEOUT_SECS` is generous for a plain `gh`/`git` metadata call, but too tight for
+# `CLI_TIMEOUT_SECS` is generous for a plain `git` metadata call, but too tight for
 # fetching/pushing actual screenshot/attachment blob content on `SCREENSHOTS_BRANCH` --
 # give those more room instead of aborting an otherwise-fine transfer just because it's
 # slower than a metadata call.
@@ -68,18 +73,17 @@ _STATUS_CONTEXT_BUCKET = {
 
 
 # A CheckRun's detailsUrl (e.g. https://github.com/{owner}/{repo}/actions/runs/{run_id}/job/{job_id})
-# is the only place `gh pr view`'s statusCheckRollup exposes the backing workflow run id --
+# is the only place a statusCheckRollup entry exposes the backing workflow run id --
 # there's no dedicated "runId" field on the check itself.
 _RUN_ID_RE = re.compile(r"/actions/runs/(\d+)")
 
 
 def _run(args: list[str], *, timeout: float = CLI_TIMEOUT_SECS, **kwargs) -> subprocess.CompletedProcess:
-    """`subprocess.run` bounded by `timeout` (defaults to `CLI_TIMEOUT_SECS`) -- every
-    `gh`/`git` call in this module goes through this instead of calling `subprocess.run`
-    directly, so a stalled network call or `gh`/`git` blocking on an interactive prompt
-    (e.g. an expired login) can't hang the caller forever. Converts a timeout into the
-    same kind of clear, exit-with-message failure callers already get from a non-zero
-    return code, rather than an uncaught `TimeoutExpired` traceback.
+    """`subprocess.run` bounded by `timeout` (defaults to `CLI_TIMEOUT_SECS`) -- every `git` call
+    in this module goes through this instead of calling `subprocess.run` directly, so a stalled
+    network call or `git` blocking on an interactive prompt can't hang the caller forever.
+    Converts a timeout into the same kind of clear, exit-with-message failure callers already
+    get from a non-zero return code, rather than an uncaught `TimeoutExpired` traceback.
 
     A caller pushing/fetching actual payload (screenshot blobs, not just metadata) should
     pass a longer `timeout` -- see `CLI_UPLOAD_TIMEOUT_SECS`.
@@ -90,51 +94,110 @@ def _run(args: list[str], *, timeout: float = CLI_TIMEOUT_SECS, **kwargs) -> sub
         sys.exit(f"`{' '.join(args)}` timed out after {timeout:.0f}s -- stalled network, or needs an interactive login?")
 
 
-def _run_gh_json(gh: str, args: list[str]) -> Any:
-    r = _run([gh, *args], capture_output=True, encoding="utf-8")
-    if r.returncode != 0:
-        sys.exit((r.stderr or r.stdout).strip() or f"`gh {' '.join(args)}` failed")
-    return json.loads(r.stdout)
+def _branch_prs(gh: GitHubClient, branch: str, state: str = "all", base: str | None = None) -> list[dict]:
+    """REST pull objects whose head is `branch` of this repo, open ones first, then newest first."""
+    params: dict[str, Any] = {"head": f"{gh.owner}:{branch}", "state": state, "sort": "created", "direction": "desc"}
+    if base:
+        params["base"] = base
+    prs = gh.get(f"{gh.repo_path}/pulls", params=params)
+    return sorted(prs, key=lambda p: p.get("state") != "open")  # stable: keeps newest-first within each group
 
 
-def _pr_id_args(pr_id: int | None) -> list[str]:
-    """`[str(pr_id)]` if given, else `[]` -- the optional positional PR number several `gh pr`
-    subcommands accept in place of resolving the PR from the current branch.
-    """
-    return [str(pr_id)] if pr_id is not None else []
+def _pr_number(gh: GitHubClient, pr_id: int | None) -> int:
+    """`pr_id` if given, else the current branch's PR -- the open one if there is one, else the
+    latest closed/merged one (what `gh pr view` without a number used to find)."""
+    if pr_id is not None:
+        return pr_id
+    branch = current_branch()
+    prs = _branch_prs(gh, branch)
+    if not prs:
+        sys.exit(f"no pull requests found for branch \"{branch}\"")
+    return prs[0]["number"]
 
 
-def resolve_pr_id(gh: str, pr_id: int | None, target: str | None = None) -> int | None:
+def _pr_rest(gh: GitHubClient, pr_id: int | None) -> dict:
+    """The PR as `{number, title, body, headRefName, id}` (REST: cheaper than `get_pr`, which also
+    needs the check rollup), for the current branch's PR or `pr_id`."""
+    number = _pr_number(gh, pr_id)
+    pr = gh.get(f"{gh.repo_path}/pulls/{number}")
+    return {
+        "number": pr["number"],
+        "title": pr.get("title") or "",
+        "body": pr.get("body") or "",
+        "headRefName": (pr.get("head") or {}).get("ref"),
+        "id": pr.get("node_id"),
+    }
+
+
+def resolve_pr_id(gh: GitHubClient, pr_id: int | None, target: str | None = None) -> int | None:
     """The number of the PR to act on: `pr_id` if given, else the open PR from the current branch
     (`target` narrows it to one into that base branch; several are ambiguous: see `choose_pr`).
 
-    None if the branch has no open PR (and no `target` was asked for): the caller then lets `gh`
-    resolve it as before, which also finds a closed/merged one. Call it once, before any polling.
+    None if the branch has no open PR (and no `target` was asked for): the caller then lets the
+    other helpers resolve it as before, which also finds a closed/merged one. Call it once, before any polling.
     """
     if pr_id is not None:
         return pr_id
     branch = current_branch()
-    args = ["pr", "list", "--head", branch, "--state", "open", "--json", "number,title,baseRefName,url"]
-    prs = _run_gh_json(gh, [*args, *(["--base", target] if target else [])])
+    prs = _branch_prs(gh, branch, state="open", base=target)
     if not prs:
         if target:
             sys.exit(f"No open PR found from '{branch}' → '{target}'")
         return None
-    candidates = [PrCandidate(p["number"], p["title"], p["baseRefName"], p["url"]) for p in prs]
+    candidates = [PrCandidate(p["number"], p["title"], p["base"]["ref"], p["html_url"]) for p in prs]
     return prs[choose_pr(branch, candidates)]["number"]
 
 
-def get_pr(gh: str, pr_id: int | None = None, fields: str = PR_VIEW_FIELDS) -> dict:
-    """The PR for the current branch, however `gh` resolves it (callers pass the `resolve_pr_id`
+_PR_QUERY = """
+query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      id number title body url state isDraft mergeable baseRefName headRefName
+      closingIssuesReferences(first: 50) { nodes { number url repository { name owner { login } } } }
+      statusCheckRollup {
+        contexts(first: 100) {
+          nodes {
+            __typename
+            ... on CheckRun { name status conclusion detailsUrl checkSuite { workflowRun { workflow { name } } } }
+            ... on StatusContext { context state targetUrl }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def _check_entry(node: dict) -> dict:
+    """A GraphQL rollup context, flattened to the `gh pr view --json statusCheckRollup` shape."""
+    if node.get("__typename") != "CheckRun":
+        return node
+    workflow = (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
+    return {**{k: v for k, v in node.items() if k != "checkSuite"}, "workflowName": workflow or ""}
+
+
+def get_pr(gh: GitHubClient, pr_id: int | None = None, fields: str = PR_VIEW_FIELDS) -> dict:
+    """The PR for the current branch (open one preferred; callers pass the `resolve_pr_id`
     result as `pr_id`, which settles which PR it is when the branch has several).
 
     If `pr_id` is given, resolves that PR directly instead -- lets a caller act on a
     specific PR without needing its branch checked out locally at all.
 
-    `fields` is the `--json` field list; defaults to what `bdt pr status` needs.
+    `fields` is a comma-separated key list (see `PR_VIEW_FIELDS`/`PR_INFO_FIELDS`); only those
+    keys are returned, in the shape `gh pr view --json` had (`statusCheckRollup` and
+    `closingIssuesReferences` are flat lists, `[]` when empty).
     """
-    args = ["pr", "view", *_pr_id_args(pr_id), "--json", fields]
-    return _run_gh_json(gh, args)
+    number = _pr_number(gh, pr_id)
+    data = gh.graphql(_PR_QUERY, owner=gh.owner, repo=gh.repo, number=number)
+    pr = (data.get("repository") or {}).get("pullRequest")
+    if not pr:
+        sys.exit(f"Pull request #{number} not found in {gh.owner}/{gh.repo}")
+    rollup = pr.get("statusCheckRollup") or {}
+    pr["statusCheckRollup"] = [_check_entry(n) for n in ((rollup.get("contexts") or {}).get("nodes") or []) if n]
+    pr["closingIssuesReferences"] = [n for n in (pr.get("closingIssuesReferences") or {}).get("nodes") or [] if n]
+    wanted = [f.strip() for f in fields.split(",") if f.strip()]
+    return {k: pr.get(k) for k in wanted}
 
 
 def check_bucket(check: dict) -> str:
@@ -189,7 +252,7 @@ def failed_run_ids(checks: list[dict]) -> list[int]:
     """Distinct GitHub Actions run IDs backing a failing check in `checks`, in first-seen
     order. Only `CheckRun` entries (GitHub Actions) carry a `detailsUrl` pointing at a
     run; legacy `StatusContext` entries (e.g. an external CI reporting a commit status)
-    have nothing `gh run rerun` can act on and are silently skipped.
+    have nothing a rerun can act on and are silently skipped.
     """
     ids: list[int] = []
     seen: set[int] = set()
@@ -206,10 +269,10 @@ def failed_run_ids(checks: list[dict]) -> list[int]:
     return ids
 
 
-def retry(gh: str, pr_id: int | None = None) -> None:
+def retry(gh: GitHubClient, pr_id: int | None = None) -> None:
     """Rerun only the failed job(s) (and whatever depends on them) of the current
     branch's PR's failing workflow run(s) -- or `pr_id`'s, if given -- via
-    `gh run rerun --failed` -- not a full rerun of the whole run.
+    `POST .../rerun-failed-jobs` -- not a full rerun of the whole run.
     """
     pr = get_pr(gh, pr_id)
     run_ids = failed_run_ids(pr.get("statusCheckRollup") or [])
@@ -221,9 +284,10 @@ def retry(gh: str, pr_id: int | None = None) -> None:
     # the others, and the failure summary at the end still surfaces it.
     errors: list[str] = []
     for run_id in run_ids:
-        r = _run([gh, "run", "rerun", str(run_id), "--failed"], capture_output=True, encoding="utf-8")
-        if r.returncode != 0:
-            errors.append(f"run {run_id}: {(r.stderr or r.stdout).strip() or 'failed'}")
+        try:
+            gh.post(f"{gh.repo_path}/actions/runs/{run_id}/rerun-failed-jobs")
+        except SystemExit as e:
+            errors.append(f"run {run_id}: {e.code or 'failed'}")
             continue
         print(f"Reran failed job(s) of run {run_id}")
 
@@ -233,26 +297,27 @@ def retry(gh: str, pr_id: int | None = None) -> None:
     print("\nRun `bdt pr status --wait` to watch the retry.")
 
 
-def get_workflow_runs_for_branch(gh: str, branch: str, limit: int = 5) -> list[dict]:
+def get_workflow_runs_for_branch(gh: GitHubClient, branch: str, limit: int = 5) -> list[dict]:
     """Workflow runs triggered directly by a push to `branch` -- e.g. a post-merge/deployment
     workflow that only runs on the target branch once a PR merges into it -- as opposed to a
     run some open PR's `pull_request` trigger produced. `event=push` is what distinguishes the
     two on the same branch name.
+
+    Each run is `{databaseId, name, workflowName, status, conclusion, url, headBranch}`.
     """
-    r = _run(
-        [
-            gh, "run", "list",
-            "--branch", branch,
-            "--event", "push",
-            "--limit", str(limit),
-            "--json", "databaseId,name,workflowName,status,conclusion,url,headBranch",
-        ],
-        capture_output=True,
-        encoding="utf-8",
-    )
-    if r.returncode != 0:
-        sys.exit((r.stderr or r.stdout).strip() or "`gh run list` failed")
-    return json.loads(r.stdout)
+    data = gh.get(f"{gh.repo_path}/actions/runs", params={"branch": branch, "event": "push", "per_page": limit})
+    return [
+        {
+            "databaseId": r["id"],
+            "name": r.get("name"),
+            "workflowName": r.get("name"),  # REST `name` is the workflow's name (`display_title` is the commit message)
+            "status": r.get("status"),
+            "conclusion": r.get("conclusion"),
+            "url": r.get("html_url"),
+            "headBranch": r.get("head_branch"),
+        }
+        for r in (data.get("workflow_runs") or [])[:limit]
+    ]
 
 
 def latest_per_workflow(runs: list[dict]) -> list[dict]:
@@ -265,19 +330,18 @@ def latest_per_workflow(runs: list[dict]) -> list[dict]:
     return sorted(latest.values(), key=lambda r: r["databaseId"], reverse=True)
 
 
-def deploy_run_hint(gh: str, target_branch: str) -> str | None:
+def deploy_run_hint(gh: GitHubClient, target_branch: str) -> str | None:
     """Best-effort: None unless a workflow run has already been triggered directly by a push to
     `target_branch` (as opposed to this PR's own checks) -- e.g. a post-merge deployment
     workflow. When one exists, a hint suggesting `bdt pr watch-deploy` to watch it.
 
     Only used to decide whether to print this hint after `bdt pr status` reports success --
-    failures here (auth, permissions, an old `gh` without `run list --json`, malformed output,
-    ...) fail open (return None) rather than blocking or crashing `pr status`, same as
+    failures here (auth, permissions, malformed output, ...) fail open (return None) rather than blocking or crashing `pr status`, same as
     `has_build_policy`.
     """
     try:
         runs = get_workflow_runs_for_branch(gh, target_branch, limit=1)
-    except (SystemExit, json.JSONDecodeError):
+    except (SystemExit, KeyError, ValueError, AttributeError):
         return None
     if not runs:
         return None
@@ -308,7 +372,7 @@ def exit_needs_approval(msg: str, item_lines: list[str], rerun_cmd: str) -> None
     sys.exit(EXIT_NEEDS_APPROVAL)
 
 
-def run(gh: str, wait: bool, pr_id: int | None = None) -> None:
+def run(gh: GitHubClient, wait: bool, pr_id: int | None = None) -> None:
     heartbeat = PollHeartbeat()
     draft_notice_shown = False
     while True:
@@ -390,17 +454,39 @@ def run(gh: str, wait: bool, pr_id: int | None = None) -> None:
         return
 
 
-def print_failed_step_logs(gh: str, run_id: int) -> None:
-    r = _run([gh, "run", "view", str(run_id), "--log-failed"], capture_output=True, encoding="utf-8")
-    output = (r.stdout or "").strip()
-    if r.returncode != 0 or not output:
+_FAILED_LOG_TAIL_LINES = 200
+
+
+def print_failed_step_logs(gh: GitHubClient, run_id: int) -> None:
+    """Best-effort: the failed steps of `run_id`'s failed jobs, with the tail of each job's log.
+
+    The jobs API lists which steps failed; a job's log (`actions/jobs/{id}/logs`, a redirect to
+    plain text) is one blob for the whole job, so only its last `_FAILED_LOG_TAIL_LINES` lines
+    -- where the failing step's output ends up -- are shown. Any failure fetching just means
+    "nothing to show".
+    """
+    chunks: list[str] = []
+    try:
+        data = gh.get(f"{gh.repo_path}/actions/runs/{run_id}/jobs", params={"filter": "latest", "per_page": 100})
+        for job in data.get("jobs") or []:
+            if job.get("conclusion") != "failure":
+                continue
+            steps = [s.get("name", "?") for s in job.get("steps") or [] if s.get("conclusion") == "failure"]
+            header = f"{job.get('name', '?')}" + (f" -- failed step(s): {', '.join(steps)}" if steps else "")
+            r = gh.request("GET", f"{gh.repo_path}/actions/jobs/{job['id']}/logs", ok=(404, 410))
+            log = r.text.strip() if r.status_code < 400 else ""
+            lines = log.splitlines()[-_FAILED_LOG_TAIL_LINES:]
+            chunks.append(header + ("\n" + "\n".join(lines) if lines else "\n(no log available)"))
+    except SystemExit:
+        pass
+    if not chunks:
         print("  (no failed steps with logs)")
         return
     print(f"\n--- Failed steps (run {run_id}) ---")
-    print(output)
+    print("\n\n".join(chunks))
 
 
-def print_run(gh: str, run: dict) -> None:
+def print_run(gh: GitHubClient, run: dict) -> None:
     run_id: int = run["databaseId"]
     status = run.get("status", "unknown")
     conclusion = run.get("conclusion") or "—"
@@ -419,7 +505,7 @@ def print_run(gh: str, run: dict) -> None:
         print_failed_step_logs(gh, run_id)
 
 
-def run_watch_deploy(gh: str, target_branch: str, wait: bool) -> None:
+def run_watch_deploy(gh: GitHubClient, target_branch: str, wait: bool) -> None:
     """Watch the most recent workflow run(s) triggered directly by a push to `target_branch`
     -- e.g. a post-merge workflow that only runs on the target branch once a PR merges into
     it, and usually does the actual deployment -- until they complete.
@@ -476,8 +562,51 @@ def run_watch_deploy(gh: str, target_branch: str, wait: bool) -> None:
         time.sleep(30)
 
 
+def _parse_create_args(extra_args: list[str]) -> dict[str, str]:
+    """`--title X` / `--title=X` / `--body X` / `--body=X` (also `-t`/`-b`) out of a pass-through
+    argument list; anything else can't be honored now that there's no `gh` to hand it to."""
+    out: dict[str, str] = {}
+    keys = {"--title": "title", "-t": "title", "--body": "body", "-b": "body"}
+    args = list(extra_args)
+    while args:
+        arg = args.pop(0)
+        name, eq, value = arg.partition("=")
+        if name in keys and eq:
+            out[keys[name]] = value
+        elif arg in keys and args:
+            out[keys[arg]] = args.pop(0)
+        else:
+            sys.exit(f"unsupported argument for `pr create`: {arg!r} (only --title/--body are supported)")
+    return out
+
+
+def _branch_commits(target: str) -> list[tuple[str, str]]:
+    """(subject, body) of each commit on HEAD not yet in `target`, oldest first; [] if unknown."""
+    for base in (f"origin/{target}", target):
+        r = _run(["git", "log", "--reverse", "--format=%s%x1f%b%x1e", f"{base}..HEAD"], capture_output=True, encoding="utf-8")
+        if r.returncode == 0:
+            commits = []
+            for rec in r.stdout.split("\x1e"):
+                if rec.strip():
+                    subject, _, body = rec.strip().partition("\x1f")
+                    commits.append((subject.strip(), body.strip()))
+            return commits
+    return []
+
+
+def _fill(branch: str, target: str) -> tuple[str, str]:
+    """Default (title, body), like `gh pr create --fill`: a single commit's message, else the
+    humanized branch name with the commit subjects as a list."""
+    commits = _branch_commits(target)
+    if len(commits) == 1:
+        return commits[0]
+    title = branch.replace("-", " ").replace("_", " ").strip()
+    title = title[:1].upper() + title[1:] if title else branch
+    return title, "\n".join(f"- {subject}" for subject, _ in commits)
+
+
 def create(
-    gh: str,
+    gh: GitHubClient,
     target: str,
     extra_args: list[str],
     draft: bool = False,
@@ -487,73 +616,74 @@ def create(
 ) -> tuple[int, str | None]:
     """Create a GitHub PR from the current branch into `target`.
 
-    --fill autofills title/body from commit info so this never blocks on an
-    interactive prompt; pass --title/--body in extra_args to override (gh
-    lets explicit values take precedence over --fill).
+    Title/body default to the branch's commits (a single commit's message; else the branch
+    name and a list of the subjects) so this never blocks on a prompt. `title`/`description`
+    override that; `--title`/`--body` in `extra_args` override those again (no other
+    pass-through argument is supported -- it exits naming it). The branch must already be pushed.
 
-    `-l/--label` labels must already exist on the repo (`gh label create`) —
-    unlike Azure DevOps PR labels, GitHub rejects a label name it doesn't
-    already know about.
+    `labels` are applied after creating the PR (GitHub creates a label it doesn't know yet).
 
-    `title`/`description` override the `--fill` values; the description is piped to
-    `gh` on stdin (`--body-file -`) in full, not squeezed through the command line.
-
-    Returns (returncode, web_url) — on success `gh pr create` prints the
-    PR's web URL as its only stdout line, which is what a human needs to
-    open it; on failure the url is `None` and the CLI's stderr is
-    surfaced to ours.
+    Returns (returncode, web_url) -- on failure the url is `None`, the error is printed to
+    stderr and the code is 1.
     """
-    cmd = [gh, "pr", "create", "--base", target, "--fill", *(["--draft"] if draft else [])]
-    for label in labels or []:
-        cmd += ["--label", label]
-    if title is not None:
-        cmd += ["--title", title]
-    if description is not None:
-        cmd += ["--body-file", "-"]
-    cmd += extra_args
-    r = _run(cmd, capture_output=True, encoding="utf-8", **({"input": description} if description is not None else {}))
-    if r.stderr:
-        print(r.stderr.strip(), file=sys.stderr)
-    if r.returncode != 0:
-        return r.returncode, None
-    ensure_session_note(gh)
-    return r.returncode, r.stdout.strip() or None
+    extra = _parse_create_args(extra_args)
+    branch = current_branch()
+    fill_title, fill_body = ("", "")
+    if title is None and "title" not in extra or description is None and "body" not in extra:
+        fill_title, fill_body = _fill(branch, target)
+    payload = {
+        "title": extra.get("title", title if title is not None else fill_title),
+        "body": extra.get("body", description if description is not None else fill_body),
+        "head": branch,
+        "base": target,
+        "draft": draft,
+    }
+    try:
+        pr = gh.post(f"{gh.repo_path}/pulls", payload)
+    except SystemExit as e:
+        print(str(e.code).strip(), file=sys.stderr)
+        return 1, None
+    if labels:
+        try:
+            gh.post(f"{gh.repo_path}/issues/{pr['number']}/labels", {"labels": labels})
+        except SystemExit as e:
+            print(f"PR created, but adding label(s) failed: {e.code}", file=sys.stderr)
+    ensure_session_note(gh, pr["number"])
+    return 0, pr.get("html_url")
 
 
-def ensure_session_note(gh: str) -> None:
-    """Make sure the current branch's PR body records the running agent's session, if any
-    (see `ensure_agent_session_note`) -- e.g. right after `create()`, whose body/title
-    come from `--fill`/`extra_args` rather than a value this module builds itself, so
-    there's nothing to pass the note through beforehand.
+def ensure_session_note(gh: GitHubClient, pr_number: int | None = None) -> None:
+    """Make sure the PR's body (`pr_number`'s, else the current branch's) records the running
+    agent's session, if any (see `ensure_agent_session_note`) -- e.g. right after `create()`,
+    whose body comes from commits/arguments rather than a value this module builds itself.
 
     Best-effort: swallows failures (a stale view, a rejected edit, ...) rather than
     turning a successful `pr create`/whatever else called this into a failure over a
-    step that's purely nice-to-have. A no-op (no extra `gh` calls at all) when no
+    step that's purely nice-to-have. A no-op (no API calls at all) when no
     agent is detected, which is the common case running outside one.
     """
     if detect_agent_session() is None:
         return
     try:
-        pr = _run_gh_json(gh, ["pr", "view", "--json", "number,title,body"])
-        body = pr.get("body") or ""
-        noted = ensure_agent_session_note(body, also_check=pr.get("title"))
+        pr = _pr_rest(gh, pr_number)
+        body = pr["body"]
+        noted = ensure_agent_session_note(body, also_check=pr["title"])
         if noted != body:
-            r = _run([gh, "pr", "edit", str(pr["number"]), "--body", noted or ""], capture_output=True, encoding="utf-8")
-            r.check_returncode()
-    except (subprocess.SubprocessError, SystemExit, json.JSONDecodeError, OSError):
+            gh.patch(f"{gh.repo_path}/pulls/{pr['number']}", {"body": noted or ""})
+    except (SystemExit, KeyError, ValueError, OSError):
         pass
 
 
-def get_pr_body(gh: str) -> tuple[int, str]:
+def get_pr_body(gh: GitHubClient) -> tuple[int, str]:
     """(PR number, PR body) for the current branch's PR -- used by issue-linking, which needs
-    the body actually stored (e.g. autofilled from the commit message via `--fill`), not
+    the body actually stored (e.g. autofilled from the commit message), not
     whatever a caller happened to pass to `pr create`.
     """
-    pr = _run_gh_json(gh, ["pr", "view", "--json", "number,body"])
-    return pr["number"], pr.get("body") or ""
+    pr = _pr_rest(gh, None)
+    return pr["number"], pr["body"]
 
 
-def link_issue_to_pr(gh: str, pr_number: int, body: str, issue_number: int) -> str:
+def link_issue_to_pr(gh: GitHubClient, pr_number: int, body: str, issue_number: int) -> str:
     """Make sure `body` (the PR's current body) references `issue_number` via a GitHub closing
     keyword, so GitHub shows this as a genuinely linked PR (appearing in the issue's
     "Development" sidebar and auto-closing it on merge) -- a plain `#N` mention elsewhere (only
@@ -569,38 +699,33 @@ def link_issue_to_pr(gh: str, pr_number: int, body: str, issue_number: int) -> s
     if pr_issue_link.github_body_already_closes(body, issue_number):
         return body
     new_body = f"{body.rstrip()}\n\nFixes #{issue_number}\n".lstrip("\n")
-    r = _run([gh, "pr", "edit", str(pr_number), "--body", new_body], capture_output=True, encoding="utf-8")
-    if r.returncode != 0:
-        sys.exit((r.stderr or r.stdout).strip() or "`gh pr edit` failed")
+    gh.patch(f"{gh.repo_path}/pulls/{pr_number}", {"body": new_body})
     return new_body
 
 
-def publish(gh: str, pr_id: int | None = None) -> None:
+_READY_MUTATION = "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { id } } }"
+_DRAFT_MUTATION = "mutation($id: ID!) { convertPullRequestToDraft(input: {pullRequestId: $id}) { pullRequest { id } } }"
+
+
+def publish(gh: GitHubClient, pr_id: int | None = None) -> None:
     """Mark the current branch's draft PR -- or `pr_id`'s, if given -- as ready for review."""
-    args = [gh, "pr", "ready", *_pr_id_args(pr_id)]
-    r = _run(args, capture_output=True, encoding="utf-8")
-    if r.returncode != 0:
-        sys.exit((r.stderr or r.stdout).strip() or "`gh pr ready` failed")
+    gh.graphql(_READY_MUTATION, id=_pr_rest(gh, pr_id)["id"])
     print("Marked PR as ready for review")
     print("\nRun `bdt pr status --wait` to watch the PR's CI.")
 
 
-def set_draft(gh: str, pr_id: int | None = None, target: str | None = None) -> bool:
-    """Convert the current branch's ready PR -- or `pr_id`'s, if given -- back to a draft
-    (`gh pr ready --undo`).
+def set_draft(gh: GitHubClient, pr_id: int | None = None, target: str | None = None) -> bool:
+    """Convert the current branch's ready PR -- or `pr_id`'s, if given -- back to a draft.
 
     Returns True if it was just converted, False if it was already a draft --
     a caller announcing "converted to draft" shouldn't do so for a PR that
     already was one.
     """
     pr_id = resolve_pr_id(gh, pr_id, target)
-    pr = get_pr(gh, pr_id)
+    pr = get_pr(gh, pr_id, fields="number,isDraft,id")
     if pr.get("isDraft"):
         return False
-    args = [gh, "pr", "ready", "--undo", *_pr_id_args(pr_id)]
-    r = _run(args, capture_output=True, encoding="utf-8")
-    if r.returncode != 0:
-        sys.exit((r.stderr or r.stdout).strip() or "`gh pr ready --undo` failed")
+    gh.graphql(_DRAFT_MUTATION, id=pr["id"])
     return True
 
 
@@ -675,7 +800,7 @@ def _file_links(owner: str, repo: str, branch: str, file_paths: list[str]) -> li
 
 
 def add_attachments(
-    gh: str,
+    gh: GitHubClient,
     owner: str,
     repo: str,
     branch: str,
@@ -687,30 +812,28 @@ def add_attachments(
     """
     screenshot_paths = screenshot_paths or []
     file_paths = file_paths or []
-    pr = _run_gh_json(gh, ["pr", "view", "--json", "number,body"])
-    body: str = pr.get("body") or ""
+    pr = _pr_rest(gh, None)
+    body: str = pr["body"]
     if screenshot_paths:
         body = build_screenshots_section(body, _screenshot_images(owner, repo, branch, screenshot_paths))
     if file_paths:
         body = build_attachments_section(body, _file_links(owner, repo, branch, file_paths))
-    r = _run([gh, "pr", "edit", str(pr["number"]), "--body", body], capture_output=True, encoding="utf-8")
-    if r.returncode != 0:
-        sys.exit((r.stderr or r.stdout).strip() or "`gh pr edit` failed")
+    gh.patch(f"{gh.repo_path}/pulls/{pr['number']}", {"body": body})
     print(f"Attached {len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s) to PR #{pr['number']}")
 
 
-def add_screenshots(gh: str, owner: str, repo: str, branch: str, screenshot_paths: list[str]) -> None:
+def add_screenshots(gh: GitHubClient, owner: str, repo: str, branch: str, screenshot_paths: list[str]) -> None:
     """Push screenshots to the `pr-assets` branch and append them to the current branch's PR body."""
     add_attachments(gh, owner, repo, branch, screenshot_paths=screenshot_paths)
 
 
-def add_files(gh: str, owner: str, repo: str, branch: str, file_paths: list[str]) -> None:
+def add_files(gh: GitHubClient, owner: str, repo: str, branch: str, file_paths: list[str]) -> None:
     """Push files to the `pr-assets` branch and append them as linked attachments to the current branch's PR body."""
     add_attachments(gh, owner, repo, branch, file_paths=file_paths)
 
 
 def update(
-    gh: str,
+    gh: GitHubClient,
     owner: str,
     repo: str,
     branch: str,
@@ -727,13 +850,12 @@ def update(
     overridden with the PR's actual head branch rather than trusting the caller's guess,
     since there may be no matching branch checked out locally at all.
     """
-    view_args = ["pr", "view", *_pr_id_args(pr_id), "--json", "number,title,body,headRefName"]
-    pr = _run_gh_json(gh, view_args)
+    pr = _pr_rest(gh, pr_id)
     if pr_id is not None:
         branch = pr.get("headRefName") or branch
-    args = [gh, "pr", "edit", str(pr["number"])]
+    payload: dict[str, str] = {}
     if title:
-        args += ["--title", title]
+        payload["title"] = title
     if description is not None or screenshot_paths or file_paths:
         new_body: str = description if description is not None else (pr.get("body") or "")
         if screenshot_paths:
@@ -741,17 +863,15 @@ def update(
         if file_paths:
             new_body = build_attachments_section(new_body, _file_links(owner, repo, branch, file_paths))
         new_body = ensure_agent_session_note(new_body, also_check=title or pr.get("title")) or ""
-        args += ["--body", new_body]
-    if len(args) == 3:
+        payload["body"] = new_body
+    if not payload:
         return
-    r = _run(args, capture_output=True, encoding="utf-8")
-    if r.returncode != 0:
-        sys.exit((r.stderr or r.stdout).strip() or "`gh pr edit` failed")
+    gh.patch(f"{gh.repo_path}/pulls/{pr['number']}", payload)
     print(f"Updated PR #{pr['number']}")
 
 
 def comment_with_screenshots(
-    gh: str,
+    gh: GitHubClient,
     owner: str,
     repo: str,
     branch: str,
@@ -767,10 +887,7 @@ def comment_with_screenshots(
     images = _screenshot_images(owner, repo, branch, screenshot_paths) if screenshot_paths else []
     files = _file_links(owner, repo, branch, file_paths) if file_paths else []
     content = ensure_agent_session_note(build_comment_content(message, images, files)) or ""
-    args = [gh, "pr", "comment", *_pr_id_args(pr_id), "--body", content]
-    r = _run(args, capture_output=True, encoding="utf-8")
-    if r.returncode != 0:
-        sys.exit((r.stderr or r.stdout).strip() or "`gh pr comment` failed")
+    gh.post(f"{gh.repo_path}/issues/{_pr_number(gh, pr_id)}/comments", {"body": content})
     target = f"PR #{pr_id}" if pr_id is not None else "the current PR"
     print(f"Added comment ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) to {target}")
 
@@ -780,27 +897,16 @@ def protection_requires_status_checks(protection: dict) -> bool:
     return bool(protection.get("required_status_checks"))
 
 
-def has_build_policy(gh: str, branch: str) -> bool:
+def has_build_policy(gh: GitHubClient, branch: str) -> bool:
     """Best-effort check for whether `branch` has branch protection requiring status checks.
 
     Only used to decide whether to print a `bdt pr status` reminder after
-    `pr create` — `{owner}`/`{repo}` are resolved by `gh` from the current
-    repo, and any failure (no permission to read protection settings, branch
+    `pr create` -- any failure (no permission to read protection settings, branch
     not protected at all, a timed-out call, etc.) fails open (returns False)
     rather than blocking PR creation.
     """
     try:
-        r = _run(
-            [gh, "api", f"repos/{{owner}}/{{repo}}/branches/{branch}/protection"],
-            capture_output=True,
-            encoding="utf-8",
-        )
-    except SystemExit:
+        data = gh.get(f"{gh.repo_path}/branches/{quote(branch, safe='/')}/protection")
+    except (SystemExit, ValueError):
         return False
-    if r.returncode != 0:
-        return False
-    try:
-        data = json.loads(r.stdout)
-    except json.JSONDecodeError:
-        return False
-    return protection_requires_status_checks(data)
+    return isinstance(data, dict) and protection_requires_status_checks(data)

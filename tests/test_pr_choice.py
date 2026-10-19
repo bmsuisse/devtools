@@ -18,8 +18,26 @@ GITHUB_REMOTE = GitHubRemote("owner", "repo")
 
 ADO_INTO_MAIN = {"pullRequestId": 10, "title": "into main", "targetRefName": "refs/heads/main", "mergeStatus": "succeeded"}
 ADO_INTO_DEV = {"pullRequestId": 11, "title": "into dev", "targetRefName": "refs/heads/dev", "mergeStatus": "succeeded"}
-GH_INTO_MAIN = {"number": 10, "title": "into main", "baseRefName": "main", "url": "https://github.com/owner/repo/pull/10"}
-GH_INTO_DEV = {"number": 11, "title": "into dev", "baseRefName": "dev", "url": "https://github.com/owner/repo/pull/11"}
+# GitHub REST `pulls` objects
+GH_INTO_MAIN = {"number": 10, "title": "into main", "base": {"ref": "main"}, "html_url": "https://github.com/owner/repo/pull/10", "state": "open"}
+GH_INTO_DEV = {"number": 11, "title": "into dev", "base": {"ref": "dev"}, "html_url": "https://github.com/owner/repo/pull/11", "state": "open"}
+
+
+class PrListClient:
+    """Stands in for `GitHubClient`: answers every `pulls` lookup with `prs`, recording the query params."""
+
+    owner = "owner"
+    repo = "repo"
+    repo_path = "repos/owner/repo"
+
+    def __init__(self, prs: list[dict]) -> None:
+        self.prs = prs
+        self.calls: list[dict] = []
+
+    def get(self, path, params=None, **kwargs):
+        assert path == "repos/owner/repo/pulls"
+        self.calls.append(params or {})
+        return self.prs
 
 
 @pytest.fixture
@@ -137,69 +155,67 @@ def test_ado_completed_prs_are_not_candidates(never_asks) -> None:
 
 @pytest.fixture
 def gh_list(monkeypatch):
-    """Stubs `gh pr list` to answer `prs`; the recorded `gh` argument lists are the returned list."""
-    calls: list[list[str]] = []
+    """A client whose `pulls` lookup answers `prs`; `install` returns it (its `calls` are the recorded query params)."""
 
-    def install(prs: list[dict]) -> list[list[str]]:
+    def install(prs: list[dict]) -> PrListClient:
         monkeypatch.setattr(gh_pr, "current_branch", lambda: "feat")
-        monkeypatch.setattr(gh_pr, "_run_gh_json", lambda gh, args: calls.append(args) or prs)
-        return calls
+        return PrListClient(prs)
 
     return install
 
 
 def test_gh_pr_id_is_used_as_is_without_looking_anything_up(gh_list, never_asks) -> None:
-    calls = gh_list([GH_INTO_MAIN, GH_INTO_DEV])
+    client = gh_list([GH_INTO_MAIN, GH_INTO_DEV])
 
-    assert gh_pr.resolve_pr_id("gh", 99) == 99
-    assert calls == []
+    assert gh_pr.resolve_pr_id(client, 99) == 99  # ty: ignore[invalid-argument-type]
+    assert client.calls == []
 
 
 def test_gh_single_open_pr_into_main_is_used_without_asking(gh_list, never_asks) -> None:
-    calls = gh_list([GH_INTO_MAIN])
+    client = gh_list([GH_INTO_MAIN])
 
-    assert gh_pr.resolve_pr_id("gh", None) == 10
-    assert calls[0][:6] == ["pr", "list", "--head", "feat", "--state", "open"]  # only open PRs are candidates
-    assert "--base" not in calls[0]
+    assert gh_pr.resolve_pr_id(client, None) == 10  # ty: ignore[invalid-argument-type]
+    assert client.calls[0]["head"] == "owner:feat" and client.calls[0]["state"] == "open"  # only open PRs are candidates
+    assert "base" not in client.calls[0]
 
 
 def test_gh_no_open_pr_leaves_it_to_gh(gh_list, never_asks) -> None:
     """E.g. the PR was already merged: `gh pr view` without a number still finds it, as before."""
-    gh_list([])
+    client = gh_list([])
 
-    assert gh_pr.resolve_pr_id("gh", None) is None
+    assert gh_pr.resolve_pr_id(client, None) is None  # ty: ignore[invalid-argument-type]
 
 
 def test_gh_target_narrows_the_search_to_that_base(gh_list, never_asks) -> None:
-    calls = gh_list([GH_INTO_DEV])
+    client = gh_list([GH_INTO_DEV])
 
-    assert gh_pr.resolve_pr_id("gh", None, "dev") == 11
-    assert calls[0][-2:] == ["--base", "dev"]
+    assert gh_pr.resolve_pr_id(client, None, "dev") == 11  # ty: ignore[invalid-argument-type]
+    assert client.calls[0]["base"] == "dev"
 
 
 def test_gh_target_without_a_matching_open_pr_exits(gh_list, never_asks) -> None:
-    gh_list([])
+    client = gh_list([])
 
     with pytest.raises(SystemExit) as exc_info:
-        gh_pr.resolve_pr_id("gh", None, "release")
+        gh_pr.resolve_pr_id(client, None, "release")  # ty: ignore[invalid-argument-type]
 
     assert "'feat'" in str(exc_info.value) and "'release'" in str(exc_info.value)
 
 
 def test_gh_several_open_prs_interactive_asks_and_uses_the_chosen_one(gh_list, interactive, monkeypatch, capsys) -> None:
-    gh_list([GH_INTO_MAIN, GH_INTO_DEV])
+    client = gh_list([GH_INTO_MAIN, GH_INTO_DEV])
     monkeypatch.setattr(pr_choice.typer, "prompt", lambda text, **k: 2)
 
-    assert gh_pr.resolve_pr_id("gh", None) == 11
+    assert gh_pr.resolve_pr_id(client, None) == 11  # ty: ignore[invalid-argument-type]
     shown = capsys.readouterr().err
     assert "#10" in shown and "#11" in shown and "https://github.com/owner/repo/pull/11" in shown
 
 
 def test_gh_several_open_prs_non_interactive_exits_listing_them(gh_list, non_interactive) -> None:
-    gh_list([GH_INTO_MAIN, GH_INTO_DEV])
+    client = gh_list([GH_INTO_MAIN, GH_INTO_DEV])
 
     with pytest.raises(SystemExit) as exc_info:
-        gh_pr.resolve_pr_id("gh", None)
+        gh_pr.resolve_pr_id(client, None)  # ty: ignore[invalid-argument-type]
 
     assert isinstance(exc_info.value.code, str)
     _assert_lists_both_and_says_how_to_choose(exc_info.value.code)
@@ -210,9 +226,8 @@ def test_gh_several_open_prs_non_interactive_exits_listing_them(gh_list, non_int
 
 def _github_cli(monkeypatch, prs: list[dict]) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
-    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: PrListClient(prs))
     monkeypatch.setattr(gh_pr, "current_branch", lambda: "feat")
-    monkeypatch.setattr(gh_pr, "_run_gh_json", lambda gh, args: prs)
 
 
 def test_cli_pr_status_non_interactive_with_several_prs_fails_without_acting(monkeypatch) -> None:

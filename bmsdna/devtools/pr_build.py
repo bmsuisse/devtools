@@ -12,7 +12,7 @@ import requests
 
 from .ado_auth import auth_header
 from .cli_tools import EXIT_NEEDS_APPROVAL, HTTP_TIMEOUT_SECS, PollHeartbeat, detect_agent_session, ensure_agent_session_note, is_claude_code
-from .gitrepo import AdoRemote, current_branch
+from .gitrepo import AdoRemote, current_branch, head_commit_subject
 from .pr_choice import PrCandidate, choose_pr
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
@@ -287,13 +287,11 @@ def _patch_pr(session: requests.Session, remote: AdoRemote, pr_id: int, fields: 
     return stored
 
 
-def split_az_text_args(args: list[str]) -> tuple[list[str], str | None, str | None]:
+def split_text_args(args: list[str]) -> tuple[list[str], str | None, str | None]:
     """Pull `--title`/`-t` and `--description`/`-d` (and their `--opt=value` forms) out of the
-    passthrough args for `az repos pr create`, returning `(remaining_args, title, description)`.
+    passthrough args of `bdt pr create`, returning `(remaining_args, title, description)`.
 
-    `az` is not trusted to carry a long description intact (it has been seen cutting it at ~450
-    characters), so `bdt pr create` applies these over the REST API after creating the PR. Like
-    `az`, `--description` takes every following value up to the next option, one per line.
+    `--description` takes every following value up to the next option, one per line (as `az repos pr create` did).
     """
     rest: list[str] = []
     title: str | None = None
@@ -320,6 +318,49 @@ def split_az_text_args(args: list[str]) -> tuple[list[str], str | None, str | No
         rest.append(arg)
         i += 1
     return rest, title, description
+
+
+def create_pr(
+    session: requests.Session,
+    remote: AdoRemote,
+    source_branch: str,
+    target_branch: str,
+    *,
+    draft: bool = False,
+    labels: list[str] | None = None,
+    title: str | None = None,
+    description: str | None = None,
+) -> dict:
+    """Create the PR `source_branch` -> `target_branch` over REST and return its JSON.
+
+    Without `title` it is the HEAD commit's subject (like `az repos pr create`), else the branch name.
+    Auto-complete is never set. Labels are created on the fly by Azure DevOps.
+    """
+    if description is not None and len(description) > ADO_PR_DESCRIPTION_MAX:
+        sys.exit(f"PR description is {len(description)} characters; Azure DevOps allows at most {ADO_PR_DESCRIPTION_MAX}.")
+    body: dict = {
+        "sourceRefName": f"refs/heads/{source_branch}",
+        "targetRefName": f"refs/heads/{target_branch}",
+        "title": title if title is not None else (head_commit_subject() or source_branch),
+        "isDraft": draft,
+    }
+    if description is not None:
+        body["description"] = description
+    if labels:
+        body["labels"] = [{"name": label} for label in labels]
+    r = session.post(
+        f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}/pullrequests",
+        params={"api-version": "7.1"},
+        json=body,
+        timeout=HTTP_TIMEOUT_SECS,
+    )
+    if r.status_code >= 400:
+        try:
+            message = r.json().get("message")
+        except ValueError:
+            message = None
+        sys.exit(f"Azure DevOps could not create the PR (HTTP {r.status_code}): {message or r.text.strip() or r.reason}")
+    return r.json()
 
 
 def set_description(session: requests.Session, remote: AdoRemote, pr: dict, description: str) -> dict:
