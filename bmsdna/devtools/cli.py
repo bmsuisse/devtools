@@ -35,6 +35,7 @@ from . import pr_build, pr_info as pr_info_mod, pr_issue_link, pr_labels, pull a
 from .ado_auth import auth_header
 from .bdt_config import find_pyproject, load_bdt_table
 from .cli_tools import CLI_TIMEOUT_SECS, detect_agent_session, require_az, require_gh
+from .usage.cli import usage_app
 from .gitrepo import (
     AdoRemote,
     GitHubRemote,
@@ -102,6 +103,8 @@ issue_app.add_typer(issue_comment_app, name="comment")
 
 logs_app = typer.Typer(name="logs", help="Application Insights / Log Analytics queries")
 app.add_typer(logs_app, name="logs")
+
+app.add_typer(usage_app, name="usage")
 
 cleanup_app = typer.Typer(
     name="cleanup",
