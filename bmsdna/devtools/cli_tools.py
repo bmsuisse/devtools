@@ -1,4 +1,4 @@
-"""Locating required external CLIs (az, gh, psql) with clear errors when missing.
+"""Locating required external CLIs (psql) with clear errors when missing.
 
 Uses `shutil.which` rather than a bare command name so Windows .cmd/.bat/.exe
 shims (e.g. az.cmd from the MSI installer) resolve correctly via PATHEXT —
@@ -15,8 +15,6 @@ import sys
 import time
 from dataclasses import dataclass
 
-AZ_INSTALL_HINT = "Install the Azure CLI: https://learn.microsoft.com/cli/azure/install-azure-cli"
-GH_INSTALL_HINT = "Install the GitHub CLI: https://cli.github.com"
 PSQL_INSTALL_HINT = "Install the PostgreSQL client tools (psql): https://www.postgresql.org/download/"
 
 # `pr status --wait` exits with this code (not 0=success, not 1=CI failure) when it stops
@@ -202,12 +200,11 @@ def require_tool(name: str, install_hint: str) -> str:
     return path
 
 
-def require_az() -> str:
-    return require_tool("az", AZ_INSTALL_HINT)
+def require_gh():
+    """An authenticated raw-HTTP GitHub client (see `github_api`); exits with a hint when no token is found."""
+    from .github_api import get_client
 
-
-def require_gh() -> str:
-    return require_tool("gh", GH_INSTALL_HINT)
+    return get_client()
 
 
 def require_psql() -> str:
