@@ -13,7 +13,9 @@ import os
 import shutil
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import NoReturn
 
 AZ_INSTALL_HINT = "Install the Azure CLI: https://learn.microsoft.com/cli/azure/install-azure-cli"
 GH_INSTALL_HINT = "Install the GitHub CLI: https://cli.github.com"
@@ -25,6 +27,11 @@ PSQL_INSTALL_HINT = "Install the PostgreSQL client tools (psql): https://www.pos
 # Click/Typer's own exit code for a CLI usage error (e.g. typer.BadParameter elsewhere in
 # this tool), and callers branching on exit code shouldn't confuse the two.
 EXIT_NEEDS_APPROVAL = 3
+
+# `pr status --wait --timeout N` exits with this code when the checks are still running after N seconds
+# (same code as `issue watch` / `issue search --wait` use for "gave up waiting"). The caller learns the
+# current state from the output and can simply run the same command again to keep waiting.
+EXIT_WAIT_TIMEOUT = 4
 
 # How long a `--wait` poll loop may go without printing anything before `PollHeartbeat`
 # forces a line out anyway. Every `--wait` loop in this tool polls every 30s but used to
@@ -71,6 +78,42 @@ class PollHeartbeat:
             print(f"\n[{time.strftime('%H:%M:%S')}] still waiting: {msg.lstrip(chr(13))}", flush=True)
         self._last_line = msg
         self._last_print = now
+
+
+class WaitDeadline:
+    """Optional overall time limit of a `--wait` poll loop (`timeout_secs` of 0 / None = wait forever).
+
+    Exists because a caller often can't wait as long as CI takes: an agent's shell tool kills a command
+    after a few minutes and throws its output away. Giving up on our own terms lets us report where things
+    stand and exit with `EXIT_WAIT_TIMEOUT` so the caller knows to re-run.
+    """
+
+    def __init__(self, timeout_secs: float | None) -> None:
+        self.timeout_secs = timeout_secs or 0.0
+        self._end = time.monotonic() + self.timeout_secs if self.timeout_secs else None
+
+    def expired(self) -> bool:
+        return self._end is not None and time.monotonic() >= self._end
+
+    def sleep(self, secs: float) -> None:
+        """`time.sleep(secs)`, cut short so the loop wakes up right at the deadline."""
+        time.sleep(secs if self._end is None else max(0.0, min(secs, self._end - time.monotonic())))
+
+
+def status_rerun_cmd(pr_id: int | None, timeout_secs: float) -> str:
+    """The command that keeps waiting where a timed-out `pr status --wait` stopped. Pins `--pr-id` to the PR that
+    was being watched, so re-running can't resolve to a different PR (e.g. another branch checked out since)."""
+    return f"bdt pr status --pr-id {pr_id} --wait --timeout {timeout_secs:g}" if pr_id else f"bdt pr status --wait --timeout {timeout_secs:g}"
+
+
+def exit_wait_timeout(msg: str, print_details: Callable[[], object], deadline: WaitDeadline, rerun_cmd: str) -> NoReturn:
+    """Report where a `--wait` loop stands when its `deadline` ran out (status line, per-item details), then
+    exit `EXIT_WAIT_TIMEOUT`. The last line tells the caller what to run to keep waiting."""
+    print(msg)
+    print("\nDetails:")
+    print_details()
+    print(f"\nStill running after {deadline.timeout_secs:g} s. Re-run `{rerun_cmd}` to keep waiting.")
+    sys.exit(EXIT_WAIT_TIMEOUT)
 
 
 def is_claude_code() -> bool:
