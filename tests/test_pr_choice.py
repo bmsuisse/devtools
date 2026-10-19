@@ -245,7 +245,7 @@ def test_cli_pr_status_interactive_with_several_prs_acts_on_the_chosen_one(monke
     _github_cli(monkeypatch, [GH_INTO_MAIN, GH_INTO_DEV])
     monkeypatch.setattr(pr_choice, "_interactive", lambda: True)
     seen = {}
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.run", lambda gh, wait, pr_id=None: seen.update(pr_id=pr_id))
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.run", lambda gh, wait, pr_id=None, timeout=0: seen.update(pr_id=pr_id))
 
     result = runner.invoke(app, ["pr", "status"], input="1\n")
 
@@ -256,7 +256,7 @@ def test_cli_pr_status_interactive_with_several_prs_acts_on_the_chosen_one(monke
 def test_cli_pr_status_with_a_single_pr_into_main_does_not_ask(monkeypatch, never_asks) -> None:
     _github_cli(monkeypatch, [GH_INTO_MAIN])
     seen = {}
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.run", lambda gh, wait, pr_id=None: seen.update(pr_id=pr_id))
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.run", lambda gh, wait, pr_id=None, timeout=0: seen.update(pr_id=pr_id))
 
     result = runner.invoke(app, ["pr", "status"])
 

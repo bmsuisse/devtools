@@ -34,8 +34,9 @@ from . import translate as translate_mod
 from . import pr_build, pr_info as pr_info_mod, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
 from .bdt_config import find_pyproject, load_bdt_table
+from .cli_tools import CLI_TIMEOUT_SECS, EXIT_WAIT_TIMEOUT, detect_agent_session, require_gh
 from .github_api import GitHubClient
-from .cli_tools import CLI_TIMEOUT_SECS, detect_agent_session, require_gh
+from .usage.cli import usage_app
 from .gitrepo import (
     AdoRemote,
     GitHubRemote,
@@ -103,6 +104,8 @@ issue_app.add_typer(issue_comment_app, name="comment")
 
 logs_app = typer.Typer(name="logs", help="Application Insights / Log Analytics queries")
 app.add_typer(logs_app, name="logs")
+
+app.add_typer(usage_app, name="usage")
 
 cleanup_app = typer.Typer(
     name="cleanup",
@@ -444,18 +447,28 @@ def pr_publish(
 def pr_status(
     target_branch: str | None = typer.Option(None, "--target-branch", help=_LOOKUP_TARGET_HELP),
     wait: bool = typer.Option(False, "--wait", help="Poll until all pipelines/checks are completed; stops early and reports status if one needs manual approval"),
+    timeout: float = typer.Option(
+        0,
+        "--timeout",
+        help="With --wait: stop after this many seconds if the checks are still running, print their current state and exit "
+        f"{EXIT_WAIT_TIMEOUT} (0 = wait forever, the default). Use it where the caller's own time limit is shorter than CI, "
+        "e.g. an agent's shell tool, then re-run the same command to keep waiting",
+    ),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)"),
 ) -> None:
     """Show build/check status for the PR opened from the current branch, or for --pr-id
     directly (Azure DevOps or GitHub, auto-detected).
     """
+    if timeout and not wait:
+        raise typer.BadParameter("--timeout only works together with --wait", param_hint="--timeout")
+    _check_poll_options(None, timeout)
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
-        gh_pr.run(gh, wait, pr_id=gh_pr.resolve_pr_id(gh, pr_id, target_branch))
+        gh_pr.run(gh, wait, pr_id=gh_pr.resolve_pr_id(gh, pr_id, target_branch), timeout=timeout)
         return
-    pr_build.run(remote, pat, target_branch, wait, pr_id=pr_id)
+    pr_build.run(remote, pat, target_branch, wait, pr_id=pr_id, timeout=timeout)
 
 
 @pr_app.command("info")

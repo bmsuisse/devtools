@@ -6,12 +6,13 @@ import re
 import sys
 import time
 from pathlib import Path
+from typing import NoReturn
 from urllib.parse import quote
 
 import requests
 
 from .ado_auth import auth_header
-from .cli_tools import EXIT_NEEDS_APPROVAL, HTTP_TIMEOUT_SECS, PollHeartbeat, detect_agent_session, ensure_agent_session_note, is_claude_code
+from .cli_tools import EXIT_NEEDS_APPROVAL, HTTP_TIMEOUT_SECS, PollHeartbeat, WaitDeadline, detect_agent_session, ensure_agent_session_note, exit_wait_timeout, is_claude_code, status_rerun_cmd
 from .gitrepo import AdoRemote, current_branch, head_commit_subject
 from .pr_choice import PrCandidate, choose_pr
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
@@ -807,7 +808,10 @@ def run(
     wait: bool,
     source_branch: str | None = None,
     pr_id: int | None = None,
+    timeout: float = 0,
 ) -> None:
+    """`timeout` (seconds, only with `wait`): stop polling after that long and exit `EXIT_WAIT_TIMEOUT`
+    with the current state; 0 = wait until every pipeline is done."""
     session = requests.Session()
     session.headers.update(auth_header(pat))
 
@@ -845,8 +849,14 @@ def run(
     draft_notice_shown = False
     policy_checked = False
     heartbeat = PollHeartbeat()
+    deadline = WaitDeadline(timeout)
+
+    def time_out(msg: str, builds: list, pr_number: int) -> NoReturn:
+        exit_wait_timeout(msg, lambda: [print_build(session, remote, b) for b in builds], deadline, status_rerun_cmd(pr_number, timeout))
+
     while True:
         pr = _poll_or_exit(fetch_pr)
+        pipeline_builds: list = []
         if not draft_notice_shown:
             draft_msg = draft_notice(pr)
             if draft_msg:
@@ -868,7 +878,9 @@ def run(
                         b.get("definition", {}).get("name", "?") for b in stale
                     )
                     heartbeat.show(msg)
-                    time.sleep(30)
+                    if deadline.expired():
+                        time_out(msg, [b for b in pipeline_builds if b not in stale], pr_number)
+                    deadline.sleep(30)
                     continue
             msg += " | " + ", ".join(
                 f"{b.get('definition', {}).get('name', '?')} #{b['id']} {b.get('status')} ({b.get('result') or '—'})"
@@ -930,7 +942,9 @@ def run(
         heartbeat.show(msg)
 
         if wait:
-            time.sleep(30)
+            if deadline.expired():
+                time_out(msg, pipeline_builds, pr_number)
+            deadline.sleep(30)
 
 
 def run_watch_deploy(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool) -> None:

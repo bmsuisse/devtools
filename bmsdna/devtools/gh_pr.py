@@ -22,7 +22,17 @@ from typing import Any
 from urllib.parse import quote
 
 from . import pr_issue_link
-from .cli_tools import CLI_TIMEOUT_SECS, EXIT_NEEDS_APPROVAL, PollHeartbeat, detect_agent_session, ensure_agent_session_note, is_claude_code
+from .cli_tools import (
+    CLI_TIMEOUT_SECS,
+    EXIT_NEEDS_APPROVAL,
+    PollHeartbeat,
+    WaitDeadline,
+    detect_agent_session,
+    ensure_agent_session_note,
+    exit_wait_timeout,
+    is_claude_code,
+    status_rerun_cmd,
+)
 from .github_api import GitHubClient
 from .gitrepo import current_branch
 from .pr_choice import PrCandidate, choose_pr
@@ -372,8 +382,11 @@ def exit_needs_approval(msg: str, item_lines: list[str], rerun_cmd: str) -> None
     sys.exit(EXIT_NEEDS_APPROVAL)
 
 
-def run(gh: GitHubClient, wait: bool, pr_id: int | None = None) -> None:
+def run(gh: GitHubClient, wait: bool, pr_id: int | None = None, timeout: float = 0) -> None:
+    """`timeout` (seconds, only with `wait`): stop polling after that long and exit `EXIT_WAIT_TIMEOUT`
+    with the current state; 0 = wait until every check is done."""
     heartbeat = PollHeartbeat()
+    deadline = WaitDeadline(timeout)
     draft_notice_shown = False
     while True:
         pr = get_pr(gh, pr_id)
@@ -432,7 +445,9 @@ def run(gh: GitHubClient, wait: bool, pr_id: int | None = None) -> None:
         # must not keep polling forever waiting for it to become unstuck.
         if "pending" in buckets and wait and not waiting_approval:
             heartbeat.show(msg)
-            time.sleep(30)
+            if deadline.expired():
+                exit_wait_timeout(msg, lambda: [print_check(c) for c in checks], deadline, status_rerun_cmd(pr_number, timeout))
+            deadline.sleep(30)
             continue
 
         print(msg)

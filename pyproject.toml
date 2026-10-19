@@ -10,7 +10,7 @@ packages = ["bmsdna"]
 
 [project]
 name = "bmsdna-devtools"
-version = "0.41.0"
+version = "0.42.0"
 description = "Shared Azure DevOps / GitHub / git / Azure Monitor developer tooling for BMS projects"
 readme = "README.md"
 requires-python = ">=3.14"  # pgdevkit>=0.7.1 requires 3.14; was >=3.11 before adding it as a dependency
@@ -34,6 +34,10 @@ dependencies = [
 # ImportError) when it's missing either way (see lint_sql.require_sqlglot).
 [project.optional-dependencies]
 lint = ["sqlglot>=27.0.0"]
+# `bdt usage` (token usage of Claude Code / codex sessions per dev-workflow step): DuckDB reads the session logs,
+# plotly renders the HTML report. Both are only imported when a `bdt usage` command runs, which prints an install
+# hint when they are missing.
+usage = ["duckdb>=1.3.0", "plotly>=5.24.0"]
 
 [project.scripts]
 bdt = "bmsdna.devtools.cli:app"
