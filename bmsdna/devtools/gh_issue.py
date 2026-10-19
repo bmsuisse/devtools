@@ -27,6 +27,7 @@ from urllib.parse import quote
 from .bdt_config import load_bdt_table
 from .cli_tools import ensure_agent_session_note
 from .github_api import GitHubClient
+from .gh_args import Flag, open_in_browser, parse_flags, read_body_file
 from .gh_pr import push_assets
 from .issue_show import IssueDetails
 from .issue_watch import to_comments
@@ -205,37 +206,49 @@ def board_issue_numbers(gh: GitHubClient, owner: str, repo: str, project_number:
 # -- create -------------------------------------------------------------------
 
 
-def _parse_create_extra_args(gh: GitHubClient, extra_args: list[str]) -> dict[str, Any]:
-    """The issue fields the pass-through args of `bdt issue create` set: `--assignee/-a <login>[,<login>]`
-    (repeatable; `@me` is the authenticated user) and `--milestone/-m <title or number>`."""
-    fields: dict[str, Any] = {}
-    assignees: list[str] = []
-    milestone: str | None = None
-    it = iter(extra_args)
-    for arg in it:
-        flag, eq, inline = arg.partition("=")
-        if flag in ("--assignee", "-a", "--milestone", "-m"):
-            value = inline if eq else next(it, None)
-            if value is None:
-                sys.exit(f"Missing value for {flag}.")
-            if flag in ("--assignee", "-a"):
-                assignees += [a.strip() for a in value.split(",") if a.strip()]
-            else:
-                milestone = value
-        else:
-            sys.exit(f"Unsupported extra argument for `issue create` on GitHub: {arg} (supported: --assignee, --milestone).")
-    if assignees:
-        fields["assignees"] = [gh.get("user")["login"] if a == "@me" else a for a in assignees]
-    if milestone is not None:
-        if milestone.isdigit():
-            fields["milestone"] = int(milestone)
-        else:
-            milestones = gh.paginate(f"{gh.repo_path}/milestones", {"state": "all"})
-            match = next((m for m in milestones if m["title"].casefold() == milestone.casefold()), None)
-            if match is None:
-                sys.exit(f"Milestone '{milestone}' not found.")
-            fields["milestone"] = match["number"]
-    return fields
+_CREATE_FLAGS = {
+    "--title": Flag("title"),
+    "-t": Flag("title"),
+    "--body": Flag("body"),
+    "-b": Flag("body"),
+    "--body-file": Flag("body_file"),
+    "-F": Flag("body_file"),
+    "--label": Flag("label", "list"),
+    "-l": Flag("label", "list"),
+    "--assignee": Flag("assignee", "list"),
+    "-a": Flag("assignee", "list"),
+    "--milestone": Flag("milestone"),
+    "-m": Flag("milestone"),
+    "--project": Flag("project", "list"),
+    "-p": Flag("project", "list"),
+    "--web": Flag("web", "bool"),
+    "-w": Flag("web", "bool"),
+}
+
+
+def resolve_assignees(gh: GitHubClient, assignees: list[str]) -> list[str]:
+    """`@me` is the authenticated user."""
+    return [gh.get("user")["login"] if a == "@me" else a for a in assignees]
+
+
+def resolve_milestone(gh: GitHubClient, milestone: str) -> int:
+    """A milestone given by number or by title, as its number."""
+    if milestone.isdigit():
+        return int(milestone)
+    milestones = gh.paginate(f"{gh.repo_path}/milestones", {"state": "all"})
+    match = next((m for m in milestones if m["title"].casefold() == milestone.casefold()), None)
+    if match is None:
+        sys.exit(f"Milestone '{milestone}' not found.")
+    return match["number"]
+
+
+def add_to_project(gh: GitHubClient, project: dict, node_id: str) -> None:
+    """Add an issue / PR (by GraphQL node id) to a Projects (v2) board returned by `_find_project`."""
+    gh.graphql(_ADD_TO_BOARD_MUTATION, project=project["id"], content=node_id)
+
+
+def find_project(gh: GitHubClient, owner: str, board: str) -> dict:
+    return _find_project(gh, owner, board)
 
 
 def _issue_id(gh: GitHubClient, number: int) -> int:
@@ -272,23 +285,37 @@ def create(
 
     `board` adds the issue to that GitHub Projects (v2) board by title or number (looked up before
     the issue is created, so an unknown board fails early). `parent` makes it a sub-issue of that
-    issue and `blocked_by` marks it as blocked by those issues. `extra_args` are the pass-through
-    flags `--assignee` / `--milestone` (anything else is rejected: there is no `gh` to forward it to).
+    issue and `blocked_by` marks it as blocked by those issues. `extra_args` are the `gh issue create` flags
+    --title/-t, --body/-b, --body-file/-F, --label/-l, --assignee/-a, --milestone/-m, --project/-p, --web/-w
+    (explicit ones override `title`/`body`; labels merge; anything else, e.g. --template/--recover, is
+    rejected: there is no `gh` to forward it to).
     """
     file_paths = file_paths or []
-    body = ensure_agent_session_note(body, also_check=title)
-    payload: dict[str, Any] = {"title": title, "body": body or "", **_parse_create_extra_args(gh, extra_args)}
+    extra = parse_flags(extra_args, _CREATE_FLAGS, "issue create")
+    if "body" in extra and "body_file" in extra:
+        sys.exit("specify only one of --body or --body-file")
+    title = extra.get("title", title)
+    if "body_file" in extra:
+        body = read_body_file(extra["body_file"])
+    body = ensure_agent_session_note(extra.get("body", body), also_check=title)
+    labels = list(dict.fromkeys([*labels, *extra.get("label", [])]))
+    payload: dict[str, Any] = {"title": title, "body": body or ""}
+    if extra.get("assignee"):
+        payload["assignees"] = resolve_assignees(gh, extra["assignee"])
+    if "milestone" in extra:
+        payload["milestone"] = resolve_milestone(gh, extra["milestone"])
     if labels:
         payload["labels"] = labels
-    project = _find_project(gh, owner, board) if board else None
+    boards = list(dict.fromkeys([*([board] if board else []), *extra.get("project", [])]))
+    projects = [_find_project(gh, owner, b) for b in boards]
 
     created = gh.post(f"repos/{owner}/{repo}/issues", payload)
     url = created["html_url"]
     print(url)
     number = created["number"]
 
-    if project:
-        gh.graphql(_ADD_TO_BOARD_MUTATION, project=project["id"], content=created["node_id"])
+    for project in projects:
+        add_to_project(gh, project, created["node_id"])
     if parent is not None:
         _add_sub_issue(gh, parent, created["id"])
     for blocker in dict.fromkeys(blocked_by or []):
@@ -302,6 +329,8 @@ def create(
             new_body = build_attachments_section(new_body, _file_links(owner, repo, f"issue-{number}", file_paths))
         gh.patch(f"repos/{owner}/{repo}/issues/{number}", {"body": new_body})
         print(f"Attached {len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s) to issue #{number}")
+    if extra.get("web"):
+        open_in_browser(url)
 
 
 # -- labels -------------------------------------------------------------------

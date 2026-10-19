@@ -72,8 +72,11 @@ bdt pr create --target dev    # or --target main / test
 Uses the current branch as source. Both hosts use a REST POST (ADO `pullrequests`, GitHub `pulls`); title/body default to the
 branch's commit info, so it never blocks waiting on an interactive prompt. Give a custom title/body with
 `bdt pr create --target dev --title "..." --description "$(cat pr.md)"` -- kept in full (ADO's own limit is
-4000 characters, which bdt rejects up front). Passthrough args after `--` only accept `--title`/`--description`
-(GitHub also `--body`/`-b`/`-t`).
+4000 characters, which bdt rejects up front). Passthrough args after `--` accept the union of `gh pr create` / `az repos pr create` flags on both hosts
+(`--reviewers`, `--required-reviewers`, `--work-items`, `--labels`, `--auto-complete`/`--auto-merge`, `--squash`,
+`--delete-source-branch`, `--base`/`--target-branch`, `--head`/`--source-branch`, `--body-file`, `--assignee`,
+`--milestone`, `--web`/`--open`, `--dry-run`, ...; see the README table). A flag the host can't honour prints a
+`Note: ... is ignored on <host>` line on stderr instead of being dropped silently.
 
 After creating a PR, use `bdt pr status` (see above) to check whether the
 CI build passes.

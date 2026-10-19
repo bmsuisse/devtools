@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tomllib
 import uuid
+import webbrowser
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -36,6 +37,7 @@ from .ado_auth import auth_header
 from .bdt_config import find_pyproject, load_bdt_table
 from .cli_tools import CLI_TIMEOUT_SECS, EXIT_WAIT_TIMEOUT, detect_agent_session, require_gh
 from .github_api import GitHubClient
+from .pr_create_args import PrCreateArgsError, parse_pr_create_args, resolve_body, unsupported_notes
 from .usage.cli import usage_app
 from .gitrepo import (
     AdoRemote,
@@ -314,7 +316,12 @@ def pr_create(
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
         help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
     ),
-    args: list[str] = typer.Argument(None, help="Extra args. GitHub: --title/-t, --body/--description/-b/-d. Azure DevOps: --title/--description"),
+    args: list[str] = typer.Argument(None, help="Extra `gh pr create` / `az repos pr create` flags after `--` (both spellings work on both hosts): "
+        "--title/-t, --body/--description/-b (-d on Azure DevOps), --body-file/-F, --draft, --base/-B/--target-branch, "
+        "--head/-H/--source-branch/-s, --label[s]/-l, --reviewer[s] (-r on GitHub), --required-reviewers, --work-items, "
+        "--auto-complete/--auto-merge, --squash, --assignee/-a, --milestone/-m, --web/-w/--open, --dry-run, "
+        "--delete-source-branch, --merge-commit-message, --bypass-policy[-reason], --transition-work-items, "
+        "--organization, --project, --repository. A flag the host cannot honour is reported on stderr"),
 ) -> None:
     """Create a PR from the current branch into --target (Azure DevOps or GitHub, auto-detected)."""
     for path in screenshot:
@@ -338,6 +345,21 @@ def pr_create(
 
     remote = current_remote()
 
+    host = "github" if isinstance(remote, GitHubRemote) else "ado"
+    try:
+        options = parse_pr_create_args(args or [], host)
+        body_text = resolve_body(options)
+    except PrCreateArgsError as e:
+        raise typer.BadParameter(str(e), param_hint="ARGS") from e
+    for note in unsupported_notes(options, host):
+        print(f"Note: {note}", file=sys.stderr)
+    title = title if title is not None else options.title
+    description = description if description is not None else body_text
+    draft = options.draft if options.draft is not None else draft
+    label = list(dict.fromkeys([*label, *options.labels]))
+    target = options.base or target
+    issue = [*issue, *options.work_items]
+
     issue_numbers: list[int] = []
     for ref in issue:
         try:
@@ -346,47 +368,53 @@ def pr_create(
             raise typer.BadParameter(str(e), param_hint="--issue") from e
     issue_numbers = list(dict.fromkeys(issue_numbers))
 
-    source_branch = current_branch()
+    source_branch = options.head or current_branch()
 
     pr_url: str | None = None
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
-        returncode, pr_url = gh_pr.create(gh, target, args or [], draft=draft, labels=label, title=title, description=description)
+        returncode, pr_url = gh_pr.create(gh, target, [], draft=draft, labels=label, title=title, description=description, options=options)
         build_policy = gh_pr.has_build_policy(gh, target)
         if returncode == 0 and (screenshot or file):
             _after_create(lambda: gh_pr.add_attachments(gh, remote.owner, remote.repo, source_branch, screenshot, file), "attaching screenshots/files")
         if returncode == 0:
             _after_create(lambda: _link_and_label_github(gh, remote, issue_numbers), "linking issue(s) / setting 'pr-available' label")
     else:
-        extra_args, pass_title, pass_description = pr_build.split_text_args(args or [])
-        if extra_args:
-            raise typer.BadParameter(
-                f"unsupported extra argument(s) for Azure DevOps: {' '.join(extra_args)} (only --title / --description can be passed through)",
-                param_hint="ARGS",
-            )
-        title = title if title is not None else pass_title
-        description = description if description is not None else pass_description
+        ado = replace(
+            remote,
+            **{k: v for k, v in (("org", options.organization), ("project", options.ado_project), ("repo", options.repository)) if v},
+        )
         session = requests.Session()
         session.headers.update(auth_header(pat))
+        if options.dry_run:
+            body = pr_build.build_create_body(
+                session, ado, source_branch, target, draft=draft, labels=label, title=title, description=description,
+                options=options, work_item_ids=issue_numbers,
+            )
+            typer.echo(json.dumps(body, indent=2))
+            raise typer.Exit(0)
         returncode = 0
         try:
-            pr_json = pr_build.create_pr(session, remote, source_branch, target, draft=draft, labels=label, title=title, description=description)
+            pr_json = pr_build.create_pr(
+                session, ado, source_branch, target, draft=draft, labels=label, title=title, description=description,
+                options=options, work_item_ids=issue_numbers,
+            )
         except SystemExit as e:
             print(e, file=sys.stderr)
             returncode = 1
         else:
             print(f"PR #{pr_json.get('pullRequestId', '?')}: {pr_json.get('title', '?')}")
             try:
-                pr_url = pr_build.pr_web_url(remote, pr_json["pullRequestId"])
+                pr_url = pr_build.pr_web_url(ado, pr_json["pullRequestId"])
             except (KeyError, TypeError):
                 pr_url = None
-        build_policy = pr_build.has_build_policy(session, remote, target)
+        build_policy = pr_build.has_build_policy(session, ado, target)
         if returncode == 0 and (detect_agent_session() is not None or screenshot or file):
             def _finish() -> None:
-                pr = pr_build.get_pr(session, remote, source_branch, target)
+                pr = pr_build.get_pr(session, ado, source_branch, target)
                 if screenshot or file:
-                    pr = pr_build.add_attachments(session, remote, pr, screenshot, file)
-                pr_build.ensure_session_note(session, remote, pr)
+                    pr = pr_build.add_attachments(session, ado, pr, screenshot, file)
+                pr_build.ensure_session_note(session, ado, pr)
 
             _after_create(_finish, "attaching screenshots/files and/or noting the agent session (retry with `bdt pr update`)")
         if returncode == 0:
@@ -396,13 +424,15 @@ def pr_create(
             # would then silently skip it instead of at least warning, unlike every other
             # best-effort step here.
             def _link_issues() -> None:
-                pr = pr_build.get_pr(session, remote, source_branch, target)
-                _link_and_label_ado(session, remote, pr["pullRequestId"], pr.get("description") or "", issue_numbers)
+                pr = pr_build.get_pr(session, ado, source_branch, target)
+                _link_and_label_ado(session, ado, pr["pullRequestId"], pr.get("description") or "", issue_numbers)
 
             _after_create(_link_issues, "linking work item(s) / setting 'pr-available' tag")
 
     if returncode == 0 and pr_url:
         print(f"\n{pr_url}")
+        if options.web:
+            webbrowser.open(pr_url)
 
     if returncode == 0 and draft:
         print("\nCreated as a draft PR. Run `bdt pr publish` to mark it ready for review.")

@@ -22,18 +22,6 @@ def _ok(body: dict | None = None) -> MagicMock:
     return r
 
 
-def test_split_text_args_extracts_title_and_description() -> None:
-    rest, title, desc = pr_build.split_text_args(["--title", "T", "--description", "a", "b", "--reviewers", "x", "-d=c"])
-    assert rest == ["--reviewers", "x"]
-    assert title == "T"
-    assert desc == "c"  # last one wins
-    rest, _, desc = pr_build.split_text_args(["--description", "a", "b", "--open"])
-    assert rest == ["--open"]
-    assert desc == "a\nb"
-    assert pr_build.split_text_args(["--description=x=y"]) == ([], None, "x=y")
-    assert pr_build.split_text_args(["--bypass-policy"]) == (["--bypass-policy"], None, None)
-
-
 def test_patch_pr_sends_full_description_and_warns_when_host_cuts_it(capsys) -> None:
     session = MagicMock()
     session.patch.return_value = _ok({"description": LONG[:450]})
@@ -90,9 +78,9 @@ def test_ado_pr_create_passthrough_title_and_description(monkeypatch) -> None:
     assert created[0]["description"] == LONG
 
 
-def test_ado_pr_create_rejects_other_passthrough_args(monkeypatch) -> None:
+def test_ado_pr_create_rejects_unknown_passthrough_flags(monkeypatch) -> None:
     created = _ado_cli(monkeypatch)
-    result = runner.invoke(app, ["pr", "create", "--target", "dev", "--", "--open"])
+    result = runner.invoke(app, ["pr", "create", "--target", "dev", "--", "--frobnicate"])
     assert result.exit_code != 0
     assert created == []
 
@@ -159,3 +147,54 @@ def test_ado_update_sends_full_title_and_description() -> None:
     title = "T" * 300
     pr_build.update(session, REMOTE, {"pullRequestId": 3, "title": "old", "description": ""}, title, LONG)
     assert session.patch.call_args.kwargs["json"] == {"title": title, "description": LONG}
+
+
+def test_ado_pr_create_applies_az_flags_and_overrides(monkeypatch) -> None:
+    created = _ado_cli(monkeypatch)
+    opened: list[str] = []
+    monkeypatch.setattr("bmsdna.devtools.cli.webbrowser.open", opened.append)
+    seen: dict = {}
+
+    def fake_create(session, remote, source, target, **kwargs):
+        seen.update(remote=remote, source=source, target=target, **kwargs)
+        return {"pullRequestId": 9, "title": "t"}
+
+    monkeypatch.setattr("bmsdna.devtools.pr_build.create_pr", fake_create)
+    result = runner.invoke(
+        app,
+        ["pr", "create", "--target", "dev", "--", "--org", "https://dev.azure.com/other", "-p", "P2", "-r", "R2",
+         "-s", "refs/heads/topic", "--target-branch", "main", "--draft", "false", "--labels", "x", "y",
+         "--work-items", "5", "--reviewers", "a@x.com", "--squash", "--auto-complete", "--open"],
+    )
+    assert result.exit_code == 0, result.output
+    assert (seen["remote"].org, seen["remote"].project, seen["remote"].repo) == ("other", "P2", "R2")
+    assert (seen["source"], seen["target"], seen["draft"]) == ("topic", "main", False)
+    assert seen["labels"] == ["x", "y"]
+    assert seen["options"].reviewers == ["a@x.com"] and seen["options"].squash and seen["options"].auto_complete
+    assert seen["work_item_ids"] == [5]  # --work-items shares the --issue path
+    assert opened == ["https://dev.azure.com/other/P2/_git/R2/pullrequest/9"]
+    assert created == []
+
+
+def test_ado_pr_create_dry_run_prints_the_body_and_creates_nothing(monkeypatch) -> None:
+    _ado_cli(monkeypatch)
+    monkeypatch.setattr("bmsdna.devtools.pr_build.create_pr", lambda *a, **k: pytest.fail("must not create"))
+    result = runner.invoke(app, ["pr", "create", "--target", "dev", "--title", "T", "--", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert '"targetRefName": "refs/heads/dev"' in result.output and '"title": "T"' in result.output
+
+
+def test_ado_pr_create_notes_flags_it_cannot_honour(monkeypatch) -> None:
+    _ado_cli(monkeypatch)
+    result = runner.invoke(app, ["pr", "create", "--target", "dev", "--", "--milestone", "v1"])
+    assert result.exit_code == 0, result.output
+    assert "--milestone is ignored on Azure DevOps" in result.output
+
+
+def test_ado_pr_create_body_file(monkeypatch, tmp_path) -> None:
+    created = _ado_cli(monkeypatch)
+    f = tmp_path / "pr.md"
+    f.write_text("body from file", encoding="utf-8")
+    result = runner.invoke(app, ["pr", "create", "--target", "dev", "--", "--body-file", str(f)])
+    assert result.exit_code == 0, result.output
+    assert created[0]["description"] == "body from file"

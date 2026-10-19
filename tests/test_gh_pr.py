@@ -78,11 +78,14 @@ class FakeGH:
         return self._answer("PATCH", path, body)
 
     def graphql(self, query, **variables):
-        op = next((n for n in ("markPullRequestReadyForReview", "convertPullRequestToDraft", "query ContextsPage") if n in query), "query")
+        op = next((n for n in ("markPullRequestReadyForReview", "convertPullRequestToDraft", "enablePullRequestAutoMerge", "query ContextsPage") if n in query), "query")
         return self._answer("GRAPHQL", op, variables)
 
     def request(self, method, path, *, ok=(), **kwargs):
         return self._answer(method, path, kwargs.get("params"))
+
+    def paginate(self, path, params=None, **kwargs):
+        return self._answer("GET", path, params)
 
     def sent(self, method: str, path: str | None = None) -> list[object]:
         return [p for m, pa, p in self.calls if m == method and (path is None or pa == path)]
@@ -435,11 +438,198 @@ def test_create_extra_args_title_and_body_forms_win(monkeypatch) -> None:
     assert (payload["title"], payload["body"]) == ("T", "B")  # type: ignore[index]
 
 
-def test_create_rejects_unsupported_extra_args() -> None:
+@pytest.mark.parametrize("flag", ["--template", "-T", "--recover", "--editor", "--delete-nothing"])
+def test_create_rejects_unsupported_extra_args(flag) -> None:
     gh = FakeGH()
-    with pytest.raises(SystemExit, match="unsupported argument.*--web"):
-        create(gh, "main", ["--web"])  # type: ignore[arg-type]
+    with pytest.raises(SystemExit, match="unsupported (flag|argument).*Supported flags:.*--reviewer"):
+        create(gh, "main", [flag, "x"])  # type: ignore[arg-type]
     assert gh.calls == []
+
+
+def test_create_missing_flag_value_exits() -> None:
+    with pytest.raises(SystemExit, match="--base needs a value"):
+        create(FakeGH(), "main", ["--base"])  # type: ignore[arg-type]
+
+
+def _created(monkeypatch, commits=(("feat: x", "because y"),), extra_routes=None):
+    monkeypatch.setattr("bmsdna.devtools.gh_pr._branch_commits", lambda target: list(commits))
+    return FakeGH({("POST", PULLS): {"number": 7, "node_id": "PR_node_7", "html_url": "https://github.com/owner/repo/pull/7"}, **(extra_routes or {})})
+
+
+def test_create_description_is_only_a_long_alias_of_body(monkeypatch) -> None:
+    gh = _created(monkeypatch)
+    create(gh, "main", ["--description", "D"])  # type: ignore[arg-type]
+    assert gh.sent("POST", PULLS)[0]["body"] == "D"  # type: ignore[index]
+
+
+def test_create_dash_d_is_draft_not_description(monkeypatch) -> None:
+    gh = _created(monkeypatch)
+    create(gh, "main", ["-d"])  # type: ignore[arg-type]
+    payload = gh.sent("POST", PULLS)[0]
+    assert payload["draft"] is True and payload["body"] == "because y"  # type: ignore[index]
+
+
+def test_create_draft_false_overrides_the_default(monkeypatch) -> None:
+    gh = _created(monkeypatch)
+    create(gh, "main", ["--draft=false"], draft=True)  # type: ignore[arg-type]
+    assert gh.sent("POST", PULLS)[0]["draft"] is False  # type: ignore[index]
+
+
+def test_create_base_and_head_override_target_and_branch(monkeypatch) -> None:
+    gh = _created(monkeypatch)
+    create(gh, "main", ["--base", "release", "-H=someone:topic"])  # type: ignore[arg-type]
+    payload = gh.sent("POST", PULLS)[0]
+    assert (payload["base"], payload["head"]) == ("release", "someone:topic")  # type: ignore[index]
+
+
+def test_create_body_file_and_conflict(monkeypatch, tmp_path) -> None:
+    f = tmp_path / "b.md"
+    f.write_text("file body")
+    gh = _created(monkeypatch)
+    create(gh, "main", ["-F", str(f)])  # type: ignore[arg-type]
+    assert gh.sent("POST", PULLS)[0]["body"] == "file body"  # type: ignore[index]
+    with pytest.raises(SystemExit, match="either --body/--description or --body-file"):
+        create(gh, "main", ["--body", "x", "--body-file", str(f)])  # type: ignore[arg-type]
+
+
+def test_create_body_file_from_stdin(monkeypatch) -> None:
+    import io
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("piped"))
+    gh = _created(monkeypatch)
+    create(gh, "main", ["--body-file", "-"])  # type: ignore[arg-type]
+    assert gh.sent("POST", PULLS)[0]["body"] == "piped"  # type: ignore[index]
+
+
+def test_create_labels_merge_bdt_and_passthrough(monkeypatch) -> None:
+    gh = _created(monkeypatch, extra_routes={("POST", "repos/owner/repo/issues/7/labels"): []})
+    create(gh, "main", ["-l", "b,c", "--label=a"], labels=["a", "z"])  # type: ignore[arg-type]
+    assert gh.sent("POST", "repos/owner/repo/issues/7/labels") == [{"labels": ["a", "z", "b", "c"]}]
+
+
+def test_create_assignee_milestone_reviewer_flags(monkeypatch) -> None:
+    gh = _created(
+        monkeypatch,
+        extra_routes={
+            ("GET", "user"): {"login": "me"},
+            ("GET", "repos/owner/repo/milestones"): [{"title": "v1", "number": 3}],
+            ("POST", "repos/owner/repo/issues/7/assignees"): {},
+            ("PATCH", "repos/owner/repo/issues/7"): {},
+            ("POST", f"{PULLS}/7/requested_reviewers"): {},
+        },
+    )
+    create(gh, "main", ["-a", "jane,@me", "-m", "V1", "-r", "bob,acme/core", "--reviewer=eve"])  # type: ignore[arg-type]
+    assert gh.sent("POST", "repos/owner/repo/issues/7/assignees") == [{"assignees": ["jane", "me"]}]
+    assert gh.sent("PATCH", "repos/owner/repo/issues/7") == [{"milestone": 3}]
+    assert gh.sent("POST", f"{PULLS}/7/requested_reviewers") == [{"reviewers": ["bob", "eve"], "team_reviewers": ["core"]}]
+
+
+def test_create_unknown_milestone_fails_before_creating(monkeypatch) -> None:
+    gh = _created(monkeypatch, extra_routes={("GET", "repos/owner/repo/milestones"): []})
+    assert create(gh, "main", ["-m", "nope"]) == (1, None)  # type: ignore[arg-type]
+    assert gh.sent("POST", PULLS) == []
+
+
+def test_create_follow_up_failures_are_warnings(monkeypatch, capsys) -> None:
+    gh = _created(
+        monkeypatch,
+        extra_routes={
+            ("POST", "repos/owner/repo/issues/7/assignees"): SystemExit("no"),
+            ("POST", f"{PULLS}/7/requested_reviewers"): SystemExit("denied"),
+        },
+    )
+    assert create(gh, "main", ["-a", "jane", "-r", "bob"]) == (0, "https://github.com/owner/repo/pull/7")  # type: ignore[arg-type]
+    err = capsys.readouterr().err
+    assert "adding assignee(s) failed: no" in err and "requesting review failed: denied" in err
+
+
+def test_create_project_flag_adds_the_pr_to_the_board(monkeypatch) -> None:
+    gh = _created(monkeypatch)
+    added: list[tuple[str, str]] = []
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.find_project", lambda gh, owner, b: {"id": f"P_{b}"})
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.add_to_project", lambda gh, project, node: added.append((project["id"], node)))
+    create(gh, "main", ["--project", "Roadmap"])  # type: ignore[arg-type]
+    assert added == [("P_Roadmap", "PR_node_7")]
+
+
+def test_create_auto_complete_enables_auto_merge_with_squash(monkeypatch) -> None:
+    gh = _created(monkeypatch, extra_routes={("GRAPHQL", "enablePullRequestAutoMerge"): {}})
+    create(gh, "main", ["--auto-complete", "--squash", "--merge-commit-message", "msg"])  # type: ignore[arg-type]
+    assert gh.sent("GRAPHQL", "enablePullRequestAutoMerge") == [{"pr": "PR_node_7", "method": "SQUASH", "headline": "msg"}]
+
+
+def test_create_auto_merge_failure_is_a_warning(monkeypatch, capsys) -> None:
+    gh = _created(monkeypatch, extra_routes={("GRAPHQL", "enablePullRequestAutoMerge"): SystemExit("not allowed")})
+    assert create(gh, "main", ["--auto-complete"])[0] == 0  # type: ignore[arg-type]
+    assert "enabling auto-merge" in capsys.readouterr().err
+
+
+def test_create_work_items_link_the_pr_with_fixes(monkeypatch) -> None:
+    gh = _created(monkeypatch)
+    linked: list[tuple[int, str, int]] = []
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.link_issue_to_pr", lambda gh, n, body, issue: linked.append((n, body, issue)) or body)
+    create(gh, "main", ["--work-items", "12,#13"])  # type: ignore[arg-type]
+    assert [(n, i) for n, _, i in linked] == [(7, 12), (7, 13)]
+
+
+def test_create_notes_what_github_cannot_honour(monkeypatch, capsys) -> None:
+    gh = _created(monkeypatch)
+    create(gh, "main", ["--delete-source-branch", "--bypass-policy", "--squash"])  # type: ignore[arg-type]
+    err = capsys.readouterr().err
+    assert "--delete-source-branch is ignored on GitHub" in err
+    assert "--bypass-policy is ignored on GitHub" in err
+    assert "--squash is ignored on GitHub without --auto-complete" in err
+
+
+def test_create_accepts_a_parsed_options_object(monkeypatch) -> None:
+    from bmsdna.devtools.pr_create_args import PrCreateOptions
+
+    gh = _created(monkeypatch)
+    create(gh, "main", [], options=PrCreateOptions(title="T", base="release", draft=False), draft=True)  # type: ignore[arg-type]
+    payload = gh.sent("POST", PULLS)[0]
+    assert (payload["title"], payload["base"], payload["draft"]) == ("T", "release", False)  # type: ignore[index]
+
+
+def test_create_no_maintainer_edit(monkeypatch) -> None:
+    gh = _created(monkeypatch)
+    create(gh, "main", ["--no-maintainer-edit"])  # type: ignore[arg-type]
+    assert gh.sent("POST", PULLS)[0]["maintainer_can_modify"] is False  # type: ignore[index]
+
+
+def test_create_fill_first_uses_the_first_commit(monkeypatch) -> None:
+    gh = _created(monkeypatch, commits=[("first", "b1"), ("second", "b2")])
+    create(gh, "main", ["--fill-first"])  # type: ignore[arg-type]
+    payload = gh.sent("POST", PULLS)[0]
+    assert (payload["title"], payload["body"]) == ("first", "b1")  # type: ignore[index]
+
+
+def test_create_fill_verbose_body_has_every_commit_message(monkeypatch) -> None:
+    gh = _created(monkeypatch, commits=[("first", "b1"), ("second", "")])
+    create(gh, "main", ["--fill-verbose"])  # type: ignore[arg-type]
+    payload = gh.sent("POST", PULLS)[0]
+    assert payload["title"] == "Feature x" and payload["body"] == "first\n\nb1\n\nsecond"  # type: ignore[index]
+
+
+def test_create_fill_flag_is_accepted(monkeypatch) -> None:
+    gh = _created(monkeypatch)
+    create(gh, "main", ["--fill"])  # type: ignore[arg-type]
+    assert gh.sent("POST", PULLS)[0]["title"] == "feat: x"  # type: ignore[index]
+
+
+def test_create_dry_run_creates_nothing(monkeypatch, capsys) -> None:
+    gh = _created(monkeypatch)
+    assert create(gh, "main", ["--dry-run", "-l", "bug", "-a", "jane"]) == (0, None)  # type: ignore[arg-type]
+    assert gh.calls == []
+    out = capsys.readouterr().out
+    assert "title: feat: x" in out and "labels: ['bug']" in out and "assignees: ['jane']" in out
+
+
+def test_create_web_opens_the_pr(monkeypatch) -> None:
+    opened: list[str] = []
+    monkeypatch.setattr("bmsdna.devtools.gh_args.webbrowser.open", lambda url: opened.append(url))
+    gh = _created(monkeypatch)
+    create(gh, "main", ["--web"])  # type: ignore[arg-type]
+    assert opened == ["https://github.com/owner/repo/pull/7"]
 
 
 def test_create_returns_none_url_on_failure(monkeypatch, capsys) -> None:

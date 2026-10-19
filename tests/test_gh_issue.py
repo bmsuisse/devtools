@@ -344,9 +344,68 @@ def test_create_maps_assignee_and_milestone_extra_args() -> None:
     assert payload["assignees"] == ["jane", "me"] and payload["milestone"] == 3
 
 
-def test_create_rejects_unsupported_extra_args() -> None:
-    with pytest.raises(SystemExit, match="Unsupported"):
-        create(FakeGitHub({CREATE: CREATED}), "owner", "repo", "T", "b", [], [], ["--web"])
+@pytest.mark.parametrize("flag", ["--template", "-T", "--recover", "--editor"])
+def test_create_rejects_unsupported_extra_args(flag) -> None:
+    with pytest.raises(SystemExit, match="unsupported argument.*supported:.*--assignee"):
+        create(FakeGitHub({CREATE: CREATED}), "owner", "repo", "T", "b", [], [], [flag, "x"])
+
+
+def test_create_extra_title_body_and_labels_override_and_merge() -> None:
+    gh = FakeGitHub({CREATE: CREATED})
+
+    create(gh, "owner", "repo", "T", "b", ["bug"], [], ["-t", "New title", "--body=New body", "--label", "ui,bug", "-l=x"])
+
+    payload = gh.calls_to("POST", "repos/owner/repo/issues")[0]
+    assert (payload["title"], payload["body"]) == ("New title", "New body")
+    assert payload["labels"] == ["bug", "ui", "x"]
+
+
+def test_create_body_file_from_a_file(tmp_path) -> None:
+    f = tmp_path / "b.md"
+    f.write_text("from file")
+    gh = FakeGitHub({CREATE: CREATED})
+
+    create(gh, "owner", "repo", "T", "b", [], [], ["--body-file", str(f)])
+
+    assert gh.calls_to("POST", "repos/owner/repo/issues")[0]["body"] == "from file"
+
+
+def test_create_body_file_from_stdin(monkeypatch) -> None:
+    import io
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("from stdin"))
+    gh = FakeGitHub({CREATE: CREATED})
+
+    create(gh, "owner", "repo", "T", "b", [], [], ["-F", "-"])
+
+    assert gh.calls_to("POST", "repos/owner/repo/issues")[0]["body"] == "from stdin"
+
+
+def test_create_rejects_body_and_body_file_together() -> None:
+    with pytest.raises(SystemExit, match="only one of --body or --body-file"):
+        create(FakeGitHub({CREATE: CREATED}), "owner", "repo", "T", "b", [], [], ["--body", "x", "--body-file", "y"])
+
+
+def test_create_project_flag_adds_to_each_project(monkeypatch) -> None:
+    gh = FakeGitHub({CREATE: CREATED})
+    found: list[str] = []
+    added: list[tuple[str, str]] = []
+    monkeypatch.setattr("bmsdna.devtools.gh_issue._find_project", lambda gh, owner, b: found.append(b) or {"id": f"P_{b}"})
+    monkeypatch.setattr("bmsdna.devtools.gh_issue.add_to_project", lambda gh, project, node: added.append((project["id"], node)))
+
+    create(gh, "owner", "repo", "T", "b", [], [], ["--project", "Roadmap", "-p", "Other"], board="Roadmap")
+
+    assert found == ["Roadmap", "Other"]  # board + --project, deduplicated
+    assert added == [("P_Roadmap", "N42"), ("P_Other", "N42")]
+
+
+def test_create_web_opens_the_issue(monkeypatch) -> None:
+    opened: list[str] = []
+    monkeypatch.setattr("bmsdna.devtools.gh_args.webbrowser.open", lambda url: opened.append(url))
+
+    create(FakeGitHub({CREATE: CREATED}), "owner", "repo", "T", "b", [], [], ["--web"])
+
+    assert opened == ["https://github.com/owner/repo/issues/42"]
 
 
 def test_create_with_board_adds_the_issue_to_the_project() -> None:

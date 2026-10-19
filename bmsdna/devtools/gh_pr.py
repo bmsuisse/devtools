@@ -37,9 +37,11 @@ from .cli_tools import (
     is_claude_code,
     status_rerun_cmd,
 )
+from .gh_args import open_in_browser
 from .github_api import GitHubClient
 from .gitrepo import current_branch
 from .pr_choice import PrCandidate, choose_pr
+from .pr_create_args import PrCreateArgsError, PrCreateOptions, parse_pr_create_args, resolve_body, unsupported_notes
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 # `get_pr(fields=...)` selects keys of the dict one GraphQL query returns (see `_PR_QUERY`); `id` is the node id
@@ -614,25 +616,6 @@ def run_watch_deploy(gh: GitHubClient, target_branch: str, wait: bool) -> None:
         time.sleep(30)
 
 
-def _parse_create_args(extra_args: list[str]) -> dict[str, str]:
-    """`--title X` / `--title=X` / `--body X` / `--body=X` (also `-t`/`-b`, and `--description`/`-d` as
-    an alias of `--body`, as on Azure DevOps) out of a pass-through
-    argument list; anything else can't be honored now that there's no `gh` to hand it to."""
-    out: dict[str, str] = {}
-    keys = {"--title": "title", "-t": "title", "--body": "body", "-b": "body", "--description": "body", "-d": "body"}
-    args = list(extra_args)
-    while args:
-        arg = args.pop(0)
-        name, eq, value = arg.partition("=")
-        if name in keys and eq:
-            out[keys[name]] = value
-        elif arg in keys and args:
-            out[keys[arg]] = args.pop(0)
-        else:
-            sys.exit(f"unsupported argument for `pr create`: {arg!r} (only --title and --body/--description are supported)")
-    return out
-
-
 def _branch_commits(target: str) -> list[tuple[str, str]]:
     """(subject, body) of each commit on HEAD not yet in `target`, oldest first; [] if unknown."""
     for base in (f"origin/{target}", target):
@@ -647,15 +630,37 @@ def _branch_commits(target: str) -> list[tuple[str, str]]:
     return []
 
 
-def _fill(branch: str, target: str) -> tuple[str, str]:
+def _fill(branch: str, target: str, mode: str = "auto") -> tuple[str, str]:
     """Default (title, body), like `gh pr create --fill`: a single commit's message, else the
-    humanized branch name with the commit subjects as a list."""
+    humanized branch name with the commit subjects as a list. `mode="first"` (`--fill-first`) uses the
+    first commit's message whatever the count; `"verbose"` (`--fill-verbose`) makes the body every
+    commit's full message."""
     commits = _branch_commits(target)
+    if mode == "first" and commits:
+        return commits[0]
     if len(commits) == 1:
         return commits[0]
     title = branch.replace("-", " ").replace("_", " ").strip()
     title = title[:1].upper() + title[1:] if title else branch
+    if mode == "verbose":
+        return title, "\n\n".join(f"{subject}\n\n{body}" if body else subject for subject, body in commits)
     return title, "\n".join(f"- {subject}" for subject, _ in commits)
+
+
+_AUTO_MERGE_MUTATION = """
+mutation($pr: ID!, $method: PullRequestMergeMethod!, $headline: String) {
+  enablePullRequestAutoMerge(input: {pullRequestId: $pr, mergeMethod: $method, commitHeadline: $headline}) { clientMutationId }
+}
+"""
+
+
+def _notes(opts: PrCreateOptions) -> list[str]:
+    notes = unsupported_notes(opts, "github")
+    if opts.squash and not opts.auto_complete:
+        notes.append("--squash is ignored on GitHub without --auto-complete (it only picks the auto-merge method)")
+    if opts.merge_commit_message and not opts.auto_complete:
+        notes.append("--merge-commit-message is ignored on GitHub without --auto-complete")
+    return notes
 
 
 def create(
@@ -666,43 +671,129 @@ def create(
     labels: list[str] | None = None,
     title: str | None = None,
     description: str | None = None,
+    options: PrCreateOptions | None = None,
 ) -> tuple[int, str | None]:
     """Create a GitHub PR from the current branch into `target`.
 
-    Title/body default to the branch's commits (a single commit's message; else the branch
-    name and a list of the subjects) so this never blocks on a prompt. `title`/`description`
-    override that; `--title`/`--body` in `extra_args` override those again (no other
-    pass-through argument is supported -- it exits naming it). The branch must already be pushed.
+    Title/body default to the branch's commits (see `_fill`) so this never blocks on a prompt. `title` /
+    `description` / `labels` / `draft` override that, and `options` (the parsed pass-through flags of `bdt pr
+    create`, see `pr_create_args`; parsed from `extra_args` when not given) override those again. Honoured:
+    base/head, labels, assignees, reviewers (`org/team` = a team), milestone, project (Projects v2 board),
+    no_maintainer_edit, fill / fill_first / fill_verbose, dry_run, web, auto_complete (+ squash, merge_commit_message)
+    as auto-merge, work_items as `Fixes #N` links. Flags GitHub has no counterpart of
+    (--delete-source-branch, --bypass-policy, ...) print a one-line note on stderr. The branch must already be pushed.
 
-    `labels` are applied after creating the PR (GitHub creates a label it doesn't know yet).
+    Assignees, reviewers, milestone, project, links and auto-merge are applied after creating the PR (GitHub
+    creates a label it doesn't know yet); a failure of one of those steps is a warning, not a failed create. An
+    unknown milestone / project or an unreadable body file fails before anything is created.
 
-    Returns (returncode, web_url) -- on failure the url is `None`, the error is printed to
-    stderr and the code is 1.
+    Returns (returncode, web_url) -- on failure (or with dry_run) the url is `None`; a failure prints the
+    error to stderr and returns code 1.
     """
-    extra = _parse_create_args(extra_args)
-    branch = current_branch()
+    try:
+        opts = options if options is not None else parse_pr_create_args(extra_args, "github")
+        explicit_body = resolve_body(opts)
+    except PrCreateArgsError as e:
+        sys.exit(str(e))
+    target = opts.base or target
+    head = opts.head or current_branch()
+    draft = opts.draft if opts.draft is not None else draft
+    labels = list(dict.fromkeys([*(labels or []), *opts.labels]))
+    explicit_title = opts.title if opts.title is not None else title
+    if explicit_body is None:
+        explicit_body = description
     fill_title, fill_body = ("", "")
-    if title is None and "title" not in extra or description is None and "body" not in extra:
-        fill_title, fill_body = _fill(branch, target)
-    payload = {
-        "title": extra.get("title", title if title is not None else fill_title),
-        "body": extra.get("body", description if description is not None else fill_body),
-        "head": branch,
+    if explicit_title is None or explicit_body is None:
+        mode = "first" if opts.fill_first else "verbose" if opts.fill_verbose else "auto"
+        fill_title, fill_body = _fill(head.split(":", 1)[-1], target, mode)
+    payload: dict[str, Any] = {
+        "title": explicit_title if explicit_title is not None else fill_title,
+        "body": explicit_body if explicit_body is not None else fill_body,
+        "head": head,
         "base": target,
         "draft": draft,
     }
+    if opts.no_maintainer_edit:
+        payload["maintainer_can_modify"] = False
+    reviewers = [*opts.reviewers, *opts.required_reviewers]
+    work_items = [w.lstrip("#") for w in opts.work_items]
+
+    for note in _notes(opts):
+        print(note, file=sys.stderr)
+
+    if opts.dry_run:
+        extras = {
+            "labels": labels,
+            "assignees": opts.assignees,
+            "reviewers": reviewers,
+            "milestone": opts.milestone,
+            "project": opts.project,
+            "auto_complete": opts.auto_complete,
+            "work_items": work_items,
+        }
+        print("Dry run, nothing created:")
+        for key, value in {**payload, **extras}.items():
+            if value not in ([], None, False):
+                print(f"  {key}: {value}")
+        return 0, None
+
+    from . import gh_issue  # lazy: gh_issue imports this module
+
     try:
+        assignees = gh_issue.resolve_assignees(gh, opts.assignees) if opts.assignees else []
+        milestone = gh_issue.resolve_milestone(gh, opts.milestone) if opts.milestone else None
+        project = gh_issue.find_project(gh, gh.owner, opts.project) if opts.project else None
         pr = gh.post(f"{gh.repo_path}/pulls", payload)
     except SystemExit as e:
         print(str(e.code).strip(), file=sys.stderr)
         return 1, None
+    number = pr["number"]
     if labels:
         try:
-            gh.post(f"{gh.repo_path}/issues/{pr['number']}/labels", {"labels": labels})
+            gh.post(f"{gh.repo_path}/issues/{number}/labels", {"labels": labels})
         except SystemExit as e:
-            print(f"PR created, but adding label(s) failed: {e.code}", file=sys.stderr)
-    ensure_session_note(gh, pr["number"])
+            _warn("adding label(s)", e)
+    if assignees:
+        try:
+            gh.post(f"{gh.repo_path}/issues/{number}/assignees", {"assignees": assignees})
+        except SystemExit as e:
+            _warn("adding assignee(s)", e)
+    if milestone is not None:
+        try:
+            gh.patch(f"{gh.repo_path}/issues/{number}", {"milestone": milestone})
+        except SystemExit as e:
+            _warn("setting the milestone", e)
+    if reviewers:
+        teams = [r.split("/", 1)[1] for r in reviewers if "/" in r]
+        users = [r for r in reviewers if "/" not in r]
+        try:
+            gh.post(f"{gh.repo_path}/pulls/{number}/requested_reviewers", {"reviewers": users, "team_reviewers": teams})
+        except SystemExit as e:
+            _warn("requesting review", e)
+    if project:
+        try:
+            gh_issue.add_to_project(gh, project, pr["node_id"])
+        except (SystemExit, KeyError) as e:
+            _warn("adding it to the project", e if isinstance(e, SystemExit) else SystemExit(f"missing {e}"))
+    body = payload["body"]
+    for item in work_items:
+        try:
+            body = link_issue_to_pr(gh, number, body, int(item))
+        except (SystemExit, ValueError) as e:
+            _warn(f"linking work item {item}", e if isinstance(e, SystemExit) else SystemExit(f"not an issue number: {item!r}"))
+    if opts.auto_complete:
+        try:
+            gh.graphql(_AUTO_MERGE_MUTATION, pr=pr["node_id"], method="SQUASH" if opts.squash else "MERGE", headline=opts.merge_commit_message)
+        except SystemExit as e:
+            _warn("enabling auto-merge (needs 'Allow auto-merge' on the repo and a protected base branch)", e)
+    ensure_session_note(gh, number)
+    if opts.web:
+        open_in_browser(pr.get("html_url"))
     return 0, pr.get("html_url")
+
+
+def _warn(what: str, e: SystemExit) -> None:
+    print(f"PR created, but {what} failed: {e.code}", file=sys.stderr)
 
 
 def ensure_session_note(gh: GitHubClient, pr_number: int | None = None) -> None:

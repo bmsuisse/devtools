@@ -187,8 +187,29 @@ bdt pr create --target dev   # or --target main / test
 Creates a PR from the current branch into `--target`. On Azure DevOps,
 a REST POST to `pullrequests` (org/project/repo inferred from the git remote). On GitHub,
 a REST POST to `pulls`; title/body default to the branch's commit(s) so it never blocks on an
-interactive prompt. Extra passthrough arguments (after `--`) only accept `--title` /
-`--description` (on GitHub also `--body` / `-b` / `-t`).
+interactive prompt.
+
+Extra arguments after `--` take the union of `gh pr create` and `az repos pr create` spellings on **both**
+hosts (`--opt value` and `--opt=value`; list flags take every value up to the next option, comma-separated
+values work too; boolean flags take an optional `true`/`false`):
+
+| Meaning | Flags |
+|---|---|
+| title / body | `--title`/`-t`, `--body`/`--description`/`-b` (`-d` on Azure DevOps), `--body-file`/`-F` (`-` = stdin) |
+| branches | `--base`/`-B`/`--target-branch`, `--head`/`-H`/`--source-branch`/`-s` |
+| draft | `--draft [true\|false]` (`-d` on GitHub) |
+| labels / reviewers | `--label`/`--labels`/`-l`, `--reviewer`/`--reviewers` (`-r` on GitHub), `--required-reviewers` |
+| work items / issues | `--work-items` (same as `--issue`: linked and tagged `pr-available`) |
+| merge | `--auto-complete`/`--auto-merge`, `--squash`, `--delete-source-branch`, `--merge-commit-message`, `--bypass-policy`, `--bypass-policy-reason`, `--transition-work-items` |
+| other | `--assignee`/`-a`, `--milestone`/`-m`, `--project`/`-p` (GitHub board), `--fill`/`-f`, `--web`/`-w`/`--open`, `--dry-run` |
+| Azure DevOps target | `--organization`/`--org`, `--project`/`-p`, `--repository`/`-r` override the remote-derived values |
+| accepted, ignored | `--detect`, `--verbose`, `--debug`, `--subscription`, `--output`/`-o`, `--query` |
+
+Azure DevOps resolves reviewers (GUID, e-mail or display name) through the Identities API, sets
+`--auto-complete` as the current user and applies the merge options in a follow-up update, as `az` does.
+A flag the host has no counterpart for (e.g. `--milestone` on Azure DevOps, `--delete-source-branch` on
+GitHub) is reported on stderr (`Note: --milestone is ignored on Azure DevOps`), never dropped silently.
+Unknown flags fail with the list of supported ones.
 
 Pass the text with `--title "..."` and `--description "$(cat pr.md)"` rather than as passthrough
 args: the description is always sent in full. Azure DevOps itself allows at most
@@ -347,8 +368,10 @@ pr create --screenshot` uses, since GitHub has no API for uploading an image
 into an issue) and appends them to the issue body / comment as Markdown.
 `issue delete` is **permanent** — GitHub has no recycle bin for issues.
 Comment update/delete go through REST. Extra arguments
-to `bdt issue create` only accept `--assignee`/`-a` and `--milestone`/`-m`, e.g.
-`bdt issue create --title "..." -- --assignee @me`.
+to `bdt issue create` accept the `gh issue create` flags `--title`/`-t`, `--body`/`-b`, `--body-file`/`-F`
+(`-` = stdin), `--label`/`-l`, `--assignee`/`-a` (`@me` works), `--milestone`/`-m` (title or number),
+`--project`/`-p` (Projects board, repeatable) and `--web`/`-w`; `--template` / `--recover` are rejected. E.g.
+`bdt issue create --title "..." -- --assignee @me --project Roadmap`.
 
 `--parent` / `--blocked-by` use GitHub's sub-issues and issue dependencies REST endpoints; `issue show` reads
 the parent, sub-issues, blocked-by and blocking links the same way. `--iteration` isn't supported: a
