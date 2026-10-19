@@ -3,6 +3,7 @@ whose own time limit is shorter than CI (an agent's shell tool, say) gets a resu
 
 from __future__ import annotations
 
+import re
 import time
 from unittest.mock import MagicMock
 
@@ -163,13 +164,18 @@ def test_cli_passes_timeout_on(monkeypatch) -> None:
     assert seen == {"wait": True, "timeout": 540}
 
 
+def _plain(output: str) -> str:
+    """Rich colors and boxes the error panel on CI terminals; reduce it to the bare words."""
+    return " ".join(re.sub(r"[│╭╮╰╯─]", " ", re.sub(r"\x1b\[[0-9;]*m", "", output)).split())
+
+
 def test_cli_timeout_needs_wait(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: pytest.fail("must be rejected before anything runs"))
 
     result = runner.invoke(app, ["pr", "status", "--timeout", "540"])
 
     assert result.exit_code == 2
-    assert "--timeout only works together with --wait" in result.output
+    assert "--timeout only works together with --wait" in _plain(result.output)
 
 
 @pytest.mark.parametrize("bad", ["-1", "nan", "inf"])
