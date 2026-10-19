@@ -29,6 +29,8 @@ uv tool install bmsdna-devtools
 
 Or as a project dependency: `uv add bmsdna-devtools`.
 
+Optional extras: `bmsdna-devtools[lint]` (`bdt lint` SQL rules), `bmsdna-devtools[usage]` (`bdt usage`, below).
+
 ## `bdt pr status`
 
 Find the PR opened from the current branch and report build/check status
@@ -1023,6 +1025,39 @@ Add more with `--exclude` (repeatable; a directory name at any depth, a root-rel
 such as `'assets/**/*.js'`) or `[tool.bdt.lint] exclude_dirs = [...]` in `pyproject.toml`.
 Identical findings on the same line are reported once. Silence a confirmed-safe finding with
 `# bdt-lint: ignore <rule>` (Python) or `// bdt-lint: ignore <rule>` (TS/JS) on, or directly above, the line.
+
+## `bdt usage analyze` / `bdt usage sql`
+
+Where do the tokens of your Claude Code and codex sessions go, per step of the `dev-workflow`? Needs the extra:
+`uv tool install 'bmsdna-devtools[usage]'` (DuckDB reads the logs, plotly draws the report; neither is imported by other commands).
+
+```bash
+bdt usage analyze [--scope workflow|all] [--since 2026-10-01] [--price gpt-6-sol=1.25,10,0.125] [--no-codex] [--rebuild]
+bdt usage sql "select label, round(pct_cost, 1) from v_steps"    # ad hoc SQL on the last analysis
+```
+
+It reads `~/.claude/projects` (`--logs`) and `~/.codex/sessions` (`--codex-logs`, skipped if missing), prints a summary and
+writes `report.html` (charts plus a table view, light/dark) with CSV / Parquet exports next to the database
+(`~/.cache/bdt/usage/`, or `--db` / `--out`). The report is self-contained and contains your session titles and agent
+descriptions, so look at it before sharing it.
+
+- **Steps:** setup, plan, plan review, implement, test, screenshots, design review, quick review, full review, publish / CI.
+  Every model turn is assigned to one by markers in its tool calls: skill calls (`bms-code-review --quick|--full`,
+  `design-review`, `bms-plan-review`; for codex, reading the skill's `SKILL.md`), `bdt` commands, edits (`apply_patch` for
+  codex), pytest / lint, screenshot tooling, image reads. A step stays until the next marker; test runs only count for
+  the turn that runs them. Subagents inherit the step of the turn that spawned them. Only threads that follow the workflow
+  (and what they spawn) are counted, `--scope all` takes every session. It is a heuristic: read differences of a few percent
+  as noise. The rules are SQL in `bmsdna/devtools/usage/sql/03_markers.sql`.
+- **Numbers:** cost is the API list price (cache writes 1.25x / 2x, cache reads, output, per model), not your actual bill;
+  "% tokens" counts cache reads too, "% fresh tokens" does not. The report also estimates what screenshots cost by sitting in
+  the context of every later turn.
+- **codex:** a codex run that Claude started with `codex exec` / `codex review` (same directory, within 15 minutes) is counted
+  in that Claude session and step, so reviews run by codex show up under "Review" even though Claude's own log doesn't contain
+  them; codex subagents follow their parent thread. codex models have no built-in price: give one with
+  `--price MODEL=INPUT,OUTPUT,CACHED` (USD per million tokens), repeatable. Turns without a price are counted in tokens
+  but missing from every cost number, and the summary says how many.
+- **Cache:** parsed records are kept in the database, so the next run only parses new or changed log files (a few seconds).
+  `--rebuild` re-reads everything. Message text is not stored.
 
 ## Releasing
 

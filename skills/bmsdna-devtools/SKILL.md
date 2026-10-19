@@ -182,6 +182,13 @@ vendor a git submodule under that path.
   adopt with `--update-baseline`). `--only sql|routes` runs one check. The routes check imports the app, so run it with
   the repo's own interpreter (`uv run`). Generated API-client code and tests never count as callers.
 
+## Token usage per workflow step
+
+`bdt usage analyze` (needs `bmsdna-devtools[usage]`) profiles the local Claude Code and codex session logs: share of tokens and
+API-equivalent cost per `dev-workflow` step, subagents, screenshots, with an HTML report. codex models need
+`--price MODEL=IN,OUT,CACHED` (USD per million tokens), otherwise their turns are counted in tokens only.
+`bdt usage sql "<query>"` queries the last analysis.
+
 ## Environment variables
 
 `bdt env get-keys [--search TEXT] [--no-home]` lists the variable **names** (never values) from `.env`, `*.env` and `.env.*`
