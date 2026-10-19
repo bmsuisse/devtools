@@ -222,17 +222,26 @@ def test_find_remote_skips_project_whose_repos_list_fails_but_keeps_searching(mo
 class FakeGitHub:
     """Stands in for GitHubClient: `request` answers the org-vs-user probe, `paginate` the listing."""
 
-    def __init__(self, repos: list[dict], org_status: int = 200):
+    def __init__(self, repos: list[dict], org_status: int = 200, login: str = "someone-else"):
         self.repos = repos
         self.org_status = org_status
+        self.login = login
         self.paginated: list[str] = []
+        self.params: list[dict | None] = []
+        self.requested: list[str] = []
+
+    def get(self, path, **kwargs):
+        assert path == "user"
+        return {"login": self.login}
 
     def request(self, method, path, ok=(), **kwargs):
         assert method == "GET" and 404 in ok
+        self.requested.append(path)
         return FakeResp(self.org_status if path.startswith("orgs/") else 200, [])
 
     def paginate(self, path, params=None, **kwargs):
         self.paginated.append(path)
+        self.params.append(params)
         return self.repos
 
 
@@ -271,6 +280,24 @@ def test_find_github_falls_back_to_user_repos_on_404() -> None:
 
     assert client.paginated == ["users/me/repos"]
     assert result == [RemoteRepo("me", "widgets", "https://github.com/me/widgets", source="github")]
+
+
+def test_find_github_lists_private_repos_for_the_authenticated_users_own_account() -> None:
+    client = FakeGitHub([{"name": "secret", "html_url": "https://github.com/Me/secret"}], org_status=404, login="me")
+
+    result = find_github(client, "Me", "secret")  # type: ignore[arg-type]
+
+    assert (client.paginated, client.params) == (["user/repos"], [{"affiliation": "owner"}])
+    assert result == [RemoteRepo("Me", "secret", "https://github.com/Me/secret", source="github")]
+
+
+def test_find_github_quotes_the_org_into_a_single_path_segment() -> None:
+    client = FakeGitHub([], org_status=404)
+
+    find_github(client, "../../user", "x")  # type: ignore[arg-type]
+
+    assert client.requested == ["orgs/..%2F..%2Fuser/repos"]
+    assert client.paginated == ["users/..%2F..%2Fuser/repos"]
 
 
 def test_find_github_propagates_client_errors() -> None:
@@ -641,3 +668,20 @@ def test_find_repo_cli_passes_github_org(monkeypatch, tmp_path) -> None:
 
     assert result.exit_code == 0, result.output
     assert captured["github_org"] == "someghorg"
+
+
+def test_clone_appends_to_existing_git_config_env(tmp_path, monkeypatch) -> None:
+    from bmsdna.devtools.find_repo import clone
+
+    captured: dict = {}
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "http.sslCAInfo")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "/etc/ca.pem")
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: captured.update(env=kw["env"]) or subprocess.CompletedProcess(cmd, 0))
+
+    clone("https://example/x.git", tmp_path / "x", {"Authorization": "Basic abc"})
+
+    env = captured["env"]
+    assert env["GIT_CONFIG_COUNT"] == "2"
+    assert (env["GIT_CONFIG_KEY_0"], env["GIT_CONFIG_VALUE_0"]) == ("http.sslCAInfo", "/etc/ca.pem")
+    assert (env["GIT_CONFIG_KEY_1"], env["GIT_CONFIG_VALUE_1"]) == ("http.extraheader", "AUTHORIZATION: Basic abc")

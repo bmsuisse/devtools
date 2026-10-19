@@ -9,6 +9,7 @@ from bmsdna.devtools.gh_pr import (
     add_files,
     check_bucket,
     check_label,
+    head_branch,
     comment_with_screenshots,
     create,
     deploy_run_hint,
@@ -77,7 +78,7 @@ class FakeGH:
         return self._answer("PATCH", path, body)
 
     def graphql(self, query, **variables):
-        op = next((n for n in ("markPullRequestReadyForReview", "convertPullRequestToDraft") if n in query), "query")
+        op = next((n for n in ("markPullRequestReadyForReview", "convertPullRequestToDraft", "query ContextsPage") if n in query), "query")
         return self._answer("GRAPHQL", op, variables)
 
     def request(self, method, path, *, ok=(), **kwargs):
@@ -92,8 +93,8 @@ def _on_branch(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.gh_pr.current_branch", lambda: "feature-x")
 
 
-def rest_pr(number: int = 7, body: str = "existing body", title: str = "Fix bug", head: str = "feature-x", state: str = "open") -> dict:
-    return {"number": number, "title": title, "body": body, "state": state, "node_id": f"PR_node_{number}", "head": {"ref": head}, "base": {"ref": "main"}, "html_url": f"https://github.com/owner/repo/pull/{number}"}
+def rest_pr(number: int = 7, body: str = "existing body", title: str = "Fix bug", head: str = "feature-x", state: str = "open", draft: bool = True) -> dict:
+    return {"number": number, "title": title, "body": body, "state": state, "node_id": f"PR_node_{number}", "draft": draft, "head": {"ref": head}, "base": {"ref": "main"}, "html_url": f"https://github.com/owner/repo/pull/{number}"}
 
 
 def view_routes(number: int = 7, **kwargs) -> dict:
@@ -468,6 +469,15 @@ def test_publish_marks_the_current_branchs_pr_ready() -> None:
     publish(gh)  # type: ignore[arg-type]
 
     assert gh.sent("GRAPHQL", "markPullRequestReadyForReview") == [{"id": "PR_node_7"}]
+
+
+def test_publish_leaves_an_already_ready_pr_alone(capsys) -> None:
+    gh = FakeGH({("GET", f"{PULLS}/99"): rest_pr(99, draft=False)})
+
+    publish(gh, pr_id=99)  # type: ignore[arg-type]
+
+    assert gh.sent("GRAPHQL", "markPullRequestReadyForReview") == []
+    assert "already ready for review" in capsys.readouterr().out
 
 
 def test_publish_with_pr_id_targets_that_pr_number() -> None:
@@ -1077,3 +1087,44 @@ def test_link_issue_to_pr_raises_on_api_failure() -> None:
 
     with pytest.raises(SystemExit, match="permission denied"):
         link_issue_to_pr(gh, 7, "body", 42)  # type: ignore[arg-type]
+
+
+def test_get_pr_pages_through_more_than_100_check_contexts() -> None:
+    def ctx(i: int) -> dict:
+        return {"__typename": "CheckRun", "name": f"job-{i}", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "u", "checkSuite": None}
+
+    first = pr_graphql_response()
+    first["repository"]["pullRequest"]["statusCheckRollup"] = {"contexts": {"pageInfo": {"hasNextPage": True, "endCursor": "c1"}, "nodes": [ctx(i) for i in range(100)]}}
+    page2 = {"repository": {"pullRequest": {"statusCheckRollup": {"contexts": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [ctx(100), ctx(101)]}}}}}
+    gh = FakeGH({("GRAPHQL", "query"): first, ("GRAPHQL", "query ContextsPage"): page2})
+
+    pr = get_pr(gh, 7, fields="statusCheckRollup")  # type: ignore[arg-type]
+
+    assert len(pr["statusCheckRollup"]) == 102
+    assert gh.sent("GRAPHQL", "query ContextsPage") == [{"owner": "owner", "repo": "repo", "number": 7, "after": "c1"}]
+
+
+def test_status_context_gets_a_name_and_details_url() -> None:
+    gh = FakeGH({("GRAPHQL", "query"): pr_graphql_response()})
+
+    ctx = get_pr(gh, 7, fields="statusCheckRollup")["statusCheckRollup"][1]  # type: ignore[arg-type]
+
+    assert ctx["name"] == "ext" and ctx["detailsUrl"] == "t"
+    assert check_label(ctx) == "ext"
+
+
+def test_head_branch_is_one_rest_call() -> None:
+    gh = FakeGH({("GET", f"{PULLS}/99"): rest_pr(99, head="topic")})
+
+    assert head_branch(gh, 99) == "topic"  # type: ignore[arg-type]
+    assert [c[:2] for c in gh.calls] == [("GET", f"{PULLS}/99")]
+
+
+def test_create_accepts_description_as_an_alias_of_body(monkeypatch) -> None:
+    monkeypatch.setattr("bmsdna.devtools.gh_pr._branch_commits", lambda target: [])
+    gh = FakeGH({("POST", PULLS): {"number": 7, "html_url": "u"}})
+
+    create(gh, "main", ["--description", "full text", "-t", "T"])  # type: ignore[arg-type]
+
+    sent = gh.sent("POST", PULLS)[0]
+    assert sent["body"] == "full text" and sent["title"] == "T"  # type: ignore[index]

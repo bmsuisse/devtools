@@ -57,7 +57,7 @@ def test_patch_pr_refuses_description_over_ado_limit() -> None:
     session.patch.assert_not_called()
 
 
-def _ado_cli(monkeypatch) -> list[dict]:
+def _ado_cli(monkeypatch, *, stub_create: bool = True) -> list[dict]:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feature-x")
     monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
@@ -69,7 +69,8 @@ def _ado_cli(monkeypatch) -> list[dict]:
         created.append(kwargs)
         return {"pullRequestId": 9, "title": kwargs.get("title") or "t"}
 
-    monkeypatch.setattr("bmsdna.devtools.pr_build.create_pr", fake_create)
+    if stub_create:
+        monkeypatch.setattr("bmsdna.devtools.pr_build.create_pr", fake_create)
     return created
 
 
@@ -96,11 +97,36 @@ def test_ado_pr_create_rejects_other_passthrough_args(monkeypatch) -> None:
     assert created == []
 
 
-def test_ado_pr_create_rejects_description_over_limit_before_creating(monkeypatch) -> None:
-    created = _ado_cli(monkeypatch)
+def test_ado_pr_create_over_limit_description_is_a_clean_failure_without_a_link(monkeypatch) -> None:
+    _ado_cli(monkeypatch, stub_create=False)
     result = runner.invoke(app, ["pr", "create", "--target", "dev", "--description", "x" * 4001])
-    assert result.exit_code != 0
-    assert created == []  # no PR with a wrong description was left behind
+    assert result.exit_code == 1
+    assert "at most 4000" in result.output
+    assert "pullrequest/" not in result.output
+
+
+def test_create_pr_refuses_description_over_limit_without_posting() -> None:
+    session = MagicMock()
+    with pytest.raises(SystemExit, match="at most 4000"):
+        pr_build.create_pr(session, REMOTE, "f", "dev", title="t", description="x" * 4001)
+    session.post.assert_not_called()
+
+
+def test_create_pr_network_failure_hints_that_the_pr_may_exist() -> None:
+    import requests
+
+    session = MagicMock()
+    session.post.side_effect = requests.ReadTimeout("slow")
+    with pytest.raises(SystemExit, match="may have been created.*bdt pr info"):
+        pr_build.create_pr(session, REMOTE, "f", "dev", title="t")
+
+
+def test_create_pr_html_sign_in_page_is_reported_as_rejected_credentials() -> None:
+    session = MagicMock()
+    session.post.return_value = MagicMock(status_code=203, reason="Non-Authoritative")
+    session.post.return_value.json.side_effect = ValueError("not json")
+    with pytest.raises(SystemExit, match="credentials rejected"):
+        pr_build.create_pr(session, REMOTE, "f", "dev", title="t")
 
 
 def test_create_pr_posts_refs_draft_labels_and_commit_subject_title(monkeypatch) -> None:

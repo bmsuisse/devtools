@@ -3,7 +3,9 @@ replacing `az ...` subprocess calls. Tokens come from `azure_auth.get_azure_toke
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -14,7 +16,7 @@ from .cli_tools import HTTP_TIMEOUT_SECS
 ARM_URL = "https://management.azure.com"
 ARM_SCOPE = f"{ARM_URL}/.default"
 SUBSCRIPTION_API_VERSION = "2022-12-01"
-SUBSCRIPTION_HINT = "Set AZURE_SUBSCRIPTION_ID to pick one."
+SUBSCRIPTION_HINT = "Set AZURE_SUBSCRIPTION_ID (or `az account set`) to pick one."
 
 
 class AzureApiError(Exception):
@@ -59,17 +61,32 @@ def arm(method: str, path: str, api_version: str, *, json: Any = None, params: d
     return r.json() if r.content else None
 
 
-def default_subscription_id() -> str:
-    """`AZURE_SUBSCRIPTION_ID` if set, else the account's only enabled subscription.
+def _az_profile_default_subscription() -> str | None:
+    """The `isDefault` subscription of `az`'s profile (`az account set`), if there is one to read."""
+    path = Path(os.environ.get("AZURE_CONFIG_DIR") or Path.home() / ".azure") / "azureProfile.json"
+    try:
+        profile = json.loads(path.read_text(encoding="utf-8-sig"))
+        return next((s["id"] for s in profile["subscriptions"] if s.get("isDefault")), None)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
 
-    `az` kept a "default subscription" in its profile; with raw HTTP there is none, so an
-    account with several enabled subscriptions has to say which one (exits with the list).
-    """
+
+def default_subscription_id() -> str:
+    """The subscription to use: `AZURE_SUBSCRIPTION_ID`, else the default one of `az`'s profile
+    (`az account set`), else the account's only enabled subscription (several: exits with the list)."""
     env = os.environ.get("AZURE_SUBSCRIPTION_ID")
     if env:
         return env
+    profile_default = _az_profile_default_subscription()
+    if profile_default:
+        return profile_default
     try:
-        subs = arm("GET", "/subscriptions", SUBSCRIPTION_API_VERSION).get("value", [])
+        page = arm("GET", "/subscriptions", SUBSCRIPTION_API_VERSION)
+        subs = page.get("value", [])
+        while page.get("nextLink"):
+            r = request("GET", page["nextLink"])
+            page = r.json()
+            subs.extend(page.get("value", []))
     except AzureApiError as e:
         raise AzureApiError(f"Couldn't list Azure subscriptions (try `az login`?): {e}") from e
     enabled = [s for s in subs if s.get("state", "Enabled") == "Enabled"]

@@ -38,9 +38,34 @@ def test_get_azure_token_exits_with_hint_on_auth_failure(monkeypatch) -> None:
         def get_token(self, *scopes, **kwargs):
             raise ClientAuthenticationError("no credential")
 
-    monkeypatch.setattr("azure.identity.DefaultAzureCredential", FailingCredential)
+    monkeypatch.setattr(azure_auth, "_credential", lambda: FailingCredential())
 
     with pytest.raises(SystemExit) as exc_info:
         azure_auth.get_azure_token("scope")
 
     assert "az login" in str(exc_info.value)
+
+
+def test_credential_is_built_once_with_the_cli_process_timeout(monkeypatch) -> None:
+    from bmsdna.devtools import azure_auth
+    from bmsdna.devtools.cli_tools import CLI_TIMEOUT_SECS
+
+    built: list[dict] = []
+
+    class Credential:
+        def __init__(self, **kwargs):
+            built.append(kwargs)
+
+        def get_token(self, *scopes, **kwargs):
+            assert kwargs == {}  # AzureCliCredential ignores a per-call timeout; it is a constructor option
+            return type("Token", (), {"token": "t"})()
+
+    azure_auth._credential.cache_clear()
+    monkeypatch.setattr("azure.identity.DefaultAzureCredential", Credential)
+    try:
+        assert azure_auth.get_azure_token("a") == "t"
+        assert azure_auth.get_azure_token("b") == "t"
+    finally:
+        azure_auth._credential.cache_clear()
+
+    assert built == [{"process_timeout": CLI_TIMEOUT_SECS}]

@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
@@ -88,7 +89,14 @@ class GitHubClient:
     def request(self, method: str, path: str, *, ok: tuple[int, ...] = (), **kwargs: Any) -> requests.Response:
         """`method path` (relative to the API root, or a full URL); exits with GitHub's error message on a non-2xx
         status (except those listed in `ok`, which are returned for the caller to inspect)."""
-        url = path if path.startswith("http") else f"{self.base_url}/{path.lstrip('/')}"
+        if path.startswith("http"):
+            url = path
+            target, base = urlparse(url), urlparse(self.base_url)
+            if target.scheme != "https" or target.netloc != base.netloc:
+                # the session's Authorization header must never reach another host
+                sys.exit(f"Refusing to send the GitHub token to {target.netloc or url!r}: not {base.netloc} over https")
+        else:
+            url = f"{self.base_url}/{path.lstrip('/')}"
         try:
             r = self.session.request(method, url, timeout=HTTP_TIMEOUT_SECS, **kwargs)
         except requests.RequestException as e:

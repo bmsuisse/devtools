@@ -8,6 +8,13 @@ from typing import Any, Callable
 NOT_FOUND = object()
 
 
+class NotFound:
+    """A 404 whose JSON body carries `message`."""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+
+
 class FakeResponse:
     def __init__(self, status_code: int, data: Any) -> None:
         self.status_code = status_code
@@ -35,10 +42,10 @@ class FakeGitHub:
 
     def request(self, method: str, path: str, *, ok: tuple[int, ...] = (), **kwargs: Any) -> FakeResponse:
         value = self._answer(method, path, kwargs.get("json", kwargs.get("params")))
-        if value is NOT_FOUND:
+        if value is NOT_FOUND or isinstance(value, NotFound):
             if 404 not in ok:
                 raise SystemExit(f"GitHub {method} {path} failed (HTTP 404)")
-            return FakeResponse(404, None)
+            return FakeResponse(404, {"message": value.message} if isinstance(value, NotFound) else None)
         return FakeResponse(200, value)
 
     def get(self, path: str, **kwargs: Any) -> Any:

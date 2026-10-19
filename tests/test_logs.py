@@ -46,15 +46,33 @@ def test_find_app_insights_returns_first_component_name(azure):
     assert azure["arm"] == [("GET", COMPONENTS, "2020-02-02")]
 
 
-def test_find_app_insights_none_when_empty_or_error(azure, monkeypatch):
+def test_find_app_insights_none_when_empty_or_resource_group_not_found(azure, monkeypatch):
     azure["components"] = []
     assert logs.find_app_insights("my-rg") is None
 
-    def boom(*a, **k):
-        raise azure_arm.AzureApiError("nope")
+    def not_found(*a, **k):
+        raise azure_arm.AzureApiError("GET x failed (HTTP 404): ResourceGroupNotFound")
 
-    monkeypatch.setattr(azure_arm, "arm", boom)
+    monkeypatch.setattr(azure_arm, "arm", not_found)
     assert logs.find_app_insights("my-rg") is None
+
+
+def test_find_app_insights_propagates_other_errors(azure, monkeypatch):
+    def forbidden(*a, **k):
+        raise azure_arm.AzureApiError("GET x failed (HTTP 403): AuthorizationFailed")
+
+    monkeypatch.setattr(azure_arm, "arm", forbidden)
+    with pytest.raises(azure_arm.AzureApiError, match="403"):
+        logs.find_app_insights("my-rg")
+
+
+def test_find_app_insights_propagates_subscription_errors(azure, monkeypatch):
+    def ambiguous():
+        raise azure_arm.AzureApiError("Multiple Azure subscriptions available")
+
+    monkeypatch.setattr(azure_arm, "default_subscription_id", ambiguous)
+    with pytest.raises(azure_arm.AzureApiError, match="Multiple"):
+        logs.find_app_insights("my-rg")
 
 
 def test_query_roles_sums_and_sorts(azure):

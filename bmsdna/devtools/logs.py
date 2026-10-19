@@ -38,10 +38,13 @@ def _components_path(resource_group: str) -> str:
 
 def find_app_insights(resource_group: str) -> str | None:
     """Name of the first Application Insights component in `resource_group`, if any."""
+    path = _components_path(resource_group)  # subscription errors propagate: they aren't "no App Insights"
     try:
-        items = azure_arm.arm("GET", _components_path(resource_group), APP_INSIGHTS_API_VERSION).get("value", [])
-    except azure_arm.AzureApiError:
-        return None
+        items = azure_arm.arm("GET", path, APP_INSIGHTS_API_VERSION).get("value", [])
+    except azure_arm.AzureApiError as e:
+        if "HTTP 404" in str(e):
+            return None
+        raise
     return items[0]["name"] if items else None
 
 

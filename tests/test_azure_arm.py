@@ -19,9 +19,10 @@ class FakeResp:
 
 
 @pytest.fixture(autouse=True)
-def _token(monkeypatch):
+def _token(monkeypatch, tmp_path):
     monkeypatch.setattr(azure_arm, "get_azure_token", lambda scope: f"tok:{scope}")
     monkeypatch.delenv("AZURE_SUBSCRIPTION_ID", raising=False)
+    monkeypatch.setenv("AZURE_CONFIG_DIR", str(tmp_path / "no-azure-profile"))
 
 
 def test_request_sends_bearer_token_for_scope(monkeypatch):
@@ -92,3 +93,44 @@ def test_default_subscription_none_errors(monkeypatch):
     _subs(monkeypatch, [])
     with pytest.raises(azure_arm.AzureApiError, match="No enabled"):
         azure_arm.default_subscription_id()
+
+
+def _profile(tmp_path, monkeypatch, content: bytes) -> None:
+    monkeypatch.setenv("AZURE_CONFIG_DIR", str(tmp_path))
+    (tmp_path / "azureProfile.json").write_bytes(content)
+
+
+def test_default_subscription_uses_az_profile_default_before_listing(monkeypatch, tmp_path):
+    profile = b'\xef\xbb\xbf{"subscriptions": [{"id": "a", "isDefault": false}, {"id": "b", "isDefault": true}]}'
+    _profile(tmp_path, monkeypatch, profile)  # `az` writes a UTF-8 BOM
+    monkeypatch.setattr(requests, "request", lambda *a, **k: pytest.fail("must not list subscriptions"))
+    assert azure_arm.default_subscription_id() == "b"
+
+
+def test_default_subscription_env_beats_az_profile(monkeypatch, tmp_path):
+    _profile(tmp_path, monkeypatch, b'{"subscriptions": [{"id": "b", "isDefault": true}]}')
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "env-sub")
+    assert azure_arm.default_subscription_id() == "env-sub"
+
+
+@pytest.mark.parametrize("content", [b"not json", b"[]", b'{"subscriptions": [{"id": "a"}]}'])
+def test_default_subscription_ignores_unusable_az_profile(monkeypatch, tmp_path, content):
+    _profile(tmp_path, monkeypatch, content)
+    _subs(monkeypatch, [{"subscriptionId": "only", "state": "Enabled"}])
+    assert azure_arm.default_subscription_id() == "only"
+
+
+def test_default_subscription_follows_next_link(monkeypatch):
+    pages = [
+        FakeResp(body={"value": [{"subscriptionId": "a", "state": "Disabled"}], "nextLink": "https://management.azure.com/next"}),
+        FakeResp(body={"value": [{"subscriptionId": "b", "state": "Enabled"}]}),
+    ]
+    urls: list[str] = []
+
+    def fake_request(method, url, **kwargs):
+        urls.append(url)
+        return pages.pop(0)
+
+    monkeypatch.setattr(requests, "request", fake_request)
+    assert azure_arm.default_subscription_id() == "b"
+    assert urls[-1] == "https://management.azure.com/next"

@@ -7,6 +7,10 @@ result keeps the shape `gh pr view --json` used to return (`statusCheckRollup` e
 categorizing helpers below (`check_bucket`, ...) work on GitHub's documented GraphQL enums.
 Everything else (create/edit/comment/rerun/run list/ready) is plain REST, except toggling
 draft state, which only exists as a GraphQL mutation.
+
+The PR is looked up in the repo of the `origin` remote (`gh.repo_path`), with the head `origin-owner:branch`:
+a fork workflow where `origin` is not the repo the PR is opened in (a PR from a fork's branch into its
+upstream) is not supported.
 """
 
 from __future__ import annotations
@@ -126,7 +130,7 @@ def _pr_number(gh: GitHubClient, pr_id: int | None) -> int:
 
 
 def _pr_rest(gh: GitHubClient, pr_id: int | None) -> dict:
-    """The PR as `{number, title, body, headRefName, id}` (REST: cheaper than `get_pr`, which also
+    """The PR as `{number, title, body, headRefName, id, draft}` (REST: cheaper than `get_pr`, which also
     needs the check rollup), for the current branch's PR or `pr_id`."""
     number = _pr_number(gh, pr_id)
     pr = gh.get(f"{gh.repo_path}/pulls/{number}")
@@ -136,7 +140,13 @@ def _pr_rest(gh: GitHubClient, pr_id: int | None) -> dict:
         "body": pr.get("body") or "",
         "headRefName": (pr.get("head") or {}).get("ref"),
         "id": pr.get("node_id"),
+        "draft": bool(pr.get("draft")),
     }
+
+
+def head_branch(gh: GitHubClient, pr_id: int | None) -> str | None:
+    """The head branch of PR `pr_id` (or the current branch's PR), in a single REST call."""
+    return _pr_rest(gh, pr_id)["headRefName"]
 
 
 def resolve_pr_id(gh: GitHubClient, pr_id: int | None, target: str | None = None) -> int | None:
@@ -158,6 +168,14 @@ def resolve_pr_id(gh: GitHubClient, pr_id: int | None, target: str | None = None
     return prs[choose_pr(branch, candidates)]["number"]
 
 
+_CONTEXT_FIELDS = """
+fragment ContextFields on StatusCheckRollupContext {
+  __typename
+  ... on CheckRun { name status conclusion detailsUrl checkSuite { workflowRun { workflow { name } } } }
+  ... on StatusContext { context state targetUrl }
+}
+"""
+
 _PR_QUERY = """
 query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
@@ -166,23 +184,37 @@ query($owner: String!, $repo: String!, $number: Int!) {
       closingIssuesReferences(first: 50) { nodes { number url repository { name owner { login } } } }
       statusCheckRollup {
         contexts(first: 100) {
-          nodes {
-            __typename
-            ... on CheckRun { name status conclusion detailsUrl checkSuite { workflowRun { workflow { name } } } }
-            ... on StatusContext { context state targetUrl }
-          }
+          pageInfo { hasNextPage endCursor }
+          nodes { ...ContextFields }
         }
       }
     }
   }
 }
-"""
+""" + _CONTEXT_FIELDS
+
+# The rest of a rollup with more than 100 contexts (matrix builds + legacy statuses), 100 at a time.
+_CONTEXTS_QUERY = """
+query ContextsPage($owner: String!, $repo: String!, $number: Int!, $after: String!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      statusCheckRollup {
+        contexts(first: 100, after: $after) {
+          pageInfo { hasNextPage endCursor }
+          nodes { ...ContextFields }
+        }
+      }
+    }
+  }
+}
+""" + _CONTEXT_FIELDS
 
 
 def _check_entry(node: dict) -> dict:
     """A GraphQL rollup context, flattened to the `gh pr view --json statusCheckRollup` shape."""
     if node.get("__typename") != "CheckRun":
-        return node
+        # StatusContext has `context`/`targetUrl` where a CheckRun has `name`/`detailsUrl`
+        return {**node, "name": node.get("context"), "detailsUrl": node.get("targetUrl")}
     workflow = (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
     return {**{k: v for k, v in node.items() if k != "checkSuite"}, "workflowName": workflow or ""}
 
@@ -203,8 +235,13 @@ def get_pr(gh: GitHubClient, pr_id: int | None = None, fields: str = PR_VIEW_FIE
     pr = (data.get("repository") or {}).get("pullRequest")
     if not pr:
         sys.exit(f"Pull request #{number} not found in {gh.owner}/{gh.repo}")
-    rollup = pr.get("statusCheckRollup") or {}
-    pr["statusCheckRollup"] = [_check_entry(n) for n in ((rollup.get("contexts") or {}).get("nodes") or []) if n]
+    contexts = (pr.get("statusCheckRollup") or {}).get("contexts") or {}
+    nodes = list(contexts.get("nodes") or [])
+    while (contexts.get("pageInfo") or {}).get("hasNextPage"):
+        page = gh.graphql(_CONTEXTS_QUERY, owner=gh.owner, repo=gh.repo, number=number, after=contexts["pageInfo"]["endCursor"])
+        contexts = (((page.get("repository") or {}).get("pullRequest") or {}).get("statusCheckRollup") or {}).get("contexts") or {}
+        nodes += contexts.get("nodes") or []
+    pr["statusCheckRollup"] = [_check_entry(n) for n in nodes if n]
     pr["closingIssuesReferences"] = [n for n in (pr.get("closingIssuesReferences") or {}).get("nodes") or [] if n]
     wanted = [f.strip() for f in fields.split(",") if f.strip()]
     return {k: pr.get(k) for k in wanted}
@@ -578,10 +615,11 @@ def run_watch_deploy(gh: GitHubClient, target_branch: str, wait: bool) -> None:
 
 
 def _parse_create_args(extra_args: list[str]) -> dict[str, str]:
-    """`--title X` / `--title=X` / `--body X` / `--body=X` (also `-t`/`-b`) out of a pass-through
+    """`--title X` / `--title=X` / `--body X` / `--body=X` (also `-t`/`-b`, and `--description`/`-d` as
+    an alias of `--body`, as on Azure DevOps) out of a pass-through
     argument list; anything else can't be honored now that there's no `gh` to hand it to."""
     out: dict[str, str] = {}
-    keys = {"--title": "title", "-t": "title", "--body": "body", "-b": "body"}
+    keys = {"--title": "title", "-t": "title", "--body": "body", "-b": "body", "--description": "body", "-d": "body"}
     args = list(extra_args)
     while args:
         arg = args.pop(0)
@@ -591,7 +629,7 @@ def _parse_create_args(extra_args: list[str]) -> dict[str, str]:
         elif arg in keys and args:
             out[keys[arg]] = args.pop(0)
         else:
-            sys.exit(f"unsupported argument for `pr create`: {arg!r} (only --title/--body are supported)")
+            sys.exit(f"unsupported argument for `pr create`: {arg!r} (only --title and --body/--description are supported)")
     return out
 
 
@@ -724,7 +762,11 @@ _DRAFT_MUTATION = "mutation($id: ID!) { convertPullRequestToDraft(input: {pullRe
 
 def publish(gh: GitHubClient, pr_id: int | None = None) -> None:
     """Mark the current branch's draft PR -- or `pr_id`'s, if given -- as ready for review."""
-    gh.graphql(_READY_MUTATION, id=_pr_rest(gh, pr_id)["id"])
+    pr = _pr_rest(gh, pr_id)
+    if not pr["draft"]:
+        print(f"PR #{pr['number']} is already ready for review")
+        return
+    gh.graphql(_READY_MUTATION, id=pr["id"])
     print("Marked PR as ready for review")
     print("\nRun `bdt pr status --wait` to watch the PR's CI.")
 

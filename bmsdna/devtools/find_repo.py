@@ -157,10 +157,15 @@ def find_github(client: GitHubClient, org: str, name: str) -> list[RemoteRepo]:
     (no per-project split), so one paginated listing covers the whole org. `org` may
     also be a user account: `orgs/{org}/repos` 404s for those, so fall back to `users/{org}/repos`.
     """
-    path = f"orgs/{quote(org)}/repos"
+    org_path = quote(org, safe="")
+    path, params = f"orgs/{org_path}/repos", None
     if client.request("GET", path, ok=(404,), params={"per_page": 1}).status_code == 404:
-        path = f"users/{quote(org)}/repos"
-    items = client.paginate(path, limit=1000)
+        # `users/{login}/repos` lists only public repos, even for the token's own account
+        if client.get("user").get("login", "").lower() == org.lower():
+            path, params = "user/repos", {"affiliation": "owner"}
+        else:
+            path = f"users/{org_path}/repos"
+    items = client.paginate(path, params, limit=1000)
     all_repos = [RemoteRepo(org, r["name"], r["html_url"], source="github") for r in items]
     return _prefer_exact(all_repos, name, key=lambda r: r.name)
 
@@ -175,9 +180,10 @@ def clone(remote_url: str, dest: Path, auth: dict[str, str] | None = None) -> su
     """
     env = os.environ.copy()
     if auth:
-        env["GIT_CONFIG_COUNT"] = "1"
-        env["GIT_CONFIG_KEY_0"] = "http.extraheader"
-        env["GIT_CONFIG_VALUE_0"] = f"AUTHORIZATION: {auth['Authorization']}"
+        n = int(env.get("GIT_CONFIG_COUNT") or 0)  # append after any config the caller already injects
+        env["GIT_CONFIG_COUNT"] = str(n + 1)
+        env[f"GIT_CONFIG_KEY_{n}"] = "http.extraheader"
+        env[f"GIT_CONFIG_VALUE_{n}"] = f"AUTHORIZATION: {auth['Authorization']}"
     try:
         return subprocess.run(["git", "clone", remote_url, str(dest)], env=env, check=False)
     except FileNotFoundError:

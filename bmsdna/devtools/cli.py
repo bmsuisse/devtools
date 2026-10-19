@@ -172,7 +172,7 @@ def _gh_branch_for(gh: GitHubClient, pr_id: int | None, *, needed: bool) -> str:
         return current_branch()
     if not needed:
         return ""
-    return gh_pr.get_pr(gh, pr_id).get("headRefName") or str(pr_id)
+    return gh_pr.head_branch(gh, pr_id) or str(pr_id)
 
 
 _LOOKUP_TARGET_HELP = "Only consider a PR into this target branch (default: any target). Several open PRs for the branch: asks which one (non-interactive: fails listing them) unless this or --pr-id picks one"
@@ -283,8 +283,7 @@ def pr_create(
     label: list[str] = typer.Option(
         [],
         "--label",
-        help="Label to apply to the PR (repeatable). On GitHub the label must already exist on the repo "
-        "(`gh label create`); Azure DevOps PR labels are freeform and created on the fly. "
+        help="Label to apply to the PR (repeatable). Unknown labels are created automatically on both hosts. "
         r"[tool.bdt.pr.required_labels] in pyproject.toml can require at least one label from each "
         "named group before the PR is created. [tool.bdt.pr.scope_labels] can auto-add a label based "
         "on the HEAD commit's conventional-commit scope (e.g. `feat(customers): ...` -> a configured label).",
@@ -315,7 +314,7 @@ def pr_create(
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
         help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
     ),
-    args: list[str] = typer.Argument(None, help="Extra args: only --title / --description are accepted"),
+    args: list[str] = typer.Argument(None, help="Extra args. GitHub: --title/-t, --body/--description/-b/-d. Azure DevOps: --title/--description"),
 ) -> None:
     """Create a PR from the current branch into --target (Azure DevOps or GitHub, auto-detected)."""
     for path in screenshot:
@@ -367,12 +366,6 @@ def pr_create(
             )
         title = title if title is not None else pass_title
         description = description if description is not None else pass_description
-        if description is not None and len(description) > pr_build.ADO_PR_DESCRIPTION_MAX:
-            raise typer.BadParameter(
-                f"{len(description)} characters; Azure DevOps allows at most {pr_build.ADO_PR_DESCRIPTION_MAX}. "
-                "Shorten it, or attach the detail with --file.",
-                param_hint="--description",
-            )
         session = requests.Session()
         session.headers.update(auth_header(pat))
         returncode = 0

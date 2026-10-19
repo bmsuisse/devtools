@@ -99,3 +99,18 @@ def test_graphql_raises_on_errors(monkeypatch) -> None:
 def test_repo_path_defaults_to_origin_remote(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.gitrepo.origin_url", lambda cwd=None: "git@github.com:acme/widgets.git")
     assert GitHubClient("tok").repo_path == "repos/acme/widgets"
+
+
+def test_absolute_url_on_another_host_never_gets_the_token(monkeypatch) -> None:
+    client, calls = client_with(monkeypatch, [FakeResponse(200, {})])
+    with pytest.raises(SystemExit, match="Refusing"):
+        client.request("GET", "https://evil.example.com/next")
+    with pytest.raises(SystemExit, match="Refusing"):
+        client.request("GET", "http://api.github.com/insecure")
+    assert calls == []
+
+
+def test_absolute_url_on_the_api_host_is_sent(monkeypatch) -> None:
+    client, calls = client_with(monkeypatch, [FakeResponse(200, {"ok": 1})])
+    assert client.get("https://api.github.com/repos/o/r/issues?page=2") == {"ok": 1}
+    assert calls[0][1] == "https://api.github.com/repos/o/r/issues?page=2"

@@ -47,9 +47,14 @@ def download_logs(webapp: str, resource_group: str, slot: str | None, archive: p
         ) as r:
             if r.status_code >= 400:
                 sys.exit(f"Log download failed (HTTP {r.status_code}): {r.text.strip() or r.reason}")
-            with archive.open("wb") as out:
-                for chunk in r.iter_content(chunk_size=1 << 16):
-                    out.write(chunk)
+            partial = archive.with_name(archive.name + ".part")
+            try:
+                with partial.open("wb") as out:
+                    for chunk in r.iter_content(chunk_size=1 << 16):
+                        out.write(chunk)
+                partial.replace(archive)
+            finally:
+                partial.unlink(missing_ok=True)
     except azure_arm.AzureApiError as e:
         sys.exit(str(e))
     except requests.RequestException as e:

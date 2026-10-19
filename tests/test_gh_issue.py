@@ -634,3 +634,30 @@ def test_list_comments_projects_the_api_shape() -> None:
         {"id": 1, "author": "alice", "created_at": "t1", "url": "u1", "body": "first"},
         {"id": 2, "author": "ghost", "created_at": "t2", "url": "u2", "body": ""},
     ]
+
+
+def test_update_remove_label_ignores_a_label_that_is_not_on_the_issue() -> None:
+    from fake_github import NotFound
+
+    gh = FakeGitHub({"DELETE repos/owner/repo/issues/42/labels/old": NotFound("Label does not exist")})
+
+    update(gh, 42, remove_labels=["old"])  # does not raise
+
+
+def test_update_remove_label_exits_when_the_issue_itself_is_missing() -> None:
+    from fake_github import NotFound
+
+    gh = FakeGitHub({"DELETE repos/owner/repo/issues/99999/labels/bug": NotFound("Not Found")})
+
+    with pytest.raises(SystemExit, match="404"):
+        update(gh, 99999, remove_labels=["bug"])
+
+
+def test_search_never_asks_for_more_than_the_1000_results_the_api_serves() -> None:
+    from bmsdna.devtools.gh_issue import _search_issues
+
+    gh = FakeGitHub({SEARCH: []})
+
+    _search_issues(gh, "", "repo:owner/repo", "open", [], 1500)
+
+    assert gh.calls_to("GET", "search/issues")[0]["limit"] == 1000

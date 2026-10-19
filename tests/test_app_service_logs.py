@@ -119,3 +119,34 @@ def test_extract_errors_keeps_only_error_lines(tmp_path):
 
     assert app_service_logs.extract_errors(archive, out) == 2
     assert out.read_text() == "LogFiles/app.log: ERROR boom\nLogFiles/app.log: GET /x 500\n"
+
+
+def test_download_logs_leaves_no_partial_file_when_the_stream_breaks(monkeypatch, tmp_path):
+    class Broken(FakeDump):
+        def iter_content(self, chunk_size):
+            yield b"half"
+            raise app_service_logs.requests.ConnectionError("dropped")
+
+    _setup(monkeypatch, Broken())
+    archive = tmp_path / "archive.zip"
+
+    with pytest.raises(SystemExit, match="dropped"):
+        app_service_logs.download_logs("my-app", "my-rg", None, archive)
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_download_logs_keeps_an_existing_archive_when_the_stream_breaks(monkeypatch, tmp_path):
+    class Broken(FakeDump):
+        def iter_content(self, chunk_size):
+            raise app_service_logs.requests.ConnectionError("dropped")
+
+    _setup(monkeypatch, Broken())
+    archive = tmp_path / "archive.zip"
+    archive.write_bytes(b"previous")
+
+    with pytest.raises(SystemExit):
+        app_service_logs.download_logs("my-app", "my-rg", None, archive)
+
+    assert archive.read_bytes() == b"previous"
+    assert [p.name for p in tmp_path.iterdir()] == ["archive.zip"]

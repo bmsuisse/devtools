@@ -349,19 +349,26 @@ def create_pr(
         body["description"] = description
     if labels:
         body["labels"] = [{"name": label} for label in labels]
-    r = session.post(
-        f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}/pullrequests",
-        params={"api-version": "7.1"},
-        json=body,
-        timeout=HTTP_TIMEOUT_SECS,
-    )
+    try:
+        r = session.post(
+            f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}/pullrequests",
+            params={"api-version": "7.1"},
+            json=body,
+            timeout=HTTP_TIMEOUT_SECS,
+        )
+    except requests.RequestException as e:
+        sys.exit(f"Azure DevOps request failed or timed out: {e}; the PR may have been created -- check with `bdt pr info` before retrying")
     if r.status_code >= 400:
         try:
             message = r.json().get("message")
         except ValueError:
             message = None
         sys.exit(f"Azure DevOps could not create the PR (HTTP {r.status_code}): {message or r.text.strip() or r.reason}")
-    return r.json()
+    try:
+        return r.json()
+    except ValueError:
+        # Azure DevOps answers 200/203 with an HTML sign-in page when the credentials are rejected.
+        sys.exit("Azure DevOps did not return JSON (credentials rejected? pass --pat / set AZURE_DEVOPS_EXT_PAT, or `az login`)")
 
 
 def set_description(session: requests.Session, remote: AdoRemote, pr: dict, description: str) -> dict:

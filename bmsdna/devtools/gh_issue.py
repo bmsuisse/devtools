@@ -356,6 +356,18 @@ def _quote_qualifier(value: str) -> str:
     return f'"{value}"' if re.search(r"\s", value) else value
 
 
+SEARCH_RESULT_CAP = 1000
+
+
+def _error_text(r: Any) -> str:
+    """The `message` of an error response, '' when it has none."""
+    try:
+        body = r.json()
+    except ValueError:
+        return ""
+    return str(body.get("message") or "") if isinstance(body, dict) else ""
+
+
 def _search_issues(gh: GitHubClient, query: str, scope: str, state: str, labels: list[str], limit: int) -> list[dict]:
     """`GET /search/issues` for `query` (from `build_search_query`) within `scope` (`repo:o/r` / `user:o`),
     newest-updated first, as `{number, title, url, state, repository}` (`state` as the API reports it: lowercase)."""
@@ -364,7 +376,8 @@ def _search_issues(gh: GitHubClient, query: str, scope: str, state: str, labels:
     if state != "all":
         parts.append(f"is:{state}")
     parts += [f"label:{_quote_qualifier(label)}" for label in labels]
-    raw = gh.paginate("search/issues", {"q": " ".join(parts), "sort": "updated", "order": "desc"}, items_key="items", limit=limit)
+    # the search API serves at most the first 1000 results: asking for page 11 is an HTTP 422
+    raw = gh.paginate("search/issues", {"q": " ".join(parts), "sort": "updated", "order": "desc"}, items_key="items", limit=min(limit, SEARCH_RESULT_CAP))
     return [
         {
             "number": item["number"],
@@ -560,7 +573,10 @@ def update(
     if add_labels:
         gh.post(f"{path}/labels", {"labels": add_labels})
     for label in remove_labels or []:
-        gh.request("DELETE", f"{path}/labels/{quote(label, safe='')}", ok=(404,))
+        r = gh.request("DELETE", f"{path}/labels/{quote(label, safe='')}", ok=(404,))
+        # a 404 for "label isn't on the issue" is fine; a 404 for the issue itself is not
+        if r.status_code == 404 and "label does not exist" not in _error_text(r).lower():
+            sys.exit(f"GitHub DELETE {path}/labels/{label} failed (HTTP 404): {_error_text(r) or 'Not Found'}")
     if new_parent is not None:
         _add_sub_issue(gh, new_parent, _issue_id(gh, number), replace=True)
     for blocker in new_blockers:
