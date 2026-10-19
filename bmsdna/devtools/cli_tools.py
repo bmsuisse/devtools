@@ -100,6 +100,12 @@ class WaitDeadline:
         time.sleep(secs if self._end is None else max(0.0, min(secs, self._end - time.monotonic())))
 
 
+def status_rerun_cmd(pr_id: int | None, timeout_secs: float) -> str:
+    """The command that keeps waiting where a timed-out `pr status --wait` stopped. Pins `--pr-id` to the PR that
+    was being watched, so re-running can't resolve to a different PR (e.g. another branch checked out since)."""
+    return f"bdt pr status --pr-id {pr_id} --wait --timeout {timeout_secs:g}" if pr_id else f"bdt pr status --wait --timeout {timeout_secs:g}"
+
+
 def exit_wait_timeout(msg: str, print_details: Callable[[], object], deadline: WaitDeadline, rerun_cmd: str) -> NoReturn:
     """Report where a `--wait` loop stands when its `deadline` ran out (status line, per-item details), then
     exit `EXIT_WAIT_TIMEOUT`. The last line tells the caller what to run to keep waiting."""

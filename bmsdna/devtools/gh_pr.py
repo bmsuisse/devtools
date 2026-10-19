@@ -29,6 +29,7 @@ from .cli_tools import (
     ensure_agent_session_note,
     exit_wait_timeout,
     is_claude_code,
+    status_rerun_cmd,
 )
 from .gitrepo import current_branch
 from .pr_choice import PrCandidate, choose_pr
@@ -381,7 +382,7 @@ def run(gh: str, wait: bool, pr_id: int | None = None, timeout: float = 0) -> No
         if "pending" in buckets and wait and not waiting_approval:
             heartbeat.show(msg)
             if deadline.expired():
-                exit_wait_timeout(msg, lambda: [print_check(c) for c in checks], deadline, f"bdt pr status --wait --timeout {timeout:g}")
+                exit_wait_timeout(msg, lambda: [print_check(c) for c in checks], deadline, status_rerun_cmd(pr_number, timeout))
             deadline.sleep(30)
             continue
 

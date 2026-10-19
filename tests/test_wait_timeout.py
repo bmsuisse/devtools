@@ -79,7 +79,7 @@ def test_gh_wait_times_out_with_exit_4_and_reports_every_check(monkeypatch, slee
     assert exc.value.code == EXIT_WAIT_TIMEOUT
     assert sleeps == [30, 30, 10]
     assert "[✓ PASS] CI / lint" in out and "[… PENDING] CI / build" in out
-    assert out.rstrip().endswith("Still running after 70 s. Re-run `bdt pr status --wait --timeout 70` to keep waiting.")
+    assert out.rstrip().endswith("Still running after 70 s. Re-run `bdt pr status --pr-id 42 --wait --timeout 70` to keep waiting.")
 
 
 def test_gh_wait_without_timeout_keeps_polling(monkeypatch, sleeps) -> None:
@@ -134,7 +134,7 @@ def test_ado_wait_times_out_with_exit_4_and_reports_the_running_builds(monkeypat
     assert exc.value.code == EXIT_WAIT_TIMEOUT
     assert sleeps == [30, 15]
     assert "ci #200 inProgress" in out and "build #200 inProgress" in out
-    assert out.rstrip().endswith("Still running after 45 s. Re-run `bdt pr status --wait --timeout 45` to keep waiting.")
+    assert out.rstrip().endswith("Still running after 45 s. Re-run `bdt pr status --pr-id 42 --wait --timeout 45` to keep waiting.")
 
 
 def test_ado_wait_times_out_while_no_build_has_been_queued_yet(monkeypatch, sleeps, capsys) -> None:

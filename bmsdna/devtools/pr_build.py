@@ -5,14 +5,14 @@ from __future__ import annotations
 import re
 import sys
 import time
-from typing import NoReturn
 from pathlib import Path
+from typing import NoReturn
 from urllib.parse import quote
 
 import requests
 
 from .ado_auth import auth_header
-from .cli_tools import EXIT_NEEDS_APPROVAL, HTTP_TIMEOUT_SECS, PollHeartbeat, WaitDeadline, exit_wait_timeout, detect_agent_session, ensure_agent_session_note, is_claude_code
+from .cli_tools import EXIT_NEEDS_APPROVAL, HTTP_TIMEOUT_SECS, PollHeartbeat, WaitDeadline, detect_agent_session, ensure_agent_session_note, exit_wait_timeout, is_claude_code, status_rerun_cmd
 from .gitrepo import AdoRemote, current_branch
 from .pr_choice import PrCandidate, choose_pr
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
@@ -810,8 +810,8 @@ def run(
     heartbeat = PollHeartbeat()
     deadline = WaitDeadline(timeout)
 
-    def time_out(msg: str, builds: list) -> NoReturn:
-        exit_wait_timeout(msg, lambda: [print_build(session, remote, b) for b in builds], deadline, f"bdt pr status --wait --timeout {timeout:g}")
+    def time_out(msg: str, builds: list, pr_number: int) -> NoReturn:
+        exit_wait_timeout(msg, lambda: [print_build(session, remote, b) for b in builds], deadline, status_rerun_cmd(pr_number, timeout))
 
     while True:
         pr = _poll_or_exit(fetch_pr)
@@ -838,7 +838,7 @@ def run(
                     )
                     heartbeat.show(msg)
                     if deadline.expired():
-                        time_out(msg, [b for b in pipeline_builds if b not in stale])
+                        time_out(msg, [b for b in pipeline_builds if b not in stale], pr_number)
                     deadline.sleep(30)
                     continue
             msg += " | " + ", ".join(
@@ -902,7 +902,7 @@ def run(
 
         if wait:
             if deadline.expired():
-                time_out(msg, pipeline_builds)
+                time_out(msg, pipeline_builds, pr_number)
             deadline.sleep(30)
 
 

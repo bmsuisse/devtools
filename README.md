@@ -62,7 +62,7 @@ build/check has already failed, that's reported instead (exit 1) even when
 one is also waiting on approval.
 
 `--wait --timeout SECONDS` gives up after that long when the checks are still running: it prints the current
-state of every pipeline/check, ends with `Still running after N s. Re-run ... to keep waiting.` and exits **4**
+state of every pipeline/check, ends with `Still running after N s. Re-run ... to keep waiting.` (the command pins `--pr-id` to the PR it watched) and exits **4**
 (like `issue watch`). Use it where the caller's own limit is shorter than CI, e.g. an agent's shell tool, which
 kills the command after a few minutes and discards its output; re-run the same command to keep waiting.
 Without `--timeout` (or with `0`) it waits until everything is done, as before. `--timeout` needs `--wait`.
