@@ -29,3 +29,10 @@ def test_claude_gets_the_given_session_id() -> None:
 def test_take_message_names_the_session() -> None:
     assert issue_do.take_message("me", "claude", "abc") == "Taken by me\n\nClaude Session: abc (resume with `claude --resume abc`)"
     assert issue_do.take_message("me", "codex", None) == "Taken by me (via codex)"
+
+
+def test_fetch_github_reads_title_and_body() -> None:
+    from fake_github import FakeGitHub
+
+    gh = FakeGitHub({"GET repos/owner/repo/issues/9": {"title": "T", "body": None}})
+    assert issue_do.fetch_github(gh, 9) == ("T", "")  # type: ignore[arg-type]

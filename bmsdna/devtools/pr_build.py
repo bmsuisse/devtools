@@ -13,7 +13,8 @@ import requests
 
 from .ado_auth import auth_header
 from .cli_tools import EXIT_NEEDS_APPROVAL, HTTP_TIMEOUT_SECS, PollHeartbeat, WaitDeadline, detect_agent_session, ensure_agent_session_note, exit_wait_timeout, is_claude_code, status_rerun_cmd
-from .gitrepo import AdoRemote, current_branch
+from .gitrepo import AdoRemote, current_branch, head_commit_subject
+from .pr_create_args import PrCreateOptions
 from .pr_choice import PrCandidate, choose_pr
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
@@ -288,39 +289,180 @@ def _patch_pr(session: requests.Session, remote: AdoRemote, pr_id: int, fields: 
     return stored
 
 
-def split_az_text_args(args: list[str]) -> tuple[list[str], str | None, str | None]:
-    """Pull `--title`/`-t` and `--description`/`-d` (and their `--opt=value` forms) out of the
-    passthrough args for `az repos pr create`, returning `(remaining_args, title, description)`.
+_GUID_RE = re.compile(r"^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$")
 
-    `az` is not trusted to carry a long description intact (it has been seen cutting it at ~450
-    characters), so `bdt pr create` applies these over the REST API after creating the PR. Like
-    `az`, `--description` takes every following value up to the next option, one per line.
+
+def parse_work_item_ids(values: list[str]) -> list[int]:
+    ids: list[int] = []
+    for value in values:
+        try:
+            ids.append(int(value.strip().lstrip("#")))
+        except ValueError:
+            raise ValueError(f"--work-items expects work item IDs, got {value!r}") from None
+    return list(dict.fromkeys(ids))
+
+
+def resolve_identity(session: requests.Session, remote: AdoRemote, query: str) -> str:
+    """The identity ID of a user or group given as GUID, e-mail or display name (Identities API); exits when it
+    matches nothing or is ambiguous."""
+    query = query.strip()
+    if _GUID_RE.match(query):
+        return query
+    try:
+        r = session.get(
+            f"https://vssps.dev.azure.com/{quote(remote.org, safe='')}/_apis/identities",
+            params={"searchFilter": "General", "filterValue": query, "queryMembership": "None", "api-version": "7.1"},
+            timeout=HTTP_TIMEOUT_SECS,
+        )
+        r.raise_for_status()
+        found = r.json().get("value", [])
+    except (requests.RequestException, ValueError) as e:
+        sys.exit(f"Could not look up reviewer {query!r}: {e}")
+    if len(found) > 1:
+        wanted = query.casefold()
+
+        def names(identity: dict) -> set[str]:
+            mail = (identity.get("properties") or {}).get("Mail", {})
+            mail = mail.get("$value") if isinstance(mail, dict) else mail
+            return {str(v).casefold() for v in (identity.get("providerDisplayName"), identity.get("customDisplayName"), mail) if v}
+
+        exact = [i for i in found if wanted in names(i)]
+        if len(exact) == 1:
+            found = exact
+    if not found:
+        sys.exit(f"No Azure DevOps user or group matches {query!r}.")
+    if len(found) > 1:
+        options = ", ".join(f"{i.get('providerDisplayName', '?')} ({i.get('id')})" for i in found[:5])
+        sys.exit(f"{query!r} is ambiguous in Azure DevOps ({len(found)} matches: {options}); pass an e-mail or GUID.")
+    return found[0]["id"]
+
+
+def current_user_id(session: requests.Session, remote: AdoRemote) -> str:
+    """The Azure DevOps identity ID of whoever the credentials belong to (needed to set auto-complete)."""
+    try:
+        r = session.get(f"https://dev.azure.com/{quote(remote.org, safe='')}/_apis/connectionData", params={"api-version": "7.1-preview.1"}, timeout=HTTP_TIMEOUT_SECS)
+        r.raise_for_status()
+        return r.json()["authenticatedUser"]["id"]
+    except (requests.RequestException, ValueError, KeyError) as e:
+        sys.exit(f"Could not determine the current Azure DevOps user (needed for --auto-complete): {e}")
+
+
+def build_create_body(
+    session: requests.Session,
+    remote: AdoRemote,
+    source_branch: str,
+    target_branch: str,
+    *,
+    draft: bool = False,
+    labels: list[str] | None = None,
+    title: str | None = None,
+    description: str | None = None,
+    options: PrCreateOptions | None = None,
+    work_item_ids: list[int] | None = None,
+) -> dict:
+    """The `POST .../pullrequests` body: refs, title (the HEAD commit's subject without `title`, like
+    `az repos pr create`), draft flag, labels, reviewers (resolved to identity IDs) and work item links
+    (`options.work_items` plus `work_item_ids`, de-duplicated)."""
+    options = options or PrCreateOptions()
+    if description is not None and len(description) > ADO_PR_DESCRIPTION_MAX:
+        sys.exit(f"PR description is {len(description)} characters; Azure DevOps allows at most {ADO_PR_DESCRIPTION_MAX}.")
+    body: dict = {
+        "sourceRefName": f"refs/heads/{source_branch}",
+        "targetRefName": f"refs/heads/{target_branch}",
+        "title": title if title is not None else (head_commit_subject() or source_branch),
+        "isDraft": draft,
+    }
+    if description is not None:
+        body["description"] = description
+    if labels:
+        body["labels"] = [{"name": label} for label in labels]
+    reviewers: dict[str, dict] = {}
+    for query, required in [(q, False) for q in options.reviewers] + [(q, True) for q in options.required_reviewers]:
+        identity_id = resolve_identity(session, remote, query)
+        is_required = required or reviewers.get(identity_id, {}).get("isRequired", False)
+        reviewers[identity_id] = {"id": identity_id, **({"isRequired": True} if is_required else {})}
+    if reviewers:
+        body["reviewers"] = list(reviewers.values())
+    work_items = list(dict.fromkeys([*parse_work_item_ids(options.work_items), *(work_item_ids or [])]))
+    if work_items:
+        body["workItemRefs"] = [{"id": str(i)} for i in work_items]
+    return body
+
+
+def create_pr(
+    session: requests.Session,
+    remote: AdoRemote,
+    source_branch: str,
+    target_branch: str,
+    *,
+    draft: bool = False,
+    labels: list[str] | None = None,
+    title: str | None = None,
+    description: str | None = None,
+    options: PrCreateOptions | None = None,
+    work_item_ids: list[int] | None = None,
+) -> dict:
+    """Create the PR `source_branch` -> `target_branch` over REST and return its JSON.
+
+    Auto-complete is only set when `options.auto_complete` is true; the merge completion options are applied in a
+    follow-up update, as `az` does. Labels are created on the fly by Azure DevOps.
     """
-    rest: list[str] = []
-    title: str | None = None
-    description: str | None = None
-    i = 0
-    while i < len(args):
-        arg = args[i]
-        name, eq, inline = arg.partition("=")
-        if name in ("--title", "-t", "--description", "-d"):
-            i += 1
-            if eq:
-                values = [inline]
-            else:
-                values = []
-                while i < len(args) and (not values or not args[i].startswith("-")):
-                    values.append(args[i])
-                    i += 1
-            text = "\n".join(values)
-            if name in ("--title", "-t"):
-                title = text
-            else:
-                description = text
-            continue
-        rest.append(arg)
-        i += 1
-    return rest, title, description
+    options = options or PrCreateOptions()
+    body = build_create_body(
+        session, remote, source_branch, target_branch,
+        draft=draft, labels=labels, title=title, description=description, options=options, work_item_ids=work_item_ids,
+    )
+    try:
+        r = session.post(
+            f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}/pullrequests",
+            params={"api-version": "7.1"},
+            json=body,
+            timeout=HTTP_TIMEOUT_SECS,
+        )
+    except requests.RequestException as e:
+        sys.exit(f"Azure DevOps request failed or timed out: {e}; the PR may have been created -- check with `bdt pr info` before retrying")
+    if r.status_code >= 400:
+        try:
+            message = r.json().get("message")
+        except ValueError:
+            message = None
+        sys.exit(f"Azure DevOps could not create the PR (HTTP {r.status_code}): {message or r.text.strip() or r.reason}")
+    try:
+        pr = r.json()
+    except ValueError:
+        # Azure DevOps answers 200/203 with an HTML sign-in page when the credentials are rejected.
+        sys.exit("Azure DevOps did not return JSON (credentials rejected? pass --pat / set AZURE_DEVOPS_EXT_PAT, or `az login`)")
+
+    try:
+        # Inside the handler: the identity lookup of --auto-complete can fail too, with the PR already created.
+        update = completion_update(session, remote, options)
+        if update:
+            pr = {**pr, **_patch_pr(session, remote, pr["pullRequestId"], update)}
+    except (requests.RequestException, SystemExit, KeyError) as e:
+        print(f"Warning: PR created, but setting auto-complete / completion options failed: {e}", file=sys.stderr)
+    return pr
+
+
+def completion_update(session: requests.Session, remote: AdoRemote, options: PrCreateOptions) -> dict:
+    """The PATCH fields for the auto-complete / merge completion flags (empty when none was given)."""
+    update: dict = {}
+    if any(v is not None for v in (options.squash, options.delete_source_branch, options.bypass_policy, options.transition_work_items, options.merge_commit_message, options.bypass_policy_reason)):
+        completion = {
+            key: value
+            for key, value in (
+                ("squashMerge", options.squash),
+                ("deleteSourceBranch", options.delete_source_branch),
+                ("bypassPolicy", options.bypass_policy),
+                ("transitionWorkItems", options.transition_work_items),
+                ("mergeCommitMessage", options.merge_commit_message),
+                ("bypassReason", options.bypass_policy_reason),
+            )
+            if value is not None
+        }
+        update["completionOptions"] = completion
+    if options.auto_complete:
+        update["autoCompleteSetBy"] = {"id": current_user_id(session, remote)}
+    return update
 
 
 def set_description(session: requests.Session, remote: AdoRemote, pr: dict, description: str) -> dict:

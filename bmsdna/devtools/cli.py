@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tomllib
 import uuid
+import webbrowser
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -34,7 +35,9 @@ from . import translate as translate_mod
 from . import pr_build, pr_info as pr_info_mod, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
 from .bdt_config import find_pyproject, load_bdt_table
-from .cli_tools import CLI_TIMEOUT_SECS, EXIT_WAIT_TIMEOUT, detect_agent_session, require_az, require_gh
+from .cli_tools import CLI_TIMEOUT_SECS, EXIT_WAIT_TIMEOUT, detect_agent_session, require_gh
+from .github_api import GitHubClient
+from .pr_create_args import PrCreateArgsError, extract_labels, parse_pr_create_args, resolve_body, unsupported_notes
 from .usage.cli import usage_app
 from .gitrepo import (
     AdoRemote,
@@ -167,7 +170,7 @@ def _current_pr_info(pr_id: int | None, target_branch: str | None, pat: str | No
     return pr_info_mod.ado_info(session, pr, remote)
 
 
-def _gh_branch_for(gh: str, pr_id: int | None, *, needed: bool) -> str:
+def _gh_branch_for(gh: GitHubClient, pr_id: int | None, *, needed: bool) -> str:
     """Branch to namespace uploaded screenshots/files under (see `gh_pr.push_assets`) --
     the checked-out branch normally, or (when acting on a PR by `--pr-id`, which may not
     have its branch checked out locally at all) that PR's actual head branch, via `gh`.
@@ -179,7 +182,7 @@ def _gh_branch_for(gh: str, pr_id: int | None, *, needed: bool) -> str:
         return current_branch()
     if not needed:
         return ""
-    return gh_pr.get_pr(gh, pr_id).get("headRefName") or str(pr_id)
+    return gh_pr.head_branch(gh, pr_id) or str(pr_id)
 
 
 _LOOKUP_TARGET_HELP = "Only consider a PR into this target branch (default: any target). Several open PRs for the branch: asks which one (non-interactive: fails listing them) unless this or --pr-id picks one"
@@ -232,16 +235,16 @@ def _reject_ado_only_options(**options: object) -> None:
             raise typer.BadParameter(f"{flag} is only supported for Azure DevOps work items, not GitHub issues.", param_hint=flag)
 
 
-def _link_and_label_github(gh: str, remote: GitHubRemote, issue_numbers: list[int]) -> None:
+def _link_and_label_github(gh: GitHubClient, remote: GitHubRemote, issue_numbers: list[int], pr_id: int | None = None) -> None:
     """Link every issue in `issue_numbers`, plus every issue `find_issue_refs_in_body` finds in
-    the PR's actual body, to the current branch's PR, and label each `pr-available`.
+    the PR's actual body, to PR `pr_id` (else the current branch's PR), and label each `pr-available`.
 
     Best-effort per issue -- one bad/inaccessible issue number shouldn't stop the others from
     being linked/labeled; failures are collected and surfaced together to the caller (which
     wraps this in `_after_create`, so they're reported as a warning, not a failed `pr create`).
     A no-op (no `gh` calls at all) when there's nothing to link.
     """
-    pr_number, body = gh_pr.get_pr_body(gh)
+    pr_number, body = gh_pr.get_pr_body(gh, pr_id)
     all_numbers = list(dict.fromkeys([*issue_numbers, *pr_issue_link.find_issue_refs_in_body(body, remote)]))
     if not all_numbers:
         return
@@ -290,8 +293,7 @@ def pr_create(
     label: list[str] = typer.Option(
         [],
         "--label",
-        help="Label to apply to the PR (repeatable). On GitHub the label must already exist on the repo "
-        "(`gh label create`); Azure DevOps PR labels are freeform and created on the fly. "
+        help="Label to apply to the PR (repeatable). Unknown labels are created automatically on both hosts. "
         r"[tool.bdt.pr.required_labels] in pyproject.toml can require at least one label from each "
         "named group before the PR is created. [tool.bdt.pr.scope_labels] can auto-add a label based "
         "on the HEAD commit's conventional-commit scope (e.g. `feat(customers): ...` -> a configured label).",
@@ -300,8 +302,7 @@ def pr_create(
     description: str | None = typer.Option(
         None,
         "--description",
-        help="PR description, kept in full (default: from the commits). On Azure DevOps it is set over the "
-        "REST API after the PR is created, since `az repos pr create --description` can cut long text.",
+        help="PR description, kept in full (default: from the commits)",
     ),
     screenshot: list[str] = typer.Option(
         [], "--screenshot", help="Path to an image to attach to the PR description (repeatable)"
@@ -321,9 +322,14 @@ def pr_create(
         None,
         "--pat",
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
-        help="Azure DevOps PAT (else falls back to `az` login)",
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
     ),
-    args: list[str] = typer.Argument(None, help="Extra args passed through to `az repos pr create` / `gh pr create`"),
+    args: list[str] = typer.Argument(None, help="Extra `gh pr create` / `az repos pr create` flags after `--` (both spellings work on both hosts): "
+        "--title/-t, --body/--description/-b (-d on Azure DevOps), --body-file/-F, --draft, --base/-B/--target-branch, "
+        "--head/-H/--source-branch/-s, --label[s]/-l, --reviewer[s] (-r on GitHub), --required-reviewers, --work-items, "
+        "--auto-complete/--auto-merge, --squash, --assignee/-a, --milestone/-m, --web/-w/--open, --dry-run, "
+        "--delete-source-branch, --merge-commit-message, --bypass-policy[-reason], --transition-work-items, "
+        "--organization, --project, --repository. A flag the host cannot honour is reported on stderr"),
 ) -> None:
     """Create a PR from the current branch into --target (Azure DevOps or GitHub, auto-detected)."""
     for path in screenshot:
@@ -341,11 +347,28 @@ def pr_create(
             print(f"Auto-applying label '{auto_label}' for scope '{scope}' ([tool.bdt.pr.scope_labels])")
             label = [*label, auto_label]
 
-    missing_groups = pr_labels.missing_label_groups(pr_labels.required_label_groups(), label)
+    missing_groups = pr_labels.missing_label_groups(pr_labels.required_label_groups(), [*label, *extract_labels(args or [])])
     if missing_groups:
         raise typer.BadParameter(pr_labels.format_missing_groups_error(missing_groups), param_hint="--label")
 
     remote = current_remote()
+
+    host = "github" if isinstance(remote, GitHubRemote) else "ado"
+    try:
+        options = parse_pr_create_args(args or [], host)
+        body_text = resolve_body(options)
+    except PrCreateArgsError as e:
+        raise typer.BadParameter(str(e), param_hint="ARGS") from e
+    # Resolved once (`--body-file -` can only be read from stdin once): later steps use `options.body` as is.
+    options.body, options.body_file = body_text, None
+    for note in unsupported_notes(options, host):
+        print(f"Note: {note}", file=sys.stderr)
+    title = title if title is not None else options.title
+    description = description if description is not None else body_text
+    draft = options.draft if options.draft is not None else draft
+    label = list(dict.fromkeys([*label, *options.labels]))
+    target = options.base or target
+    issue = [*issue, *options.work_items]
 
     issue_numbers: list[int] = []
     for ref in issue:
@@ -355,79 +378,61 @@ def pr_create(
             raise typer.BadParameter(str(e), param_hint="--issue") from e
     issue_numbers = list(dict.fromkeys(issue_numbers))
 
-    source_branch = current_branch()
+    source_branch = options.head or current_branch()
 
     pr_url: str | None = None
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
-        returncode, pr_url = gh_pr.create(gh, target, args or [], draft=draft, labels=label, title=title, description=description)
+        returncode, pr_url = gh_pr.create(gh, target, [], draft=draft, labels=label, title=title, description=description, options=options)
+        if options.dry_run:
+            # Nothing was created: no attachments, issue links or labels may touch whatever PR the branch already has.
+            raise typer.Exit(returncode)
         build_policy = gh_pr.has_build_policy(gh, target)
+        # The PR just created, by number: `--head` may name a branch other than the checked-out one.
+        created = gh_pr.number_from_url(pr_url)
         if returncode == 0 and (screenshot or file):
-            _after_create(lambda: gh_pr.add_attachments(gh, remote.owner, remote.repo, source_branch, screenshot, file), "attaching screenshots/files")
+            _after_create(lambda: gh_pr.add_attachments(gh, remote.owner, remote.repo, source_branch, screenshot, file, pr_id=created), "attaching screenshots/files")
         if returncode == 0:
-            _after_create(lambda: _link_and_label_github(gh, remote, issue_numbers), "linking issue(s) / setting 'pr-available' label")
+            _after_create(lambda: _link_and_label_github(gh, remote, issue_numbers, pr_id=created), "linking issue(s) / setting 'pr-available' label")
     else:
-        az = require_az()
-        # `--title`/`--description` (also when passed through to `az`) are applied over REST
-        # below rather than trusting `az` with long text.
-        az_args, pass_title, pass_description = pr_build.split_az_text_args(args or [])
-        title = title if title is not None else pass_title
-        description = description if description is not None else pass_description
-        if description is not None and len(description) > pr_build.ADO_PR_DESCRIPTION_MAX:
-            raise typer.BadParameter(
-                f"{len(description)} characters; Azure DevOps allows at most {pr_build.ADO_PR_DESCRIPTION_MAX}. "
-                "Shorten it, or attach the detail with --file.",
-                param_hint="--description",
-            )
-        cmd = [
-            az, "repos", "pr", "create",
-            "--organization", f"https://dev.azure.com/{remote.org}",
-            "--project", remote.project,
-            "--repository", remote.repo,
-            "--target-branch", target,
-            "--source-branch", source_branch,
-            "--auto-complete", "false",
-            "--output", "json",
-            *(["--draft", "true"] if draft else []),
-            *(["--labels", *label] if label else []),
-            *(["--title", title] if title is not None else []),
-            *az_args,
-        ]
-        r = subprocess.run(cmd, capture_output=True, encoding="utf-8")
-        returncode = r.returncode
-        if isinstance(r.stderr, str) and r.stderr.strip():
-            print(r.stderr.strip(), file=sys.stderr)
-
-        pr_json = None
-        if returncode == 0 and isinstance(r.stdout, str):
-            try:
-                pr_json = json.loads(r.stdout)
-            except json.JSONDecodeError:
-                pr_json = None
-
-        if pr_json is not None:
-            # Concise summary instead of the raw `az` JSON blob — the web
-            # link printed below is the part a human actually needs.
-            print(f"PR #{pr_json.get('pullRequestId', '?')}: {pr_json.get('title', '?')}")
-            try:
-                pr_url = pr_build.pr_web_url(remote, pr_json["pullRequestId"])
-            except (KeyError, TypeError):
-                pr_url = None
-        elif isinstance(r.stdout, str) and r.stdout.strip():
-            print(r.stdout.rstrip())
+        ado = replace(
+            remote,
+            **{k: v for k, v in (("org", options.organization), ("project", options.ado_project), ("repo", options.repository)) if v},
+        )
         session = requests.Session()
         session.headers.update(auth_header(pat))
-        build_policy = pr_build.has_build_policy(session, remote, target)
-        if returncode == 0 and (detect_agent_session() is not None or screenshot or file or description is not None):
+        if options.dry_run:
+            body = pr_build.build_create_body(
+                session, ado, source_branch, target, draft=draft, labels=label, title=title, description=description,
+                options=options, work_item_ids=issue_numbers,
+            )
+            typer.echo(json.dumps(body, indent=2))
+            raise typer.Exit(0)
+        returncode = 0
+        try:
+            pr_json = pr_build.create_pr(
+                session, ado, source_branch, target, draft=draft, labels=label, title=title, description=description,
+                options=options, work_item_ids=issue_numbers,
+            )
+        except SystemExit as e:
+            print(e, file=sys.stderr)
+            returncode = 1
+        else:
+            print(f"PR #{pr_json.get('pullRequestId', '?')}: {pr_json.get('title', '?')}")
+            try:
+                pr_url = pr_build.pr_web_url(ado, pr_json["pullRequestId"])
+            except (KeyError, TypeError):
+                pr_url = None
+        build_policy = pr_build.has_build_policy(session, ado, target)
+        created_id = pr_json.get("pullRequestId") if returncode == 0 else None
+        if returncode == 0 and (detect_agent_session() is not None or screenshot or file):
             def _finish() -> None:
-                pr = pr_build.get_pr(session, remote, source_branch, target)
-                if description is not None:
-                    pr = pr_build.set_description(session, remote, pr, description)
+                pr = pr_build.get_pr_by_id(session, ado, created_id) if created_id else pr_build.get_pr(session, ado, source_branch, target)
                 if screenshot or file:
-                    pr = pr_build.add_attachments(session, remote, pr, screenshot, file)
-                pr_build.ensure_session_note(session, remote, pr)
+                    pr = pr_build.add_attachments(session, ado, pr, screenshot, file)
+                pr_build.ensure_session_note(session, ado, pr)
 
-            _after_create(_finish, "setting the description, attaching screenshots/files and/or noting the agent session (retry with `bdt pr update`)")
+            _after_create(_finish, "attaching screenshots/files and/or noting the agent session (retry with `bdt pr update`)")
         if returncode == 0:
             # Fetches the PR fresh via `pr_build.get_pr` rather than trusting `pr_json` -- `az`
             # can exit 0 with stdout that isn't clean JSON (e.g. a deprecation banner ahead of
@@ -435,13 +440,15 @@ def pr_create(
             # would then silently skip it instead of at least warning, unlike every other
             # best-effort step here.
             def _link_issues() -> None:
-                pr = pr_build.get_pr(session, remote, source_branch, target)
-                _link_and_label_ado(session, remote, pr["pullRequestId"], pr.get("description") or "", issue_numbers)
+                pr = pr_build.get_pr_by_id(session, ado, created_id) if created_id else pr_build.get_pr(session, ado, source_branch, target)
+                _link_and_label_ado(session, ado, pr["pullRequestId"], pr.get("description") or "", issue_numbers)
 
             _after_create(_link_issues, "linking work item(s) / setting 'pr-available' tag")
 
     if returncode == 0 and pr_url:
         print(f"\n{pr_url}")
+        if options.web and not isinstance(remote, GitHubRemote):  # `gh_pr.create` opens GitHub's itself
+            webbrowser.open(pr_url)
 
     if returncode == 0 and draft:
         print("\nCreated as a draft PR. Run `bdt pr publish` to mark it ready for review.")
@@ -460,7 +467,7 @@ def pr_publish(
         None,
         "--pat",
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
-        help="Azure DevOps PAT (else falls back to `az` login)",
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
     ),
 ) -> None:
     """Mark the draft PR opened from the current branch (or --pr-id, if given) as ready for
@@ -487,7 +494,7 @@ def pr_status(
         "e.g. an agent's shell tool, then re-run the same command to keep waiting",
     ),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
-    pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
+    pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)"),
 ) -> None:
     """Show build/check status for the PR opened from the current branch, or for --pr-id
     directly (Azure DevOps or GitHub, auto-detected).
@@ -508,7 +515,7 @@ def pr_info(
     as_json: bool = typer.Option(False, "--json", help="Print machine-readable JSON (for status integrations that poll it)"),
     target_branch: str | None = typer.Option(None, "--target-branch", help=_LOOKUP_TARGET_HELP),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
-    pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
+    pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)"),
 ) -> None:
     """One-shot summary of the PR opened from the current branch, or --pr-id directly: link, state,
     aggregate build state, and the issue(s)/work item(s) it closes. Exits 1 if there is no such PR.
@@ -532,7 +539,7 @@ def pr_retry(
         None,
         "--pat",
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
-        help="Azure DevOps PAT (else falls back to `az` login)",
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
     ),
 ) -> None:
     """Retry only the failed job(s)/stage(s) of the most recent build/run for the PR opened
@@ -555,7 +562,7 @@ def pr_watch_deploy(
         None,
         "--pat",
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
-        help="Azure DevOps PAT (else falls back to `az` login)",
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
     ),
 ) -> None:
     """Watch the most recent build/workflow run triggered directly on --target-branch -- e.g. a
@@ -590,7 +597,7 @@ def pr_update(
         None,
         "--pat",
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
-        help="Azure DevOps PAT (else falls back to `az` login)",
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
     ),
 ) -> None:
     """Update the title/description of the PR opened from the current branch, or --pr-id
@@ -634,7 +641,7 @@ def pr_comment(
         None,
         "--pat",
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
-        help="Azure DevOps PAT (else falls back to `az` login)",
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
     ),
 ) -> None:
     """Post a comment on the PR opened from the current branch, or --pr-id directly
@@ -700,9 +707,9 @@ def issue_create(
         None,
         "--pat",
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
-        help="Azure DevOps PAT (else falls back to `az` login)",
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
     ),
-    args: list[str] = typer.Argument(None, help="Extra args passed through to `gh issue create` (GitHub only)"),
+    args: list[str] = typer.Argument(None, help="Extra args (GitHub only): --assignee, --milestone"),
 ) -> None:
     """Create a new issue / work item (Azure DevOps or GitHub, auto-detected)."""
     for path in screenshot:
@@ -783,7 +790,7 @@ def issue_search(
         None,
         "--pat",
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
-        help="Azure DevOps PAT (else falls back to `az` login)",
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
     ),
     for_me: bool = typer.Option(
         False,
@@ -997,7 +1004,7 @@ def issue_do(
         None,
         "--pat",
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
-        help="Azure DevOps PAT (else falls back to `az` login)",
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
     ),
 ) -> None:
     """Start a coding agent on an issue / work item, with the session named '<number>: <title>'.
@@ -1026,7 +1033,7 @@ def issue_take(
     number: int | None = typer.Argument(None, help="Issue number (GitHub) or work item ID (Azure DevOps). Default: the issue the current branch's PR closes"),
     target_branch: str | None = typer.Option(None, "--target-branch", help=_LOOKUP_TARGET_HELP + " (only used to find the issue when no number is given)"),
     force: bool = typer.Option(False, "--force", help="Comment even if someone else already holds the claim"),
-    pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
+    pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)"),
 ) -> None:
     """Claim an issue / work item: comment "Taken by <you>" on it, with this coding agent's
     session link (detected automatically) so others can see who is working on it and find the session.
@@ -1093,11 +1100,14 @@ def _comment_on_issue(remote: AdoRemote | GitHubRemote, number: int, message: st
 
 
 def _current_user(remote: AdoRemote | GitHubRemote) -> str:
-    """Who to say took an issue: the GitHub login `gh` is authenticated as, else the git `user.name`."""
+    """Who to say took an issue: the GitHub login the token belongs to, else the git `user.name`."""
     if isinstance(remote, GitHubRemote):
-        r = _capture([require_gh(), "api", "user", "--jq", ".login"])
-        if r and r.returncode == 0 and r.stdout.strip():
-            return r.stdout.strip()
+        try:
+            login = require_gh().get("user").get("login")
+        except (SystemExit, ValueError, AttributeError):
+            login = None
+        if login:
+            return login
     r = _capture(["git", "config", "user.name"])
     # `git config user.name` comes from the (possibly cloned-from-elsewhere) repo's own config and ends up in a
     # markdown/HTML comment, so keep it to plain name characters: no links, tags or @mentions
@@ -1106,7 +1116,7 @@ def _current_user(remote: AdoRemote | GitHubRemote) -> str:
 
 
 def _capture(cmd: list[str]) -> subprocess.CompletedProcess | None:
-    """Run `cmd` for its UTF-8 output, bounded so a stalled `gh` (expired login prompting) can't hang the
+    """Run `cmd` for its UTF-8 output, bounded so a stalled call can't hang the
     caller; None on timeout."""
     try:
         return subprocess.run(cmd, capture_output=True, encoding="utf-8", timeout=CLI_TIMEOUT_SECS, check=False)
@@ -1137,7 +1147,7 @@ def issue_watch(
         "it posts), or, outside an agent, those authored by the current user",
     ),
     as_json: bool = typer.Option(False, "--json", help="Print each new comment as one JSON line (id, author, created_at, url, body)"),
-    pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else falls back to `az` login)"),
+    pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)"),
 ) -> None:
     """Wait for new comments on an issue / work item -- so an agent can ask a question in the issue and
     block until someone answers. Prints the new comment(s) and exits 0; exits 4 if none arrived within
@@ -1187,7 +1197,7 @@ def issue_show(
         None,
         "--pat",
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
-        help="Azure DevOps PAT (else falls back to `az` login)",
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
     ),
 ) -> None:
     """Show an issue / work item (Azure DevOps or GitHub, auto-detected): state, title, description, tags,
@@ -1260,7 +1270,7 @@ def issue_update(
         None,
         "--pat",
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
-        help="Azure DevOps PAT (else falls back to `az` login)",
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
     ),
 ) -> None:
     """Update an issue / work item's fields (Azure DevOps or GitHub, auto-detected)."""
@@ -1287,7 +1297,7 @@ def issue_delete(
         None,
         "--pat",
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
-        help="Azure DevOps PAT (else falls back to `az` login)",
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
     ),
 ) -> None:
     """Delete an issue / work item (Azure DevOps or GitHub, auto-detected).
@@ -1321,7 +1331,7 @@ def issue_comment_add(
         None,
         "--pat",
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
-        help="Azure DevOps PAT (else falls back to `az` login)",
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
     ),
 ) -> None:
     """Post a comment on an issue / work item (Azure DevOps or GitHub, auto-detected)."""
@@ -1352,7 +1362,7 @@ def issue_comment_update(
         None,
         "--pat",
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
-        help="Azure DevOps PAT (else falls back to `az` login)",
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
     ),
 ) -> None:
     """Edit an existing comment on an issue / work item (Azure DevOps or GitHub, auto-detected)."""
@@ -1374,7 +1384,7 @@ def issue_comment_delete(
         None,
         "--pat",
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
-        help="Azure DevOps PAT (else falls back to `az` login)",
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
     ),
 ) -> None:
     """Delete a comment on an issue / work item (Azure DevOps or GitHub, auto-detected)."""
@@ -1637,7 +1647,7 @@ def find_repo_cmd(
         None,
         "--pat",
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
-        help="Azure DevOps PAT for cloning over HTTPS (else falls back to `az` login)",
+        help="Azure DevOps PAT for cloning over HTTPS (else uses DefaultAzureCredential, e.g. your `az login`)",
     ),
 ) -> None:
     """Find a repo by name: locally first, then in an Azure DevOps org and/or a GitHub org if there's
@@ -1760,7 +1770,7 @@ def commit(
         None,
         "--pat",
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
-        help="Azure DevOps PAT (else falls back to `az` login)",
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
     ),
 ) -> None:
     """Stage, commit, and push files, with pre-flight checks and a pre-commit-hook retry."""

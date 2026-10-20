@@ -1,6 +1,6 @@
 """`bdt issue do <number>`: hand an issue / work item to a coding agent.
 
-Fetches the issue's title and description (GitHub via `gh`, Azure DevOps via the REST API)
+Fetches the issue's title and description (GitHub via the REST API, Azure DevOps via the REST API)
 and starts the agent headless (`claude -p`), naming the session `<number>: <title>` so it is
 easy to find again with `claude --resume`.
 """
@@ -16,17 +16,15 @@ import sys
 import requests
 
 from .ado_issue import _base_url
+from .github_api import GitHubClient
 from .gitrepo import AdoRemote
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 TAKEN_PREFIX = "Taken by"
 
 
-def fetch_github(gh: str, number: int) -> tuple[str, str]:
-    result = subprocess.run([gh, "issue", "view", str(number), "--json", "title,body"], capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        sys.exit(f"gh issue view {number} failed:\n{result.stderr.strip()}")
-    data = json.loads(result.stdout)
+def fetch_github(gh: GitHubClient, number: int) -> tuple[str, str]:
+    data = gh.get(f"{gh.repo_path}/issues/{number}")
     return data["title"], data.get("body") or ""
 
 

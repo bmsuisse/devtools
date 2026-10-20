@@ -10,6 +10,8 @@ from unittest.mock import MagicMock
 import pytest
 from typer.testing import CliRunner
 
+from fake_github import FakeGitHub
+
 from bmsdna.devtools import ado_issue, gh_issue, issue_watch as issue_watch_mod
 from bmsdna.devtools.agent_mentions import last_comment_filter
 from bmsdna.devtools.cli import app
@@ -27,26 +29,32 @@ def _gh_issues(n: int) -> list[dict]:
     return [{"number": i, "title": f"issue {i}", "url": f"https://github.com/o/r/issues/{i}", "state": "OPEN"} for i in range(1, n + 1)]
 
 
-def _fake_gh(monkeypatch, issues: list[dict], last_comments: dict[int, str | None], graphql_calls: list[list[str]] | None = None, list_cmds: list[list[str]] | None = None):
-    def fake_run(cmd, **kwargs):
-        if cmd[1:3] == ["api", "graphql"]:
-            number = int(cmd[cmd.index("-F") + 1].removeprefix("number="))
-            if graphql_calls is not None:
-                graphql_calls.append(cmd)
-            body = last_comments.get(number)
-            nodes = [{"body": body}] if body is not None else []
-            return MagicMock(returncode=0, stdout=json.dumps({"data": {"repository": {"issue": {"comments": {"nodes": nodes}}}}}), stderr="")
-        if list_cmds is not None:
-            list_cmds.append(cmd)
-        return MagicMock(returncode=0, stdout=json.dumps(issues), stderr="")
+def _fake_gh(monkeypatch, issues: list[dict], last_comments: dict[int, str | None], graphql_calls: list[dict] | None = None, list_cmds: list[dict] | None = None) -> FakeGitHub:
+    def graphql(query: str, variables: dict) -> dict:
+        if graphql_calls is not None:
+            graphql_calls.append(variables)
+        body = last_comments.get(variables["number"])
+        nodes = [{"body": body}] if body is not None else []
+        return {"repository": {"issue": {"comments": {"nodes": nodes}}}}
 
-    monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
+    def search(payload):
+        if list_cmds is not None:
+            list_cmds.append(payload)
+        return [_hit(i) for i in issues]
+
+    return FakeGitHub({"GET search/issues": search}, graphql=graphql)
+
+
+def _hit(issue: dict) -> dict:
+    """A `/search/issues` item for a `gh_issue.search`-shaped result dict."""
+    repo = issue.get("repository", {}).get("nameWithOwner", "o/r")
+    return {"number": issue["number"], "title": issue["title"], "html_url": issue["url"], "state": issue["state"], "repository_url": f"https://api.github.com/repos/{repo}"}
 
 
 def test_gh_search_keeps_only_issues_whose_last_comment_matches(monkeypatch, capsys) -> None:
-    _fake_gh(monkeypatch, _gh_issues(4), {1: "@Claude please", 2: "thanks", 3: None, 4: "cc @Agent"})
+    gh = _fake_gh(monkeypatch, _gh_issues(4), {1: "@Claude please", 2: "thanks", 3: None, 4: "cc @Agent"})
 
-    items = gh_issue.search("gh", "o", "r", [], None, 10, comment_filter=last_comment_filter("claude"))
+    items = gh_issue.search(gh, "o", "r", [], None, 10, comment_filter=last_comment_filter("claude"))
 
     assert [i["number"] for i in items] == [1, 4]
     out = capsys.readouterr().out
@@ -55,22 +63,22 @@ def test_gh_search_keeps_only_issues_whose_last_comment_matches(monkeypatch, cap
 
 
 def test_gh_search_overfetches_and_stops_checking_once_limit_matched(monkeypatch) -> None:
-    list_cmds: list[list[str]] = []
-    graphql_calls: list[list[str]] = []
-    _fake_gh(monkeypatch, _gh_issues(20), {i: "@claude" for i in range(1, 21)}, graphql_calls, list_cmds)
+    list_cmds: list[dict] = []
+    graphql_calls: list[dict] = []
+    gh = _fake_gh(monkeypatch, _gh_issues(20), {i: "@claude" for i in range(1, 21)}, graphql_calls, list_cmds)
 
-    items = gh_issue.search("gh", "o", "r", [], None, 2, comment_filter=last_comment_filter("claude"))
+    items = gh_issue.search(gh, "o", "r", [], None, 2, comment_filter=last_comment_filter("claude"))
 
     assert [i["number"] for i in items] == [1, 2]
-    assert list_cmds[0][list_cmds[0].index("--limit") + 1] == "20"  # limit * overfetch
+    assert list_cmds[0]["limit"] == 20  # limit * overfetch
     assert len(graphql_calls) == 2
 
 
 def test_gh_search_without_filter_makes_no_comment_calls(monkeypatch) -> None:
-    graphql_calls: list[list[str]] = []
-    _fake_gh(monkeypatch, _gh_issues(3), {}, graphql_calls)
+    graphql_calls: list[dict] = []
+    gh = _fake_gh(monkeypatch, _gh_issues(3), {}, graphql_calls)
 
-    items = gh_issue.search("gh", "o", "r", [], None, 10)
+    items = gh_issue.search(gh, "o", "r", [], None, 10)
 
     assert len(items) == 3
     assert graphql_calls == []
@@ -81,40 +89,33 @@ def test_gh_search_org_wide_looks_up_comments_in_each_items_own_repo(monkeypatch
         {"number": 5, "title": "x", "url": "u", "state": "open", "repository": {"nameWithOwner": "o/other"}},
         {"number": 6, "title": "y", "url": "u", "state": "open", "repository": {"nameWithOwner": "o/third"}},
     ]
-    graphql_calls: list[list[str]] = []
-    _fake_gh(monkeypatch, items, {5: "@claude", 6: "nope"}, graphql_calls)
+    graphql_calls: list[dict] = []
+    gh = _fake_gh(monkeypatch, items, {5: "@claude", 6: "nope"}, graphql_calls)
 
-    result = gh_issue.search("gh", "o", "", [], None, 10, org_wide=True, comment_filter=last_comment_filter("claude"))
+    result = gh_issue.search(gh, "o", "", [], None, 10, org_wide=True, comment_filter=last_comment_filter("claude"))
 
     assert [i["number"] for i in result] == [5]
-    assert any("repo=other" in arg for arg in graphql_calls[0])
-    assert any("repo=third" in arg for arg in graphql_calls[1])
+    assert graphql_calls[0]["repo"] == "other" and graphql_calls[1]["repo"] == "third"
 
 
 # -- gh_issue.list_comments ---------------------------------------------------------
 
 
-def test_gh_list_comments_parses_paginated_stream(monkeypatch) -> None:
-    captured: list[str] = []
-    pretty = json.dumps({"id": 2, "author": "bob", "created_at": "t2", "url": "u2", "body": "second"}, indent=2)
-    compact = json.dumps({"id": 1, "author": "alice", "created_at": "t1", "url": "u1", "body": "first"})
+def test_gh_list_comments_projects_and_orders_the_pages() -> None:
+    raw = [
+        {"id": 1, "user": {"login": "alice"}, "created_at": "t1", "html_url": "u1", "body": "first"},
+        {"id": 2, "user": {"login": "bob"}, "created_at": "t2", "html_url": "u2", "body": "second"},
+    ]
+    gh = FakeGitHub({"GET repos/o/r/issues/84/comments": raw})
 
-    def fake_run(cmd, **kwargs):
-        captured[:] = cmd
-        return MagicMock(returncode=0, stdout=f"{compact}\n{pretty}\n", stderr="")
-
-    monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", fake_run)
-
-    comments = gh_issue.list_comments("gh", "o", "r", 84)
+    comments = gh_issue.list_comments(gh, "o", "r", 84)
 
     assert [c["id"] for c in comments] == [1, 2]
-    assert "--paginate" in captured
-    assert "repos/o/r/issues/84/comments?per_page=100" in captured
+    assert comments[1] == {"id": 2, "author": "bob", "created_at": "t2", "url": "u2", "body": "second"}
 
 
-def test_gh_list_comments_empty(monkeypatch) -> None:
-    monkeypatch.setattr("bmsdna.devtools.gh_issue.subprocess.run", lambda cmd, **kw: MagicMock(returncode=0, stdout="", stderr=""))
-    assert gh_issue.list_comments("gh", "o", "r", 84) == []
+def test_gh_list_comments_empty() -> None:
+    assert gh_issue.list_comments(FakeGitHub(), "o", "r", 84) == []
 
 
 # -- ado_issue ----------------------------------------------------------------------
@@ -189,13 +190,13 @@ def test_ado_search_org_wide_checks_comments_in_the_items_own_project() -> None:
 
 
 def test_gh_search_scan_limit_widens_the_scanned_pool_but_not_the_result(monkeypatch) -> None:
-    list_cmds: list[list[str]] = []
-    _fake_gh(monkeypatch, _gh_issues(30), {i: "@Claude hi" for i in range(1, 31)}, list_cmds=list_cmds)
+    list_cmds: list[dict] = []
+    gh = _fake_gh(monkeypatch, _gh_issues(30), {i: "@Claude hi" for i in range(1, 31)}, list_cmds=list_cmds)
 
-    items = gh_issue.search("gh", "o", "r", [], None, 1, comment_filter=lambda c: True, scan_limit=5)
+    items = gh_issue.search(gh, "o", "r", [], None, 1, comment_filter=lambda c: True, scan_limit=5)
 
     assert [i["number"] for i in items] == [1]
-    assert list_cmds[0][list_cmds[0].index("--limit") + 1] == "50"
+    assert list_cmds[0]["limit"] == 50
 
 
 # -- CLI: issue search --for-me -----------------------------------------------------
@@ -447,13 +448,12 @@ def test_issue_search_take_org_wide_on_azure_devops_claims_in_the_items_project(
     assert "OtherProj" in result.output and "bdt find-repo" in result.output
 
 
-def test_gh_comment_names_its_repo_explicitly(monkeypatch) -> None:
-    cmds: list[list[str]] = []
-    monkeypatch.setattr(gh_issue, "_run_gh", lambda gh, args, **kw: cmds.append([gh, *args]) or "https://github.com/o/r/issues/7#issuecomment-1")
+def test_gh_comment_names_its_repo_explicitly() -> None:
+    gh = FakeGitHub({"POST repos/o/r/issues/7/comments": {"id": 1, "html_url": "https://github.com/o/r/issues/7#issuecomment-1"}})
 
-    gh_issue.comment("gh", "o", "r", 7, "Taken by me", [], agent_note=False)
+    gh_issue.comment(gh, "o", "r", 7, "Taken by me", [], agent_note=False)
 
-    assert cmds == [["gh", "issue", "comment", "7", "--repo", "o/r", "--body", "Taken by me"]]
+    assert gh.calls == [("POST", "repos/o/r/issues/7/comments", {"body": "Taken by me"})]
 
 
 # -- CLI: issue search --for-me --wait ------------------------------------------------

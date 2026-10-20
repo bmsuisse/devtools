@@ -120,7 +120,7 @@ def test_pr_comment_with_pr_id_and_a_screenshot_resolves_the_real_head_branch(mo
     """
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.get_pr", lambda gh, pr_id=None: {"headRefName": "feature-y"})
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.head_branch", lambda gh, pr_id: "feature-y")
     captured = {}
     monkeypatch.setattr(
         "bmsdna.devtools.cli.gh_pr.comment_with_screenshots",

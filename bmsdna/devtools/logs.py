@@ -1,4 +1,4 @@
-"""Fetch recent Application Insights / Log Analytics logs via `az monitor app-insights query`.
+"""Fetch recent Application Insights / Log Analytics logs via the Application Insights REST query API.
 
 Unlike the other commands, this one takes no repo-specific defaults: pass
 --resource-group/--app-insights explicitly (or set AZURE_RESOURCE_GROUP /
@@ -8,12 +8,11 @@ derivable from the git remote the way Azure DevOps org/project/repo is.
 
 from __future__ import annotations
 
-import json
-import subprocess
 import sys
 from datetime import datetime, timezone
+from urllib.parse import quote
 
-from .cli_tools import require_az
+from . import azure_arm
 
 SEVERITY_MAP = {"verbose": 0, "information": 1, "warning": 2, "error": 3, "critical": 4}
 
@@ -27,24 +26,39 @@ COLORS = {
 }
 
 
-def run_az(*args: str) -> tuple[int, str]:
-    az = require_az()
-    # Never shell=True here: KQL queries contain `|`, which a Windows cmd.exe
-    # shell would reinterpret as a pipe instead of passing through literally.
-    result = subprocess.run([az, *args], capture_output=True, encoding="utf-8")
-    return result.returncode, result.stdout + result.stderr
+APP_INSIGHTS_API_VERSION = "2020-02-02"
+APP_INSIGHTS_QUERY_URL = "https://api.applicationinsights.io/v1/apps"
+APP_INSIGHTS_SCOPE = "https://api.applicationinsights.io/.default"
+
+
+def _components_path(resource_group: str) -> str:
+    sub = azure_arm.default_subscription_id()
+    return f"/subscriptions/{sub}/resourceGroups/{quote(resource_group)}/providers/Microsoft.Insights/components"
 
 
 def find_app_insights(resource_group: str) -> str | None:
-    code, out = run_az(
-        "resource", "list",
-        "--resource-group", resource_group,
-        "--resource-type", "Microsoft.Insights/components",
-        "--query", "[0].name",
-        "--output", "tsv",
-    )
-    name = out.strip()
-    return name if code == 0 and name else None
+    """Name of the first Application Insights component in `resource_group`, if any."""
+    path = _components_path(resource_group)  # subscription errors propagate: they aren't "no App Insights"
+    try:
+        items = azure_arm.arm("GET", path, APP_INSIGHTS_API_VERSION).get("value", [])
+    except azure_arm.AzureApiError as e:
+        if "HTTP 404" in str(e):
+            return None
+        raise
+    return items[0]["name"] if items else None
+
+
+def run_query(app_insights: str, resource_group: str, kql: str) -> tuple[dict | None, str | None]:
+    """Run `kql` against the named App Insights component: (first result table, None) or (None, error)."""
+    try:
+        component = azure_arm.arm("GET", f"{_components_path(resource_group)}/{quote(app_insights)}", APP_INSIGHTS_API_VERSION)
+        app_id = component["properties"]["AppId"]
+        r = azure_arm.request(
+            "POST", f"{APP_INSIGHTS_QUERY_URL}/{app_id}/query", scope=APP_INSIGHTS_SCOPE, json={"query": kql}
+        )
+        return r.json()["tables"][0], None
+    except azure_arm.AzureApiError as e:
+        return None, str(e)
 
 
 def query_roles(app_insights: str, resource_group: str, minutes: int) -> tuple[dict[str, int] | None, str | None]:
@@ -54,19 +68,9 @@ union traces, exceptions
 | summarize count() by cloud_RoleName
 | order by count_ desc
 """.strip()
-    code, out = run_az(
-        "monitor", "app-insights", "query",
-        "--app", app_insights,
-        "--resource-group", resource_group,
-        "--analytics-query", kql,
-        "--output", "json",
-    )
-    if code != 0:
-        return None, out
-    try:
-        table = json.loads(out)["tables"][0]
-    except json.JSONDecodeError:
-        table = json.loads(out.split("\n")[0])["tables"][0]
+    table, err = run_query(app_insights, resource_group, kql)
+    if table is None:
+        return None, err
     col_names = [c["name"] for c in table["columns"]]
     role_col = next((i for i, n in enumerate(col_names) if n == "cloud_RoleName"), None)
     count_col = next((i for i, n in enumerate(col_names) if n == "count_"), None)
@@ -91,19 +95,9 @@ union traces, exceptions
 | order by timestamp asc
 | take 500
 """.strip()
-    code, out = run_az(
-        "monitor", "app-insights", "query",
-        "--app", app_insights,
-        "--resource-group", resource_group,
-        "--analytics-query", kql,
-        "--output", "json",
-    )
-    if code != 0:
-        return None, out
-    try:
-        table = json.loads(out)["tables"][0]
-    except json.JSONDecodeError:
-        table = json.JSONDecoder().raw_decode(out)[0]["tables"][0]
+    table, err = run_query(app_insights, resource_group, kql)
+    if table is None:
+        return None, err
     col_index = {col["name"]: i for i, col in enumerate(table["columns"])}
 
     def col(row: list, *names: str) -> str:

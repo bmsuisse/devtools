@@ -24,13 +24,11 @@ copy-pasted across OneSales, ccmt2, and MDMApp. Install with
 (per-project).
 
 `bdt pr *` auto-detects Azure DevOps vs. GitHub from the `origin` remote and
-shells out to `az`/`gh` accordingly — you don't need to pick a backend
+calls the matching REST API (no `az`/`gh` CLI needed) — you don't need to pick a backend
 yourself, and there's no need to fall back to raw `gh pr create`/`gh pr
-checks` for a GitHub-hosted repo, `bdt pr *` covers that too. Each external
-CLI (`az`, `gh`) is only required for the commands that actually need it,
-and is checked lazily with a clear "not found, install it here" error
-rather than a raw traceback — if you see that error, tell the user which
-CLI to install rather than trying to work around it.
+checks` for a GitHub-hosted repo, `bdt pr *` covers that too. Only `git` must
+be on PATH; if a command reports missing credentials, tell the user which
+env var / login is needed rather than trying to work around it.
 
 ## Checking PR build/check status
 
@@ -60,9 +58,10 @@ and **fail listing the candidates when non-interactive** (you, as an agent):
 re-run with `--pr-id N` or `--target BRANCH`; never guess. One open PR is used
 without asking. Only `pr create` and `pr watch-deploy` default their target to `dev`.
 
-Auth: Azure DevOps works with no setup if the caller is already `az
-login`'d (only pass `--pat`/`AZURE_DEVOPS_EXT_PAT`/`AZURE_DEVOPS_PAT` if there's no `az` session
-available); GitHub uses whatever `gh auth login` session is active.
+Auth: Azure DevOps works with no setup if azure-identity's `DefaultAzureCredential` can find a
+credential (env vars, managed identity, a cached `az login`, ...); otherwise pass
+`--pat`/`AZURE_DEVOPS_EXT_PAT`/`AZURE_DEVOPS_PAT`. GitHub needs `GH_TOKEN`/`GITHUB_TOKEN` (falls back
+to `gh auth token` if `gh` is installed); scopes `repo`, plus `project` for boards and `workflow` for reruns.
 
 ## Creating a PR
 
@@ -70,12 +69,14 @@ available); GitHub uses whatever `gh auth login` session is active.
 bdt pr create --target dev    # or --target main / test
 ```
 
-Uses the current branch as source. On Azure DevOps this wraps `az repos pr
-create`; on GitHub, `gh pr create --fill` (autofills title/body from commit
-info, so it never blocks waiting on an interactive prompt). Give a custom title/body with
-`bdt pr create --target dev --title "..." --description "$(cat pr.md)"` -- kept in full (on Azure
-DevOps set over REST after creation, since `az --description` can cut long text; ADO's own limit is
-4000 characters, which bdt rejects up front). Other extra args pass straight through, after `--`.
+Uses the current branch as source. Both hosts use a REST POST (ADO `pullrequests`, GitHub `pulls`); title/body default to the
+branch's commit info, so it never blocks waiting on an interactive prompt. Give a custom title/body with
+`bdt pr create --target dev --title "..." --description "$(cat pr.md)"` -- kept in full (ADO's own limit is
+4000 characters, which bdt rejects up front). Passthrough args after `--` accept the union of `gh pr create` / `az repos pr create` flags on both hosts
+(`--reviewers`, `--required-reviewers`, `--work-items`, `--labels`, `--auto-complete`/`--auto-merge`, `--squash`,
+`--delete-source-branch`, `--base`/`--target-branch`, `--head`/`--source-branch`, `--body-file`, `--assignee`,
+`--milestone`, `--web`/`--open`, `--dry-run`, ...; see the README table). A flag the host can't honour prints a
+`Note: ... is ignored on <host>` line on stderr instead of being dropped silently.
 
 After creating a PR, use `bdt pr status` (see above) to check whether the
 CI build passes.

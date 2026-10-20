@@ -1,6 +1,7 @@
 """Download an Azure App Service log archive and filter it for errors/warnings.
 
-Pulls the log zip via `az webapp log download`, unpacks it in memory, and
+Pulls the log zip from the app's Kudu `/api/dump` endpoint (authenticated with its
+publishing credentials, fetched via ARM), unpacks it in memory, and
 writes every line matching common error/warning markers to a filtered file.
 The webapp/resource-group/slot for a given `--env` come from the consuming
 repo's pyproject.toml (see env_config.py) rather than being baked in here.
@@ -10,33 +11,54 @@ from __future__ import annotations
 
 import pathlib
 import re
-import subprocess
 import sys
 import zipfile
+from urllib.parse import quote, urlparse
 
-from .cli_tools import require_az
+import requests
+
+from . import azure_arm
 
 # Matches common error/warning markers across granian, uvicorn, and python tracebacks.
 ERROR_RE = re.compile(r"\b(ERROR|CRITICAL|WARNING|Traceback|Exception|\b[45]\d\d\b|FAILED|FATAL)\b")
 
 
-def run_az(args: list[str]) -> str:
-    az = require_az()
-    proc = subprocess.run([az, *args], capture_output=True, encoding="utf-8")
-    if proc.returncode != 0:
-        sys.exit(proc.stderr.strip() or proc.stdout.strip())
-    return proc.stdout
+WEBAPP_API_VERSION = "2022-03-01"
+DOWNLOAD_TIMEOUT_SECS = 300.0
 
 
 def download_logs(webapp: str, resource_group: str, slot: str | None, archive: pathlib.Path) -> None:
     print(f"Downloading logs for {webapp}/{slot or '(production)'}...", flush=True)
-    run_az([
-        "webapp", "log", "download",
-        "--name", webapp,
-        "--resource-group", resource_group,
-        *(["--slot", slot] if slot else []),
-        "--log-file", str(archive),
-    ])
+    try:
+        sub = azure_arm.default_subscription_id()
+        site = (
+            f"/subscriptions/{sub}/resourceGroups/{quote(resource_group)}"
+            f"/providers/Microsoft.Web/sites/{quote(webapp)}"
+        )
+        if slot:
+            site += f"/slots/{quote(slot)}"
+        creds = azure_arm.arm("POST", f"{site}/config/publishingcredentials/list", WEBAPP_API_VERSION)["properties"]
+        scm_host = urlparse(creds["scmUri"]).hostname
+        with requests.get(
+            f"https://{scm_host}/api/dump",
+            auth=(creds["publishingUserName"], creds["publishingPassword"]),
+            stream=True,
+            timeout=DOWNLOAD_TIMEOUT_SECS,
+        ) as r:
+            if r.status_code >= 400:
+                sys.exit(f"Log download failed (HTTP {r.status_code}): {r.text.strip() or r.reason}")
+            partial = archive.with_name(archive.name + ".part")
+            try:
+                with partial.open("wb") as out:
+                    for chunk in r.iter_content(chunk_size=1 << 16):
+                        out.write(chunk)
+                partial.replace(archive)
+            finally:
+                partial.unlink(missing_ok=True)
+    except azure_arm.AzureApiError as e:
+        sys.exit(str(e))
+    except requests.RequestException as e:
+        sys.exit(f"Log download failed: {e}")
 
 
 def extract_errors(archive: pathlib.Path, error_file: pathlib.Path) -> int:

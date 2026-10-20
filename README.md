@@ -8,16 +8,24 @@ postgres/psycopg (and arrowbricks) SQL rules, pydantic-model placement, hand-wir
 TypeScript and baseline tooling, plus `bdt dead-code` for `.sql` files nothing loads and
 backend routes nothing calls.
 `bdt pr *` and `bdt issue *` auto-detect whether the current repo's `origin`
-remote is Azure DevOps or GitHub and use `az`/`gh` accordingly.
+remote is Azure DevOps or GitHub and call the matching REST API.
 Consolidates near-duplicate scripts that used to be copy-pasted across
 OneSales, ccmt2, and MDMApp into one versioned package with a `bdt` CLI.
 
-Requires `git` always, plus `az` (Azure DevOps commands, and all `bdt logs`
-commands) and/or `gh` (GitHub commands) on PATH as needed — each is checked
-lazily, only when a command actually needs it, with a clear error and an
-install link if missing rather than a raw traceback. Works on Windows: CLI
-shims (e.g. `az.cmd`) are resolved via `shutil.which` (which honors
-`PATHEXT`) rather than shelling out, output is decoded as UTF-8 rather than
+Requires only `git` on PATH (plus `psql` for `bdt testdb`); the `az` and `gh` CLIs are
+**not** needed — everything talks to GitHub (REST + GraphQL), Azure DevOps and Azure
+(ARM / Application Insights) over raw HTTP (`requests`).
+
+Auth:
+- **GitHub**: the `GH_TOKEN` / `GITHUB_TOKEN` environment variable, else (if `gh` happens to be
+  installed) the output of `gh auth token`. The token needs the `repo` scope, plus `project` for
+  boards and `workflow` for reruns.
+- **Azure DevOps**: `--pat` / `AZURE_DEVOPS_EXT_PAT` / `AZURE_DEVOPS_PAT`, else azure-identity's
+  `DefaultAzureCredential` (environment variables, managed identity, a cached `az login`, ...).
+- **Azure (`bdt logs *`)**: the same `DefaultAzureCredential`, against ARM / Application Insights;
+  `AZURE_SUBSCRIPTION_ID` selects the subscription, else the only enabled one is used.
+
+Works on Windows: output is decoded as UTF-8 rather than
 relying on the console's default codepage, and file arguments accept either
 slash style.
 
@@ -76,17 +84,16 @@ polling forever (a failed policy lookup is ignored and the wait continues).
 **Azure DevOps**: org/project/repo are auto-detected from
 `git remote get-url origin` (handles SSH, `dev.azure.com` HTTPS, and
 `*.visualstudio.com` HTTPS forms). Auth is an explicit PAT (`--pat` or
-`AZURE_DEVOPS_EXT_PAT`/`AZURE_DEVOPS_PAT` env var), falling back to a short-lived token from the
-caller's own `az login` — never embed a PAT literal in a script or CI file.
+`AZURE_DEVOPS_EXT_PAT`/`AZURE_DEVOPS_PAT` env var), falling back to a short-lived token from
+azure-identity's `DefaultAzureCredential` (e.g. the caller's own `az login`) — never embed a PAT literal in a script or CI file.
 `--target-branch` optionally restricts the lookup to PRs into that branch (default: any).
 
-**GitHub**: uses `gh`'s own auth (`gh auth login`) and resolves the open
-PR opened from the current branch (`gh pr list --head`, narrowed by
-`--target-branch` to that base branch if given; with none open, `gh pr view`
-finds a merged/closed one); the PR's actual base branch
-is shown in the output. Check status is computed from
-`gh pr view --json statusCheckRollup` rather than `gh pr checks --json`,
-since the latter flag isn't available in all `gh` releases.
+**GitHub**: uses the `GH_TOKEN`/`GITHUB_TOKEN` auth above and resolves the open
+PR opened from the current branch (REST pulls filtered by head, narrowed by
+`--target-branch` to that base branch if given; with none open, a merged/closed one
+is looked up); the PR's actual base branch
+is shown in the output. Check status is computed from the PR's
+`statusCheckRollup`, fetched via GraphQL.
 
 Pass `--pr-id <number>` to check a specific PR directly instead of resolving
 it from the current branch — useful when that PR's branch isn't checked out
@@ -135,7 +142,7 @@ anything depending on them) in place — distinct from queuing a brand new
 build. One retry call per pipeline that has a failed build for the PR.
 `--target-branch` selects which PR to look at, same as `bdt pr status`.
 
-**GitHub**: uses `gh run rerun <run-id> --failed`, which reruns only the
+**GitHub**: POSTs `actions/runs/<run-id>/rerun-failed-jobs`, which reruns only the
 failed job(s) (and their dependents) of a workflow run — the run ID(s) are
 found automatically from the PR's failing checks. Checks that aren't backed
 by a GitHub Actions run (e.g. a legacy commit status from an external CI)
@@ -166,10 +173,10 @@ skipped rather than blocking or crashing `pr status`.
 `pr status` uses, just queried by `branchName=refs/heads/<target-branch>`
 instead of the PR's merge/source ref.
 
-**GitHub**: uses `gh run list --branch <target-branch> --event push`, which
+**GitHub**: lists workflow runs via REST filtered by `branch=<target-branch>&event=push`, which
 selects workflow runs triggered by a push to that branch — as opposed to a
 `pull_request`-triggered run for some still-open PR targeting the same
-branch. Failed steps are printed via `gh run view <id> --log-failed`.
+branch. Failed steps are printed as the tail of each failed job's log.
 
 ## `bdt pr create`
 
@@ -178,17 +185,34 @@ bdt pr create --target dev   # or --target main / test
 ```
 
 Creates a PR from the current branch into `--target`. On Azure DevOps,
-a thin wrapper around `az repos pr create` (org/project/repo inferred by
-`az` itself from the git remote). On GitHub, `gh pr create --fill` (autofills
-title/body from commit info so it never blocks on an interactive prompt).
-Extra arguments pass through either way, e.g.
-`bdt pr create --target dev -- --reviewers "..."`.
+a REST POST to `pullrequests` (org/project/repo inferred from the git remote). On GitHub,
+a REST POST to `pulls`; title/body default to the branch's commit(s) so it never blocks on an
+interactive prompt.
+
+Extra arguments after `--` take the union of `gh pr create` and `az repos pr create` spellings on **both**
+hosts (`--opt value` and `--opt=value`; list flags take every value up to the next option, comma-separated
+values work too; boolean flags take an optional `true`/`false`):
+
+| Meaning | Flags |
+|---|---|
+| title / body | `--title`/`-t`, `--body`/`--description`/`-b` (`-d` on Azure DevOps), `--body-file`/`-F` (`-` = stdin) |
+| branches | `--base`/`-B`/`--target-branch`, `--head`/`-H`/`--source-branch`/`-s` |
+| draft | `--draft [true\|false]` (`-d` on GitHub) |
+| labels / reviewers | `--label`/`--labels`/`-l`, `--reviewer`/`--reviewers` (`-r` on GitHub), `--required-reviewers` |
+| work items / issues | `--work-items` (same as `--issue`: linked and tagged `pr-available`) |
+| merge | `--auto-complete`/`--auto-merge`, `--squash`, `--delete-source-branch`, `--merge-commit-message`, `--bypass-policy`, `--bypass-policy-reason`, `--transition-work-items` |
+| other | `--assignee`/`-a`, `--milestone`/`-m`, `--project`/`-p` (GitHub board), `--fill`/`-f`, `--web`/`-w`/`--open`, `--dry-run` |
+| Azure DevOps target | `--organization`/`--org`, `--project`/`-p`, `--repository`/`-r` override the remote-derived values |
+| accepted, ignored | `--detect`, `--verbose`, `--debug`, `--subscription`, `--output`/`-o`, `--query` |
+
+Azure DevOps resolves reviewers (GUID, e-mail or display name) through the Identities API, sets
+`--auto-complete` as the current user and applies the merge options in a follow-up update, as `az` does.
+A flag the host has no counterpart for (e.g. `--milestone` on Azure DevOps, `--delete-source-branch` on
+GitHub) is reported on stderr (`Note: --milestone is ignored on Azure DevOps`), never dropped silently.
+Unknown flags fail with the list of supported ones.
 
 Pass the text with `--title "..."` and `--description "$(cat pr.md)"` rather than as passthrough
-args: it is kept in full. On GitHub the description goes to `gh` on stdin (`--body-file -`); on
-Azure DevOps it is set over the REST API right after `az` creates the PR, because
-`az repos pr create --description` has been seen cutting long text at ~450 characters (a `--title`/
-`--description` given after `--` is intercepted the same way). Azure DevOps itself allows at most
+args: the description is always sent in full. Azure DevOps itself allows at most
 4000 characters in a PR description: a longer one is rejected up front, and a description the
 server stored shorter than sent is reported as a warning (`bdt pr update` does the same check).
 
@@ -198,15 +222,15 @@ it ready for review. Pass `--no-draft` to open it ready for review
 immediately instead.
 
 `--label` (repeatable) applies labels to the PR on either host: on GitHub
-these map to `gh pr create --label`, so the label must already exist on the
-repo (`gh label create`); on Azure DevOps they map to `az repos pr create
---labels`, which are freeform and get created on the fly. A successful
-create prints the PR's web/GUI link (not just the REST API URL Azure DevOps'
-`az` output otherwise gives you).
+these are applied to the PR, and unknown labels are created automatically
+by GitHub (no pre-existing label required); on Azure DevOps labels are freeform and get
+created on the fly. A successful
+create prints the PR's web/GUI link (not just the REST API URL Azure DevOps
+returns).
 
 `[tool.bdt.pr.required_labels]` in pyproject.toml can require at least one
 label from each named group before the PR is created — checked locally
-(no `gh`/`az` call happens if a group isn't satisfied):
+(no API call happens if a group isn't satisfied):
 
 ```toml
 [tool.bdt.pr.required_labels]
@@ -336,27 +360,26 @@ On `update`, `--board` only moves the item when you pass it explicitly — it
 never falls back to `pyproject.toml`, so an unrelated field update (e.g.
 just `--title`) can't silently relocate the item to a different board.
 
-**GitHub**: a thin wrapper around `gh issue create` / `edit` / `delete` /
-`comment`. `--label`/`--tag` add a label on `create`, or add/remove one on
+**GitHub**: REST/GraphQL calls for issue create / edit / delete /
+comment. `--label`/`--tag` add a label on `create`, or add/remove one on
 `update` (paired with `--remove-label`/`--remove-tag`); labels must already
 exist in the repo. `--screenshot` pushes images to a `pr-assets` branch (same trick `bdt
 pr create --screenshot` uses, since GitHub has no API for uploading an image
 into an issue) and appends them to the issue body / comment as Markdown.
 `issue delete` is **permanent** — GitHub has no recycle bin for issues.
-Comment update/delete go through `gh api` directly (`gh issue` has no
-subcommand for editing/deleting an arbitrary comment by ID). Extra arguments
-to `bdt issue create` pass through to `gh issue create`, e.g.
-`bdt issue create --title "..." -- --assignee @me`.
+Comment update/delete go through REST. Extra arguments
+to `bdt issue create` accept the `gh issue create` flags `--title`/`-t`, `--body`/`-b`, `--body-file`/`-F`
+(`-` = stdin), `--label`/`-l`, `--assignee`/`-a` (`@me` works), `--milestone`/`-m` (title or number),
+`--project`/`-p` (Projects board, repeatable) and `--web`/`-w`; `--template` / `--recover` are rejected. E.g.
+`bdt issue create --title "..." -- --assignee @me --project Roadmap`.
 
-`--parent` / `--blocked-by` use GitHub's sub-issues and issue dependencies (`gh issue create --parent` /
-`--blocked-by`, `gh issue edit --parent` / `--add-blocked-by`), which need a recent `gh`; `issue show` reads
-them with `gh issue view --json parent,subIssues,blockedBy,blocking`. `--iteration` isn't supported: a
+`--parent` / `--blocked-by` use GitHub's sub-issues and issue dependencies REST endpoints; `issue show` reads
+the parent, sub-issues, blocked-by and blocking links the same way. `--iteration` isn't supported: a
 GitHub Projects (v2) iteration is a per-project field, not a property of the issue.
 
 `--board <name>` on `create` adds the issue to that GitHub Projects (v2)
-board by title (needs a token with the `project` scope — `gh auth refresh -s
-project`). On `search`, `--board` (title or number) scopes results to issues
-currently on that board; since `gh issue list` has no board filter of its
+board by title (needs a token with the `project` scope). On `search`, `--board` (title or number) scopes results to issues
+currently on that board; since the issue list has no board filter of its
 own, this fetches a wider raw pool and filters it down client-side, so a
 board with few matches may return fewer results than `--limit` asks for. A
 CLI flag beats `[tool.bdt.github].board` in `pyproject.toml`:
@@ -392,7 +415,7 @@ Claims an issue (GitHub) or work item (Azure DevOps): comments `Taken by <you>` 
 running coding agent's session (the same `<Agent> Session: <id>` note every bdt comment gets: a
 claude.ai link under a bridged Claude session, otherwise the bare session id; nothing outside an
 agent), so others can see who is on it. `<you>` is the GitHub login
-`gh` is authenticated as, else the git `user.name`. Without `NUMBER` it takes the issue the current
+the token authenticates as, else the git `user.name`. Without `NUMBER` it takes the issue the current
 branch's PR closes (`Fixes #N`, or an issue/work-item URL in the PR body); it refuses to guess if
 that is none or several. If the issue's newest comment already is a "Taken by ..." claim (by anyone) it
 says so and posts nothing, so it's safe to run repeatedly -- including before `bdt issue do`.
@@ -413,7 +436,7 @@ addresses the calling agent. It combines with every other `search` filter (keywo
 the agent that is running `bdt`, or `@Agent`, which addresses every agent. Matching is case-insensitive and
 on whole words: `@claude`, `@CLAUDE,` and `@Claude.` match, `@Claudette`, `@claude-bot` and `me@claude.ai` do not.
 Only the newest comment counts, so once someone (including the agent, e.g. with a reply) comments after the
-mention, the issue drops out of the list. The newest comment isn't part of the list output of `gh`/Azure DevOps,
+mention, the issue drops out of the list. The newest comment isn't part of the list output of GitHub/Azure DevOps,
 so this costs one extra request per candidate; candidates are scanned in recently-updated order (up to 10x
 `--limit` on GitHub, 200 on Azure DevOps) until `--limit` have matched.
 
@@ -544,10 +567,10 @@ Configuration (flags override env vars):
 | Local work dir | `--root` | `AZDO_WORK_DIR`, `BMS_WORK_DIR` | `~/projects` (`C:/Projects` on Windows) |
 | Azure DevOps org | `--org` | `AZDO_ORG`, `BMS_ORG` | none (ADO not searched) |
 | GitHub org | `--github-org` | `GITHUB_ORG`, `BMS_GITHUB_ORG` | none (GitHub not searched) |
-| ADO PAT for cloning | `--pat` | `AZURE_DEVOPS_EXT_PAT`, `AZURE_DEVOPS_PAT` | falls back to `az` login |
+| ADO PAT for cloning | `--pat` | `AZURE_DEVOPS_EXT_PAT`, `AZURE_DEVOPS_PAT` | falls back to `DefaultAzureCredential` |
 
 Set the org env vars in your shell profile to make `bdt find-repo <name>` work anywhere. It replaces
-the `cross-repo-discovery` skill's `ALL_REPOS.md` sync. Needs `az` (ADO) / `gh` (GitHub) only when
+the `cross-repo-discovery` skill's `ALL_REPOS.md` sync. Needs ADO auth / a GitHub token only when
 those orgs are searched.
 
 ## `bdt cleanup worktrees` / `bdt cleanup orphaned-dbs` / `bdt cleanup db` / `bdt cleanup worktree`
@@ -702,7 +725,7 @@ sandbox mode too.
 ## `bdt logs roles` / `bdt logs tail`
 
 Query Application Insights (KQL over `traces`/`exceptions`) via
-`az monitor app-insights query`. No defaults are baked in — pass
+the Application Insights REST API (azure-identity credential). No defaults are baked in — pass
 `--resource-group`/`--app-insights` explicitly (or set
 `AZURE_RESOURCE_GROUP`/`AZURE_APP_INSIGHTS`), since which Azure resource
 "this repo" maps to isn't derivable from the git remote.
@@ -715,7 +738,7 @@ bdt logs tail --resource-group my-rg --app-insights my-app-insights --role my-se
 ## `bdt logs fetch`
 
 Downloads the App Service log archive for a webapp/slot via
-`az webapp log download`, unzips it, and writes every line matching a
+the App Service Kudu/ARM log download, unzips it, and writes every line matching a
 common error/warning marker (`ERROR`, `CRITICAL`, `WARNING`, tracebacks,
 `4xx`/`5xx`, `FAILED`, `FATAL`) to `<out>/<slot>_errors.log`. Simpler and
 often preferable to the KQL commands above when you just want "what broke
@@ -723,7 +746,7 @@ recently" rather than a queryable trace stream.
 
 The webapp/resource-group/slot come from a named environment configured in
 the calling repo's `pyproject.toml`. `slot` is optional — omit it for an
-app's default/production slot (no `--slot` is passed to `az`); set it for a
+app's default/production slot (no slot is used); set it for a
 named deployment slot:
 
 ```toml
