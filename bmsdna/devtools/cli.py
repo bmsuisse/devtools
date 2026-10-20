@@ -56,7 +56,8 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
     sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
 
-__version__ = _pkg_version("bmsdna-devtools")
+PACKAGE_NAME = "bmsdna-devtools"
+__version__ = _pkg_version(PACKAGE_NAME)
 
 # What `--target` / `--target-branch` mean when not given: the branch PRs normally go into.
 DEFAULT_TARGET_BRANCH = "dev"
@@ -67,9 +68,16 @@ app = typer.Typer(
 )
 
 
+UPDATE_HINT = (
+    f"Update: `uv tool upgrade {PACKAGE_NAME}` (installed globally)"
+    f" or `uv sync --upgrade-package {PACKAGE_NAME}` (as a project dependency)"
+)
+
+
 def _version_callback(value: bool) -> None:
     if value:
         print(f"bdt {__version__}")
+        print(UPDATE_HINT)
         raise typer.Exit()
 
 
