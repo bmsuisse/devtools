@@ -51,15 +51,15 @@ def parse_flags(args: list[str], spec: dict[str, Flag], command: str) -> dict[st
     return out
 
 
-def read_body_file(path: str) -> str:
-    """The text of `--body-file`: a file, or stdin for `-`."""
+def read_body_file(path: str, flag: str = "--body-file") -> str:
+    """The text of a `--body-file`-style flag: a file, or stdin for `-`."""
     if path == "-":
         return sys.stdin.read()
     try:
         with open(path, encoding="utf-8") as f:
             return f.read()
     except OSError as e:
-        sys.exit(f"cannot read --body-file {path!r}: {e}")
+        sys.exit(f"cannot read {flag} {path!r}: {e}")
 
 
 def open_in_browser(url: str | None) -> None:

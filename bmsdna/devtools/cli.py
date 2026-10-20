@@ -35,6 +35,7 @@ from . import translate as translate_mod
 from . import pr_build, pr_info as pr_info_mod, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
 from .bdt_config import find_pyproject, load_bdt_table
+from .gh_args import read_body_file
 from .cli_tools import CLI_TIMEOUT_SECS, EXIT_WAIT_TIMEOUT, detect_agent_session, require_gh
 from .github_api import GitHubClient
 from .pr_create_args import PrCreateArgsError, extract_labels, parse_pr_create_args, resolve_body, unsupported_notes
@@ -629,11 +630,14 @@ def pr_update(
 @pr_app.command("comment")
 def pr_comment(
     message: str | None = typer.Option(None, "--message", help="Comment text"),
+    message_file: str | None = typer.Option(
+        None, "--message-file", help="Read the comment text from this file (`-` = stdin); unlike --file, the content is posted as the comment"
+    ),
     screenshot: list[str] = typer.Option(
         [], "--screenshot", help="Path to an image to embed in the comment (repeatable)"
     ),
     file: list[str] = typer.Option(
-        [], "--file", help="Path to an arbitrary file to link in the comment as an attachment (repeatable)"
+        [], "--file", help="Path to a file to link in the comment as an attachment (repeatable); to post a file's text as the comment use --message-file"
     ),
     target: str | None = typer.Option(None, "--target", help=_LOOKUP_TARGET_HELP),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
@@ -647,6 +651,10 @@ def pr_comment(
     """Post a comment on the PR opened from the current branch, or --pr-id directly
     (Azure DevOps or GitHub, auto-detected).
     """
+    if message_file is not None:
+        if message is not None:
+            raise typer.BadParameter("pass either --message or --message-file, not both", param_hint="--message-file")
+        message = read_body_file(message_file, "--message-file")
     for path in screenshot:
         if not Path(path).is_file():
             raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
@@ -654,7 +662,7 @@ def pr_comment(
         if not Path(path).is_file():
             raise typer.BadParameter(f"File not found: {path}", param_hint="--file")
     if not message and not screenshot and not file:
-        raise typer.BadParameter("Provide at least one of --message, --screenshot, --file")
+        raise typer.BadParameter("Provide at least one of --message, --message-file, --screenshot, --file")
 
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
