@@ -561,13 +561,40 @@ def update(
 def link_work_item(session: requests.Session, remote: AdoRemote, pr_id: int, work_item_id: int) -> None:
     """Link work item `work_item_id` to PR `pr_id`, so it shows up in the PR's "Work Items" tab
     (and the work item's own "Development" links) -- the Azure DevOps equivalent of GitHub's
-    closing-keyword PR<->issue link, via the dedicated Pull Request Work Items REST resource
-    (POST .../pullRequests/{pr_id}/workitems/{work_item_id}, the same one `az repos pr work-item
-    add` itself calls). Idempotent -- linking an already-linked work item just re-confirms it.
+    closing-keyword PR<->issue link.
+
+    There is no REST resource that links "PR -> work item" directly; what `az repos pr work-item add`
+    does (and so do we) is add an `ArtifactLink` relation to the *work item*, pointing at the PR's
+    `vstfs:///Git/PullRequestId/{projectId}%2F{repoId}%2F{prId}` artifact URI. Idempotent -- an
+    already-linked work item is left alone (adding the relation twice would be rejected).
     """
-    r = session.post(
-        f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}/pullRequests/{pr_id}/workitems/{work_item_id}",
+    r = session.get(
+        f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}/pullrequests/{pr_id}",
         params={"api-version": "7.1"},
+        timeout=HTTP_TIMEOUT_SECS,
+    )
+    r.raise_for_status()
+    repository = r.json()["repository"]
+    artifact_url = f"vstfs:///Git/PullRequestId/{repository['project']['id']}%2F{repository['id']}%2F{pr_id}"
+
+    work_item_url = f"{_base_url(remote)}/_apis/wit/workitems/{work_item_id}"
+    r = session.get(work_item_url, params={"$expand": "relations", "api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS)
+    r.raise_for_status()
+    existing = r.json().get("relations") or []
+    if any(rel.get("rel") == "ArtifactLink" and str(rel.get("url", "")).lower() == artifact_url.lower() for rel in existing):
+        return
+
+    r = session.patch(
+        work_item_url,
+        params={"api-version": "7.1"},
+        json=[
+            {
+                "op": "add",
+                "path": "/relations/-",
+                "value": {"rel": "ArtifactLink", "url": artifact_url, "attributes": {"name": "Pull Request"}},
+            }
+        ],
+        headers={"Content-Type": "application/json-patch+json"},
         timeout=HTTP_TIMEOUT_SECS,
     )
     r.raise_for_status()

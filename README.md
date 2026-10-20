@@ -265,6 +265,16 @@ create prints a reminder to run `bdt pr status` afterward to check whether
 the CI build passes. This is a best-effort check — failures reading policy
 config (auth, permissions) fail open and simply skip the reminder.
 
+## `bdt pr comment`
+
+```bash
+bdt pr comment --message "Looks good" [--screenshot shot.png] [--file report.pdf] [--pr-id 123]
+bdt pr comment --message-file plan.md          # post a file's text as the comment (`-` = stdin)
+```
+
+`--file` links the file as an *attachment* (a download link in the comment); it does not post the file's
+content. To post a markdown document (an implementation plan, review findings) use `--message-file`.
+
 ## `bdt issue create` / `show` / `update` / `delete`, `bdt issue comment add` / `update` / `delete`
 
 ```bash
