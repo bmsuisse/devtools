@@ -274,3 +274,10 @@ def test_pr_comment_message_and_message_file_are_exclusive(tmp_path) -> None:
 
     assert result.exit_code != 0
     assert "not both" in result.output
+
+
+def test_pr_comment_message_file_missing_is_a_usage_error(tmp_path) -> None:
+    result = runner.invoke(app, ["pr", "comment", "--message-file", str(tmp_path / "nope.md")])
+
+    assert result.exit_code == 2
+    assert "cannot read" in result.output

@@ -35,7 +35,6 @@ from . import translate as translate_mod
 from . import pr_build, pr_info as pr_info_mod, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
 from .bdt_config import find_pyproject, load_bdt_table
-from .gh_args import read_body_file
 from .cli_tools import CLI_TIMEOUT_SECS, EXIT_WAIT_TIMEOUT, detect_agent_session, require_gh
 from .github_api import GitHubClient
 from .pr_create_args import PrCreateArgsError, extract_labels, parse_pr_create_args, resolve_body, unsupported_notes
@@ -654,7 +653,10 @@ def pr_comment(
     if message_file is not None:
         if message is not None:
             raise typer.BadParameter("pass either --message or --message-file, not both", param_hint="--message-file")
-        message = read_body_file(message_file, "--message-file")
+        try:
+            message = sys.stdin.read() if message_file == "-" else Path(message_file).read_text(encoding="utf-8")
+        except OSError as e:
+            raise typer.BadParameter(f"cannot read {message_file!r}: {e}", param_hint="--message-file") from e
     for path in screenshot:
         if not Path(path).is_file():
             raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
