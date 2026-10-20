@@ -13,3 +13,4 @@ def test_version_shows_update_hint() -> None:
     assert lines[0] == f"bdt {__version__}"
     assert "uv tool upgrade bmsdna-devtools" in result.output
     assert "uv sync --upgrade-package bmsdna-devtools" in result.output
+    assert "`" not in result.output

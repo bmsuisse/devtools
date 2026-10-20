@@ -69,8 +69,8 @@ app = typer.Typer(
 
 
 UPDATE_HINT = (
-    f"Update: `uv tool upgrade {PACKAGE_NAME}` (installed globally)"
-    f" or `uv sync --upgrade-package {PACKAGE_NAME}` (as a project dependency)"
+    f"Update: uv tool upgrade {PACKAGE_NAME}  (installed globally)\n"
+    f"        uv sync --upgrade-package {PACKAGE_NAME}  (as a project dependency)"
 )
 
 
