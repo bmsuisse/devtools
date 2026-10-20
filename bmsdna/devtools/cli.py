@@ -630,13 +630,13 @@ def pr_update(
 def pr_comment(
     message: str | None = typer.Option(None, "--message", help="Comment text"),
     message_file: str | None = typer.Option(
-        None, "--message-file", help="Read the comment text from this file (`-` = stdin); unlike --file, the content is posted as the comment"
+        None, "--message-file", help="Read the comment text from this file (`-` = stdin), e.g. a markdown plan"
     ),
     screenshot: list[str] = typer.Option(
         [], "--screenshot", help="Path to an image to embed in the comment (repeatable)"
     ),
     file: list[str] = typer.Option(
-        [], "--file", help="Path to a file to link in the comment as an attachment (repeatable); to post a file's text as the comment use --message-file"
+        [], "--file", help="Path to an arbitrary file to link in the comment as an attachment (repeatable)"
     ),
     target: str | None = typer.Option(None, "--target", help=_LOOKUP_TARGET_HELP),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),

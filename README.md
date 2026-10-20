@@ -272,8 +272,7 @@ bdt pr comment --message "Looks good" [--screenshot shot.png] [--file report.pdf
 bdt pr comment --message-file plan.md          # post a file's text as the comment (`-` = stdin)
 ```
 
-`--file` links the file as an *attachment* (a download link in the comment); it does not post the file's
-content. To post a markdown document (an implementation plan, review findings) use `--message-file`.
+Use `--message-file` to post a markdown document (an implementation plan, review findings) as the comment.
 
 ## `bdt issue create` / `show` / `update` / `delete`, `bdt issue comment add` / `update` / `delete`
 
