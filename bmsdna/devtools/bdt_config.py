@@ -1,6 +1,8 @@
 """Shared lookup for `[tool.bdt.*]` configuration tables in the consuming
 repo's pyproject.toml (walks up from a start directory the same way `git`
-looks for `.git`, so it works from any subdirectory of the repo).
+looks for `.git`, so it works from any subdirectory of the repo). The walk stops at the
+repository root (the first directory holding a `.git` dir or file), so a submodule or nested
+repo never picks up the config of the repo that contains it.
 """
 
 from __future__ import annotations
@@ -15,6 +17,8 @@ def find_pyproject(start: Path | None = None) -> Path | None:
         candidate = directory / "pyproject.toml"
         if candidate.is_file():
             return candidate
+        if (directory / ".git").exists():
+            return None
     return None
 
 

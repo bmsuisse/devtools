@@ -629,11 +629,14 @@ def pr_update(
 @pr_app.command("comment")
 def pr_comment(
     message: str | None = typer.Option(None, "--message", help="Comment text"),
+    message_file: str | None = typer.Option(
+        None, "--message-file", help="Read the comment text from this file (`-` = stdin); unlike --file, the content is posted as the comment"
+    ),
     screenshot: list[str] = typer.Option(
         [], "--screenshot", help="Path to an image to embed in the comment (repeatable)"
     ),
     file: list[str] = typer.Option(
-        [], "--file", help="Path to an arbitrary file to link in the comment as an attachment (repeatable)"
+        [], "--file", help="Path to a file to link in the comment as an attachment (repeatable); to post a file's text as the comment use --message-file"
     ),
     target: str | None = typer.Option(None, "--target", help=_LOOKUP_TARGET_HELP),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
@@ -647,6 +650,13 @@ def pr_comment(
     """Post a comment on the PR opened from the current branch, or --pr-id directly
     (Azure DevOps or GitHub, auto-detected).
     """
+    if message_file is not None:
+        if message is not None:
+            raise typer.BadParameter("pass either --message or --message-file, not both", param_hint="--message-file")
+        try:
+            message = sys.stdin.read() if message_file == "-" else Path(message_file).read_text(encoding="utf-8")
+        except OSError as e:
+            raise typer.BadParameter(f"cannot read {message_file!r}: {e}", param_hint="--message-file") from e
     for path in screenshot:
         if not Path(path).is_file():
             raise typer.BadParameter(f"Screenshot not found: {path}", param_hint="--screenshot")
@@ -654,7 +664,7 @@ def pr_comment(
         if not Path(path).is_file():
             raise typer.BadParameter(f"File not found: {path}", param_hint="--file")
     if not message and not screenshot and not file:
-        raise typer.BadParameter("Provide at least one of --message, --screenshot, --file")
+        raise typer.BadParameter("Provide at least one of --message, --message-file, --screenshot, --file")
 
     remote = current_remote()
     if isinstance(remote, GitHubRemote):

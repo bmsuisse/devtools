@@ -232,3 +232,52 @@ def test_pr_comment_with_pr_id_resolves_by_id_and_skips_branch_for_ado(monkeypat
 
     assert result.exit_code == 0, result.output
     assert captured == {"pr_id": 99, "message": "hi"}
+
+
+def test_pr_comment_message_file_posts_the_file_content(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    captured = {}
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.comment_with_screenshots",
+        lambda gh, owner, repo, branch, message, screenshot, file, pr_id=None: captured.update(message=message, file=file),
+    )
+    plan = tmp_path / "plan.md"
+    plan.write_text("# Plan\n\n- step 1\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["pr", "comment", "--pr-id", "99", "--message-file", str(plan)])
+
+    assert result.exit_code == 0, result.output
+    assert captured == {"message": "# Plan\n\n- step 1\n", "file": []}
+
+
+def test_pr_comment_message_file_reads_stdin_for_dash(monkeypatch) -> None:
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    captured = {}
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.comment_with_screenshots",
+        lambda gh, owner, repo, branch, message, screenshot, file, pr_id=None: captured.update(message=message),
+    )
+
+    result = runner.invoke(app, ["pr", "comment", "--pr-id", "99", "--message-file", "-"], input="from stdin")
+
+    assert result.exit_code == 0, result.output
+    assert captured == {"message": "from stdin"}
+
+
+def test_pr_comment_message_and_message_file_are_exclusive(tmp_path) -> None:
+    plan = tmp_path / "plan.md"
+    plan.write_text("x", encoding="utf-8")
+
+    result = runner.invoke(app, ["pr", "comment", "--message", "hi", "--message-file", str(plan)])
+
+    assert result.exit_code != 0
+    assert "not both" in result.output
+
+
+def test_pr_comment_message_file_missing_is_a_usage_error(tmp_path) -> None:
+    result = runner.invoke(app, ["pr", "comment", "--message-file", str(tmp_path / "nope.md")])
+
+    assert result.exit_code == 2
+    assert "cannot read" in result.output

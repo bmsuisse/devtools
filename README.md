@@ -265,6 +265,16 @@ create prints a reminder to run `bdt pr status` afterward to check whether
 the CI build passes. This is a best-effort check — failures reading policy
 config (auth, permissions) fail open and simply skip the reminder.
 
+## `bdt pr comment`
+
+```bash
+bdt pr comment --message "Looks good" [--screenshot shot.png] [--file report.pdf] [--pr-id 123]
+bdt pr comment --message-file plan.md          # post a file's text as the comment (`-` = stdin)
+```
+
+`--file` links the file as an *attachment* (a download link in the comment); it does not post the file's
+content. To post a markdown document (an implementation plan, review findings) use `--message-file`.
+
 ## `bdt issue create` / `show` / `update` / `delete`, `bdt issue comment add` / `update` / `delete`
 
 ```bash
@@ -541,7 +551,9 @@ scan_jinja = ["backend/print"]         # "KEY" | tr in .jinja2/.j2/.html
 bdt worktree my-feature [--base dev] [--env-file .local_env] [--no-submodules] [--install "just install"]
 ```
 
-Creates `.worktrees/<name>` branched from `--base`, initializes submodules
+Creates `.worktrees/<name>` branched from `--base`. It first fetches `origin/<base>` and, if the local
+`<base>` is strictly behind it, branches from `origin/<base>` instead (so the PR starts on current code);
+a local base that is ahead of or has diverged from the remote is kept as is. Then it initializes submodules
 (unless `--no-submodules`), and copies an env file into the new worktree as
 `.env` (auto-detects `.local_env` then `.env` if `--env-file` isn't given).
 

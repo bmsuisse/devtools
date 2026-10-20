@@ -418,24 +418,15 @@ def test_get_pr_by_id_exits_on_merge_conflict() -> None:
 # -- link_work_item -----------------------------------------------------------
 
 
-def test_link_work_item_posts_to_the_pr_work_items_endpoint() -> None:
-    remote = AdoRemote("myorg", "MyProj", "myrepo")
-    session = MagicMock()
-    session.post.return_value = MagicMock(status_code=200)
-
-    link_work_item(session, remote, pr_id=456, work_item_id=99)
-
-    url = session.post.call_args.args[0]
-    assert url == "https://dev.azure.com/myorg/MyProj/_apis/git/repositories/myrepo/pullRequests/456/workitems/99"
-    session.post.return_value.raise_for_status.assert_called_once()
-
-
 def test_link_work_item_raises_on_http_error() -> None:
     remote = AdoRemote("myorg", "MyProj", "myrepo")
     session = MagicMock()
+    session.get.return_value = MagicMock(
+        status_code=200, json=lambda: {"repository": {"id": "r", "project": {"id": "p"}}, "relations": []}
+    )
     response = MagicMock(status_code=404)
     response.raise_for_status.side_effect = requests.HTTPError("not found")
-    session.post.return_value = response
+    session.patch.return_value = response
 
     with pytest.raises(requests.HTTPError):
         link_work_item(session, remote, pr_id=456, work_item_id=99)

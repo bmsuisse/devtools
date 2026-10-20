@@ -651,3 +651,49 @@ def test_run_wait_checks_build_policy_only_once(monkeypatch) -> None:
         run(REMOTE, "fake-pat", "main", wait=True, source_branch="feature-x")
 
     assert calls == ["main"]
+
+
+# --- link_work_item -------------------------------------------------------
+
+_PR_BODY = {"pullRequestId": 42, "repository": {"id": "repo-guid", "project": {"id": "proj-guid"}}}
+_ARTIFACT = "vstfs:///Git/PullRequestId/proj-guid%2Frepo-guid%2F42"
+
+
+def _link_session(relations: list[dict]) -> MagicMock:
+    session = MagicMock()
+
+    def fake_get(url, params=None, **kwargs):
+        if "/pullrequests/42" in url:
+            return FakeResponse(_PR_BODY)
+        if "/_apis/wit/workitems/7" in url:
+            return FakeResponse({"id": 7, "relations": relations})
+        raise AssertionError(f"unexpected GET {url}")
+
+    session.get.side_effect = fake_get
+    session.patch.return_value = FakeResponse({})
+    return session
+
+
+def test_link_work_item_adds_an_artifact_link_relation_on_the_work_item() -> None:
+    from bmsdna.devtools.pr_build import link_work_item
+
+    session = _link_session([{"rel": "AttachedFile", "url": "https://x/attachment"}])
+
+    link_work_item(session, AdoRemote(org="myorg", project="BMS - CCMT2", repo="BMS - CCMT2"), 42, 7)
+
+    (url,), kwargs = session.patch.call_args
+    assert url == "https://dev.azure.com/myorg/BMS%20-%20CCMT2/_apis/wit/workitems/7"
+    assert kwargs["headers"] == {"Content-Type": "application/json-patch+json"}
+    assert kwargs["json"] == [
+        {"op": "add", "path": "/relations/-", "value": {"rel": "ArtifactLink", "url": _ARTIFACT, "attributes": {"name": "Pull Request"}}}
+    ]
+
+
+def test_link_work_item_is_idempotent() -> None:
+    from bmsdna.devtools.pr_build import link_work_item
+
+    session = _link_session([{"rel": "ArtifactLink", "url": _ARTIFACT.upper().replace("VSTFS", "vstfs")}])
+
+    link_work_item(session, REMOTE, 42, 7)
+
+    session.patch.assert_not_called()
