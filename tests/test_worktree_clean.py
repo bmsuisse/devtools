@@ -108,6 +108,72 @@ def test_create_does_not_hint_no_default_when_base_is_main_but_remotes_real_defa
     assert "--no-default" not in out
 
 
+# --- create: starts from a fetched origin/<base> -------------------------
+
+
+def _clone_with_dev(tmp_path):
+    """A clone whose `origin` has a `dev` branch; returns (origin, clone)."""
+    origin = init_repo(tmp_path / "origin")
+    _git(["branch", "dev"], cwd=origin)
+    clone = tmp_path / "clone"
+    _git(["clone", "-q", str(origin), str(clone)], cwd=tmp_path)
+    _git(["config", "user.email", "test@example.com"], cwd=clone)
+    _git(["config", "user.name", "Test"], cwd=clone)
+    _git(["branch", "dev", "origin/dev"], cwd=clone)
+    return origin, clone
+
+
+def _commit(repo, branch, filename):
+    _git(["checkout", "-q", branch], cwd=repo)
+    (repo / filename).write_text(filename)
+    _git(["add", "."], cwd=repo)
+    _git(["commit", "-q", "-m", filename], cwd=repo)
+    _git(["checkout", "-q", "main"], cwd=repo)
+
+
+def test_create_branches_from_fetched_origin_when_local_base_is_behind(tmp_path, capsys) -> None:
+    origin, clone = _clone_with_dev(tmp_path)
+    _commit(origin, "dev", "new-on-origin.txt")
+
+    path = create("my-feature", base="dev", submodules=False, root=clone)
+
+    assert (path / "new-on-origin.txt").exists()
+    assert "1 commit(s) behind origin/dev" in capsys.readouterr().out
+    # not tracking origin/dev: a plain `git push` must not target the base branch
+    assert _git(["config", "--get", "branch.my-feature.remote"], cwd=clone, check=False).stdout.strip() == ""
+
+
+def test_create_keeps_local_base_when_it_is_ahead_of_origin(tmp_path) -> None:
+    _, clone = _clone_with_dev(tmp_path)
+    _commit(clone, "dev", "local-only.txt")
+
+    path = create("my-feature", base="dev", submodules=False, root=clone)
+
+    assert (path / "local-only.txt").exists()
+
+
+def test_create_warns_and_keeps_local_base_when_diverged(tmp_path, capsys) -> None:
+    origin, clone = _clone_with_dev(tmp_path)
+    _commit(origin, "dev", "on-origin.txt")
+    _commit(clone, "dev", "local-only.txt")
+
+    path = create("my-feature", base="dev", submodules=False, root=clone)
+
+    assert (path / "local-only.txt").exists()
+    assert not (path / "on-origin.txt").exists()
+    assert "diverged" in capsys.readouterr().err
+
+
+def test_create_uses_local_base_without_an_origin_remote(tmp_path, capsys) -> None:
+    repo = init_repo(tmp_path / "repo")
+    _git(["branch", "dev"], cwd=repo)
+
+    path = create("my-feature", base="dev", submodules=False, root=repo)
+
+    assert path.exists()
+    assert "warning" not in capsys.readouterr().err
+
+
 # --- find_repos -----------------------------------------------------------
 
 

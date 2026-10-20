@@ -541,7 +541,9 @@ scan_jinja = ["backend/print"]         # "KEY" | tr in .jinja2/.j2/.html
 bdt worktree my-feature [--base dev] [--env-file .local_env] [--no-submodules] [--install "just install"]
 ```
 
-Creates `.worktrees/<name>` branched from `--base`, initializes submodules
+Creates `.worktrees/<name>` branched from `--base`. It first fetches `origin/<base>` and, if the local
+`<base>` is strictly behind it, branches from `origin/<base>` instead (so the PR starts on current code);
+a local base that is ahead of or has diverged from the remote is kept as is. Then it initializes submodules
 (unless `--no-submodules`), and copies an env file into the new worktree as
 `.env` (auto-detects `.local_env` then `.env` if `--env-file` isn't given).
 

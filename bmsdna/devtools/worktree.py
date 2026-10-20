@@ -59,6 +59,43 @@ def _run_capture(cmd: list[str], cwd: Path | None = None) -> subprocess.Complete
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
 
 
+def _git_ok(args: list[str], cwd: Path, timeout: float = 5.0) -> bool:
+    try:
+        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=False, timeout=timeout).returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def _start_point(root: Path, base: str) -> tuple[str, bool]:
+    """Where a new worktree branch should start, and whether that is a remote-tracking ref.
+
+    `base` is usually a long-lived local branch (`dev`) that nobody keeps up to date, so a worktree
+    branched from it starts behind -- the PR then shows merge conflicts and the plan gets written
+    against stale code. Fetch `origin/<base>` first and start from it when the local branch is
+    strictly behind. A local branch that is ahead of / diverged from the remote is left alone (its
+    unpushed work is on purpose), as is everything when there is no `origin` or it can't be reached.
+    """
+    local = f"refs/heads/{base}"
+    remote = f"refs/remotes/origin/{base}"
+    has_local = _git_ok(["rev-parse", "--verify", "--quiet", local], root)
+    if not _git_ok(["remote", "get-url", "origin"], root):
+        return base, False
+    if not _git_ok(["fetch", "--quiet", "origin", f"+refs/heads/{base}:{remote}"], root, timeout=pull_mod.CLI_TIMEOUT_SECS):
+        if has_local:
+            print(f"warning: could not fetch origin/{base}; branching from the local {base}, which may be behind", file=sys.stderr)
+        return base, False
+    if not has_local:
+        return f"origin/{base}", True
+    if _git_ok(["merge-base", "--is-ancestor", remote, local], root):
+        return base, False  # up to date or ahead of the remote
+    if _git_ok(["merge-base", "--is-ancestor", local, remote], root):
+        behind = _run_capture(["git", "rev-list", "--count", f"{local}..{remote}"], cwd=root).stdout.strip()
+        print(f"{base} is {behind} commit(s) behind origin/{base}; branching from origin/{base}")
+        return f"origin/{base}", True
+    print(f"warning: local {base} and origin/{base} have diverged; branching from the local {base}", file=sys.stderr)
+    return base, False
+
+
 def create(
     name: str,
     base: str = "dev",
@@ -72,7 +109,9 @@ def create(
     if path.exists():
         sys.exit(f"error: {path} already exists")
 
-    _run(["git", "worktree", "add", str(path), "-b", name, base], cwd=root)
+    start, remote_start = _start_point(root, base)
+    # --no-track: the new branch must not push to / compare against origin/<base>
+    _run(["git", "worktree", "add", *(["--no-track"] if remote_start else []), str(path), "-b", name, start], cwd=root)
 
     if submodules and (root / ".gitmodules").exists():
         _run(["git", "submodule", "update", "--init"], cwd=path)
