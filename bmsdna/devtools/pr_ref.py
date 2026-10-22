@@ -52,8 +52,10 @@ def parse_pr_ref(text: str, current_remote: Callable[[], AdoRemote | GitHubRemot
     if match := _GITHUB_PR_URL.match(text):
         return PrRef(int(match.group(3)), GitHubRemote(match.group(1), match.group(2)))
     if match := _ADO_PR_URL.match(text):
+        # the legacy `https://org.visualstudio.com/DefaultCollection/Project/_git/...` form has a collection segment
+        url = text.replace("/DefaultCollection/", "/", 1) if "visualstudio.com" in text else text
         try:
-            return PrRef(int(match.group(1)), parse_ado_remote(text))
+            return PrRef(int(match.group(1)), parse_ado_remote(url))
         except (NotAzureDevOpsRemoteError, IndexError):
             raise PrRefError(f"can't read the Azure DevOps repo from '{text}'") from None
 
@@ -75,3 +77,14 @@ def parse_pr_ref(text: str, current_remote: Callable[[], AdoRemote | GitHubRemot
                 return PrRef(pr_id, AdoRemote(parts[0], parts[1], parts[2]))
             raise PrRefError(f"'{text}': GitHub PRs are owner/repo#N")
     raise PrRefError(f"can't read '{text}' as a PR: use {FORMS}")
+
+
+def canonical(ref: PrRef, here: AdoRemote | GitHubRemote | None) -> PrRef:
+    """`ref` as a bare number when it names a PR of the current repo `here` (compared case-insensitively), so that
+    `5` and `owner/repo#5` are one PR; `here` None (no checkout) leaves it as it is."""
+    if ref.remote is None or here is None or type(ref.remote) is not type(here):
+        return ref
+    same = [str(getattr(ref.remote, f)).casefold() for f in ref.remote.__dataclass_fields__] == [
+        str(getattr(here, f)).casefold() for f in here.__dataclass_fields__
+    ]
+    return PrRef(ref.pr_id, None) if same else ref

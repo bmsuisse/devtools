@@ -42,6 +42,7 @@ from .usage.cli import usage_app
 from .gitrepo import (
     AdoRemote,
     GitHubRemote,
+    NotAzureDevOpsRemoteError,
     NotGitHubRemoteError,
     UnknownRemoteError,
     current_branch,
@@ -184,12 +185,24 @@ def _open_prs_info(target_branch: str | None, pat: str | None) -> list[pr_info_m
     return [pr_info_mod.ado_info(session, pr, remote) for pr in pr_build.get_active_prs(session, remote, current_branch(), target_branch)]
 
 
+_REMOTE_ERRORS = (UnknownRemoteError, NotGitHubRemoteError, NotAzureDevOpsRemoteError)
+
+
+def _current_remote_or_none() -> AdoRemote | GitHubRemote | None:
+    try:
+        return current_remote()
+    except (SystemExit, *_REMOTE_ERRORS):
+        return None
+
+
 def _ref_pr_info(ref: pr_ref.PrRef, pat: str | None, clients: dict) -> pr_info_mod.PrInfo:
     """The PR `ref` names, in its own repo (the current one for a bare number). `clients` caches the GitHub client
     and Azure DevOps session across the entries of one call, so the token and auth are looked up once."""
     remote = ref.remote or current_remote()
     if isinstance(remote, GitHubRemote):
-        base = clients.setdefault("gh", require_gh())
+        if "gh" not in clients:
+            clients["gh"] = require_gh()
+        base = clients["gh"]
         gh = base if ref.remote is None else base.for_repo(remote.owner, remote.repo)
         return pr_info_mod.github_info(gh_pr.get_pr(gh, ref.pr_id, fields=gh_pr.PR_INFO_FIELDS), remote)
     if "session" not in clients:
@@ -212,7 +225,7 @@ def _ref_infos(refs: list[pr_ref.PrRef], pat: str | None) -> tuple[list[pr_info_
     for ref in refs:
         try:
             infos.append(_ref_pr_info(ref, pat, clients))
-        except (SystemExit, requests.RequestException, KeyError) as e:
+        except (SystemExit, requests.RequestException, KeyError, *_REMOTE_ERRORS) as e:
             errors.append(f"{ref}: {_failure_text(e)}")
     return infos, errors
 
@@ -595,20 +608,25 @@ def pr_info(
     --all and several --pr-id values list PRs instead (with --json an array, whatever the count).
     """
     refs: list[pr_ref.PrRef] = []
+    values: list[str] = []
     if pr_ids:
+        values = pr_ref.split_values(pr_ids)
+        if not values:
+            raise typer.BadParameter("no PR given", param_hint="--pr-id")
         try:
-            refs = list(dict.fromkeys(pr_ref.parse_pr_ref(v, current_remote) for v in pr_ref.split_values(pr_ids)))
+            parsed = [pr_ref.parse_pr_ref(v, current_remote) for v in values]
         except pr_ref.PrRefError as e:
             raise typer.BadParameter(str(e), param_hint="--pr-id") from None
-        if not refs:
-            raise typer.BadParameter("no PR given", param_hint="--pr-id")
+        here = _current_remote_or_none() if any(r.remote for r in parsed) else None
+        # `5,5` and `5,owner/repo#5` are still a list of what they name once
+        refs = list(dict.fromkeys(pr_ref.canonical(r, here) for r in parsed))
     if all_prs and refs:
         raise typer.BadParameter("--all lists the PRs of the current branch, it can't be combined with --pr-id", param_hint="--all")
 
     if all_prs:
         _echo_infos(_open_prs_info(target_branch, pat), as_json, with_repo=False)
         return
-    if len(refs) > 1:
+    if len(values) > 1:
         infos, errors = _ref_infos(refs, pat)
         _echo_infos(infos, as_json, with_repo=True)
         for error in errors:

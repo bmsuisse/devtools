@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 from bmsdna.devtools import pr_info, pr_ref
 from bmsdna.devtools.cli import app
-from bmsdna.devtools.gitrepo import AdoRemote, GitHubRemote
+from bmsdna.devtools.gitrepo import AdoRemote, GitHubRemote, UnknownRemoteError
 
 runner = CliRunner()
 
@@ -335,6 +335,7 @@ def test_parse_pr_ref_on_a_github_checkout(text, expected) -> None:
         ("otherorg/OtherProj/api#7", pr_ref.PrRef(7, AdoRemote("otherorg", "OtherProj", "api"))),
         ("https://dev.azure.com/otherorg/BMS%20-%20Data/_git/api/pullrequest/7", pr_ref.PrRef(7, AdoRemote("otherorg", "BMS - Data", "api"))),
         ("https://otherorg.visualstudio.com/Proj/_git/api/pullrequest/7?_a=files", pr_ref.PrRef(7, AdoRemote("otherorg", "Proj", "api"))),
+        ("https://otherorg.visualstudio.com/DefaultCollection/Proj/_git/api/pullrequest/7", pr_ref.PrRef(7, AdoRemote("otherorg", "Proj", "api"))),
         ("https://github.com/other/api/pull/7", pr_ref.PrRef(7, GitHubRemote("other", "api"))),
     ],
 )
@@ -432,6 +433,34 @@ def test_pr_id_one_failing_entry_does_not_hide_the_others(monkeypatch) -> None:
     assert result.exit_code == 1
     assert result.stdout.strip().startswith("[") and [d["number"] for d in json.loads(result.stdout.splitlines()[0])] == [5, 6]
     assert "error: other/api#7: Pull request #7 not found in other/api" in result.stderr
+
+
+def test_pr_id_same_pr_twice_is_a_list_of_one_even_when_spelled_differently(monkeypatch) -> None:
+    seen = _ref_cli(monkeypatch)
+
+    for spec in ("5,5", "5,Owner/Repo#5", "5,https://github.com/owner/repo/pull/5"):
+        seen.clear()
+        result = runner.invoke(app, ["pr", "info", "--json", "--pr-id", spec])
+
+        assert result.exit_code == 0, result.output
+        assert [d["number"] for d in json.loads(result.output)] == [5]
+        assert seen == [("owner", "repo", 5)]
+
+
+def test_pr_id_unusable_checkout_only_fails_the_entries_that_need_it(monkeypatch) -> None:
+    seen = _ref_cli(monkeypatch)
+
+    def no_origin():
+        raise UnknownRemoteError("'x' doesn't look like a GitHub or Azure DevOps remote")
+
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", no_origin)
+
+    result = runner.invoke(app, ["pr", "info", "--json", "--pr-id", "5,https://github.com/other/api/pull/7"])
+
+    assert result.exit_code == 1
+    assert [d["number"] for d in json.loads(result.stdout.splitlines()[0])] == [7]
+    assert "error: #5: " in result.stderr
+    assert seen == [("other", "api", 7)]
 
 
 def test_pr_id_single_failing_cross_repo_entry_is_an_error_without_output(monkeypatch) -> None:
