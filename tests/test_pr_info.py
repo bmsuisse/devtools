@@ -249,10 +249,10 @@ def test_pr_info_all_passes_target_branch(monkeypatch) -> None:
 
 
 def test_pr_info_all_rejects_pr_id(monkeypatch) -> None:
+    # a usage error (exit 2) before any lookup: nothing is stubbed here. The message is a rich-wrapped box, so not matched on
     result = runner.invoke(app, ["pr", "info", "--all", "--pr-id", "5"])
 
-    assert result.exit_code != 0
-    assert "--pr-id" in result.output
+    assert result.exit_code == 2
 
 
 def test_pr_info_all_on_azure_devops_lists_active_prs(monkeypatch) -> None:
