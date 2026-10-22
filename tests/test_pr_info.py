@@ -7,9 +7,9 @@ from fake_github import FakeGitHub
 import requests
 from typer.testing import CliRunner
 
-from bmsdna.devtools import pr_info
+from bmsdna.devtools import pr_info, pr_ref
 from bmsdna.devtools.cli import app
-from bmsdna.devtools.gitrepo import AdoRemote, GitHubRemote
+from bmsdna.devtools.gitrepo import AdoRemote, GitHubRemote, UnknownRemoteError
 
 runner = CliRunner()
 
@@ -64,6 +64,7 @@ def test_github_info_links_pr_and_closed_issue() -> None:
         "draft": True,
         "build": "pending",
         "issues": [{"number": 68, "url": "https://github.com/owner/repo/issues/68"}],
+        "repo": "owner/repo",
     }
 
 
@@ -188,6 +189,338 @@ def test_pr_info_passes_pr_id(monkeypatch) -> None:
 
     assert runner.invoke(app, ["pr", "info", "--json", "--pr-id", "5"]).exit_code == 0
     assert seen == {"pr_id": 5}
+
+
+def _two_open_prs(monkeypatch) -> list[tuple]:
+    """GitHub remote whose branch has PRs 69 and 70 open; returns the `(number, target)` lookups made."""
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.open_pr_numbers", lambda gh, target=None: [69, 70])
+    seen: list[tuple] = []
+
+    def get_pr(gh, pr_id=None, fields=""):
+        seen.append(pr_id)
+        return {**GH_PR, "number": pr_id, "title": f"PR {pr_id}", "isDraft": pr_id == 70}
+
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.get_pr", get_pr)
+    return seen
+
+
+def test_pr_info_all_json_lists_every_open_pr(monkeypatch) -> None:
+    seen = _two_open_prs(monkeypatch)
+
+    result = runner.invoke(app, ["pr", "info", "--json", "--all"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert [(d["number"], d["title"], d["draft"]) for d in data] == [(69, "PR 69", False), (70, "PR 70", True)]
+    assert set(data[0]) == set(pr_info.PrInfo(1, "", "", "open", False, "none").to_json_dict())
+    assert seen == [69, 70]
+
+
+def test_pr_info_all_text_separates_the_prs(monkeypatch) -> None:
+    _two_open_prs(monkeypatch)
+
+    result = runner.invoke(app, ["pr", "info", "--all"])
+
+    assert result.exit_code == 0, result.output
+    first, second = result.output.strip().split("\n\n")
+    assert first.startswith("PR #69: PR 69") and second.startswith("PR #70: PR 70 (open, draft")
+
+
+def test_pr_info_all_without_pr_is_an_empty_list(monkeypatch) -> None:
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.open_pr_numbers", lambda gh, target=None: [])
+
+    result = runner.invoke(app, ["pr", "info", "--json", "--all"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == []
+
+
+def test_pr_info_all_passes_target_branch(monkeypatch) -> None:
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    targets: list = []
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.open_pr_numbers", lambda gh, target=None: targets.append(target) or [])
+
+    assert runner.invoke(app, ["pr", "info", "--json", "--all", "--target-branch", "main"]).exit_code == 0
+    assert targets == ["main"]
+
+
+def test_pr_info_all_rejects_pr_id(monkeypatch) -> None:
+    # a usage error (exit 2) before any lookup: nothing is stubbed here. The message is a rich-wrapped box, so not matched on
+    result = runner.invoke(app, ["pr", "info", "--all", "--pr-id", "5"])
+
+    assert result.exit_code == 2
+
+
+def test_pr_info_all_on_azure_devops_lists_active_prs(monkeypatch) -> None:
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
+    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feat/widgets")
+    asked: list = []
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.pr_build.get_active_prs",
+        lambda session, remote, source, target: asked.append((source, target)) or [ADO_PR, {**ADO_PR, "pullRequestId": 43}],
+    )
+    _ado_builds(monkeypatch, [_build("completed", "succeeded")])
+
+    result = runner.invoke(app, ["pr", "info", "--json", "--all", "--target-branch", "main"])
+
+    assert result.exit_code == 0, result.output
+    assert [d["number"] for d in json.loads(result.output)] == [42, 43]
+    assert asked == [("feat/widgets", "main")]
+
+
+def test_gh_open_pr_numbers_lists_open_prs_of_the_branch(monkeypatch) -> None:
+    from bmsdna.devtools import gh_pr
+
+    monkeypatch.setattr(gh_pr, "current_branch", lambda: "feat")
+    asked: list = []
+    monkeypatch.setattr(gh_pr, "_branch_prs", lambda gh, branch, state="all", base=None: asked.append((branch, state, base)) or [{"number": 3}, {"number": 2}])
+
+    assert gh_pr.open_pr_numbers(None, "main") == [3, 2]  # ty: ignore[invalid-argument-type]
+    assert asked == [("feat", "open", "main")]
+
+
+def test_ado_get_active_prs_asks_for_active_prs_of_the_branch() -> None:
+    from bmsdna.devtools import pr_build
+
+    class Session:
+        def get(self, url, params, timeout):
+            self.params = params
+
+            class R:
+                def raise_for_status(self): ...
+                def json(self):
+                    return {"value": [{"pullRequestId": 1}]}
+
+            return R()
+
+    session = Session()
+    assert pr_build.get_active_prs(session, ADO_REMOTE, "feat", None) == [{"pullRequestId": 1}]  # ty: ignore[invalid-argument-type]
+    assert session.params["searchCriteria.status"] == "active"
+    assert session.params["searchCriteria.sourceRefName"] == "refs/heads/feat"
+    assert "searchCriteria.targetRefName" not in session.params
+
+
+# -- --pr-id: several PRs, of this or other repos ----------------------------
+
+
+def _parse(text: str, here=GITHUB_REMOTE) -> pr_ref.PrRef:
+    return pr_ref.parse_pr_ref(text, lambda: here)
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("12", pr_ref.PrRef(12, None)),
+        ("#12", pr_ref.PrRef(12, None)),
+        ("other/api#7", pr_ref.PrRef(7, GitHubRemote("other", "api"))),
+        ("https://github.com/other/api/pull/7", pr_ref.PrRef(7, GitHubRemote("other", "api"))),
+        ("https://github.com/other/api/pull/7/files#diff", pr_ref.PrRef(7, GitHubRemote("other", "api"))),
+    ],
+)
+def test_parse_pr_ref_on_a_github_checkout(text, expected) -> None:
+    assert _parse(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("12", pr_ref.PrRef(12, None)),
+        ("OtherProj/api#7", pr_ref.PrRef(7, AdoRemote("myorg", "OtherProj", "api"))),
+        ("otherorg/OtherProj/api#7", pr_ref.PrRef(7, AdoRemote("otherorg", "OtherProj", "api"))),
+        ("https://dev.azure.com/otherorg/BMS%20-%20Data/_git/api/pullrequest/7", pr_ref.PrRef(7, AdoRemote("otherorg", "BMS - Data", "api"))),
+        ("https://otherorg.visualstudio.com/Proj/_git/api/pullrequest/7?_a=files", pr_ref.PrRef(7, AdoRemote("otherorg", "Proj", "api"))),
+        ("https://otherorg.visualstudio.com/DefaultCollection/Proj/_git/api/pullrequest/7", pr_ref.PrRef(7, AdoRemote("otherorg", "Proj", "api"))),
+        ("https://github.com/other/api/pull/7", pr_ref.PrRef(7, GitHubRemote("other", "api"))),
+    ],
+)
+def test_parse_pr_ref_on_an_azure_devops_checkout(text, expected) -> None:
+    assert _parse(text, ADO_REMOTE) == expected
+
+
+@pytest.mark.parametrize("text", ["abc", "owner/repo", "owner/repo#", "a/b/c/d#1", "/repo#1", "https://example.com/x/y/pull/1", "https://github.com/o/r/issues/1"])
+def test_parse_pr_ref_rejects_what_is_not_a_pr(text) -> None:
+    with pytest.raises(pr_ref.PrRefError, match="can't read"):
+        _parse(text)
+
+
+def test_parse_pr_ref_three_part_shorthand_is_azure_devops_only() -> None:
+    with pytest.raises(pr_ref.PrRefError, match="owner/repo#N"):
+        _parse("a/b/c#1")
+
+
+def test_parse_pr_ref_shorthand_needs_a_checkout_but_a_url_does_not() -> None:
+    def no_checkout():
+        raise SystemExit("fatal: not a git repository")
+
+    with pytest.raises(pr_ref.PrRefError, match="use the PR's URL"):
+        pr_ref.parse_pr_ref("other/api#7", no_checkout)
+    assert pr_ref.parse_pr_ref("https://github.com/other/api/pull/7", no_checkout).pr_id == 7
+    assert pr_ref.parse_pr_ref("7", no_checkout).remote is None
+
+
+def test_split_values_takes_repeated_and_comma_separated() -> None:
+    assert pr_ref.split_values(["1, 2", "o/r#3", " ", "4,"]) == ["1", "2", "o/r#3", "4"]
+
+
+def _ref_cli(monkeypatch, missing: set[str] = frozenset()) -> list[tuple]:
+    """GitHub remote; PRs are answered per (owner/repo, number), those in `missing` fail like GitHub's 404 does."""
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
+    monkeypatch.setattr("bmsdna.devtools.cli._current_remote_or_none", lambda: GITHUB_REMOTE)
+
+    class Client:
+        def __init__(self, owner="owner", repo="repo"):
+            self.owner, self.repo = owner, repo
+
+        def for_repo(self, owner, repo):
+            return Client(owner, repo)
+
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: Client())
+    seen: list[tuple] = []
+
+    def get_pr(gh, pr_id=None, fields=""):
+        key = f"{gh.owner}/{gh.repo}#{pr_id}"
+        seen.append((gh.owner, gh.repo, pr_id))
+        if key in missing:
+            raise SystemExit(f"Pull request #{pr_id} not found in {gh.owner}/{gh.repo}")
+        return {**GH_PR, "number": pr_id, "title": f"PR {key}"}
+
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.get_pr", get_pr)
+    return seen
+
+
+def test_pr_id_single_cross_repo_entry_is_one_object_with_its_repo(monkeypatch) -> None:
+    seen = _ref_cli(monkeypatch)
+
+    result = runner.invoke(app, ["pr", "info", "--json", "--pr-id", "other/api#7"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["number"] == 7 and data["repo"] == "other/api" and data["title"] == "PR other/api#7"
+    assert seen == [("other", "api", 7)]
+
+
+def test_pr_id_several_entries_are_a_list_in_order_whatever_the_repo(monkeypatch) -> None:
+    seen = _ref_cli(monkeypatch)
+
+    result = runner.invoke(
+        app, ["pr", "info", "--json", "--pr-id", "5,other/api#7", "--pr-id", "https://github.com/third/web/pull/9", "--pr-id", "5"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [(d["repo"], d["number"]) for d in json.loads(result.output)] == [("owner/repo", 5), ("other/api", 7), ("third/web", 9)]
+    assert seen == [("owner", "repo", 5), ("other", "api", 7), ("third", "web", 9)]  # the duplicate asked once
+
+
+def test_pr_id_several_entries_text_names_the_repo(monkeypatch) -> None:
+    _ref_cli(monkeypatch)
+
+    result = runner.invoke(app, ["pr", "info", "--pr-id", "5", "--pr-id", "other/api#7"])
+
+    assert result.exit_code == 0, result.output
+    assert "PR owner/repo#5: PR owner/repo#5" in result.output and "PR other/api#7: " in result.output
+
+
+def test_pr_id_one_failing_entry_does_not_hide_the_others(monkeypatch) -> None:
+    _ref_cli(monkeypatch, missing={"other/api#7"})
+
+    result = runner.invoke(app, ["pr", "info", "--json", "--pr-id", "5", "--pr-id", "other/api#7", "--pr-id", "6"])
+
+    assert result.exit_code == 1
+    assert result.stdout.strip().startswith("[") and [d["number"] for d in json.loads(result.stdout.splitlines()[0])] == [5, 6]
+    assert "error: other/api#7: Pull request #7 not found in other/api" in result.stderr
+
+
+def test_pr_id_same_pr_twice_is_a_list_of_one_even_when_spelled_differently(monkeypatch) -> None:
+    seen = _ref_cli(monkeypatch)
+
+    for spec in ("5,5", "5,Owner/Repo#5", "5,https://github.com/owner/repo/pull/5", "x/y#1,X/Y#1"):
+        seen.clear()
+        result = runner.invoke(app, ["pr", "info", "--json", "--pr-id", spec])
+
+        assert result.exit_code == 0, result.output
+        assert len(json.loads(result.output)) == 1
+        assert len(seen) == 1
+
+
+def test_pr_id_unusable_checkout_only_fails_the_entries_that_need_it(monkeypatch) -> None:
+    seen = _ref_cli(monkeypatch)
+
+    def no_origin():
+        raise UnknownRemoteError("'x' doesn't look like a GitHub or Azure DevOps remote")
+
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", no_origin)
+    monkeypatch.setattr("bmsdna.devtools.cli._current_remote_or_none", lambda: None)
+
+    result = runner.invoke(app, ["pr", "info", "--json", "--pr-id", "5,https://github.com/other/api/pull/7"])
+
+    assert result.exit_code == 1
+    assert [d["number"] for d in json.loads(result.stdout.splitlines()[0])] == [7]
+    assert "error: #5: " in result.stderr
+    assert seen == [("other", "api", 7)]
+
+
+def test_current_remote_or_none_is_quiet_outside_a_checkout(tmp_path, monkeypatch, capfd) -> None:
+    from bmsdna.devtools import cli
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+
+    assert cli._current_remote_or_none() is None
+    assert capfd.readouterr().err == ""
+
+
+def test_pr_id_single_failing_cross_repo_entry_is_an_error_without_output(monkeypatch) -> None:
+    _ref_cli(monkeypatch, missing={"other/api#7"})
+
+    result = runner.invoke(app, ["pr", "info", "--json", "--pr-id", "other/api#7"])
+
+    assert result.exit_code == 1
+    assert result.stdout == "" and "error: other/api#7: " in result.stderr
+
+
+def test_pr_id_unreadable_entry_is_a_usage_error_before_any_lookup(monkeypatch) -> None:
+    seen = _ref_cli(monkeypatch)
+
+    result = runner.invoke(app, ["pr", "info", "--pr-id", "5", "--pr-id", "nonsense"])
+
+    assert result.exit_code == 2
+    assert seen == []
+
+
+def test_pr_id_on_azure_devops_resolves_each_repo(monkeypatch) -> None:
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
+    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    asked: list = []
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.pr_build.get_pr_by_id",
+        lambda session, remote, pr_id: asked.append((remote, pr_id)) or {**ADO_PR, "pullRequestId": pr_id},
+    )
+    _ado_builds(monkeypatch, [_build("completed", "succeeded")])
+
+    result = runner.invoke(app, ["pr", "info", "--json", "--pr-id", "42", "--pr-id", "Other/api#7"])
+
+    assert result.exit_code == 0, result.output
+    assert [d["repo"] for d in json.loads(result.output)] == ["myorg/MyProj/myrepo", "myorg/Other/api"]
+    assert asked == [(ADO_REMOTE, 42), (AdoRemote("myorg", "Other", "api"), 7)]
+
+
+def test_pr_id_cannot_be_combined_with_all() -> None:
+    assert runner.invoke(app, ["pr", "info", "--all", "--pr-id", "5"]).exit_code == 2
+    assert runner.invoke(app, ["pr", "info", "--all", "--pr-id", "o/r#5"]).exit_code == 2
+
+
+def test_github_client_for_repo_keeps_the_credentials() -> None:
+    from bmsdna.devtools.github_api import GitHubClient
+
+    other = GitHubClient("tok", "o", "r").for_repo("x", "y")
+
+    assert (other.owner, other.repo) == ("x", "y") and other.session.headers["Authorization"] == "Bearer tok"
 
 
 # -- bdt issue take ---------------------------------------------------------

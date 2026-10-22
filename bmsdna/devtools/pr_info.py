@@ -40,6 +40,7 @@ class PrInfo:
     draft: bool
     build: str
     issues: list[IssueRef] = field(default_factory=list)
+    repo: str = ""  # "owner/repo" (GitHub) or "org/project/repo" (Azure DevOps): which repo the PR is in
 
     def to_json_dict(self) -> dict:
         return asdict(self)
@@ -95,6 +96,7 @@ def github_info(pr: dict, remote: GitHubRemote) -> PrInfo:
         draft=bool(pr.get("isDraft")),
         build=build_state(pr.get("statusCheckRollup") or []),
         issues=issues,
+        repo=f"{remote.owner}/{remote.repo}",
     )
 
 
@@ -143,4 +145,5 @@ def ado_info(session: requests.Session, pr: dict, remote: AdoRemote) -> PrInfo:
         draft=bool(pr.get("isDraft")),
         build=_ado_build(session, remote, pr),
         issues=issues,
+        repo=f"{remote.org}/{remote.project}/{remote.repo}",
     )
