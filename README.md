@@ -118,7 +118,7 @@ from the latest build of each pipeline (any failed result fails it; unfinished b
 `--all` lists every open PR from the current branch (e.g. one into `dev` and one into `main`, which plain
 `bdt pr info` refuses to pick between): with `--json` an array of the same objects, `[]` (exit 0) when there is
 none; `--target-branch` narrows it, `--pr-id` can't be combined with it. Only open PRs are listed, and a PR with
-merge conflicts is listed like any other (plain `pr info` errors on it).
+merge conflicts is listed like any other (plain `pr info` on Azure DevOps errors on it).
 
 Azure DevOps limits: the PR is found by the current branch (into `--target-branch` if given, else any target),
 a PR with merge conflicts is reported as an error (exit 1) like `pr status` does, and the closed
