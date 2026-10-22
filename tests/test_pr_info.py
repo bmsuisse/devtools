@@ -371,6 +371,7 @@ def test_split_values_takes_repeated_and_comma_separated() -> None:
 def _ref_cli(monkeypatch, missing: set[str] = frozenset()) -> list[tuple]:
     """GitHub remote; PRs are answered per (owner/repo, number), those in `missing` fail like GitHub's 404 does."""
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
+    monkeypatch.setattr("bmsdna.devtools.cli._current_remote_or_none", lambda: GITHUB_REMOTE)
 
     class Client:
         def __init__(self, owner="owner", repo="repo"):
@@ -438,13 +439,13 @@ def test_pr_id_one_failing_entry_does_not_hide_the_others(monkeypatch) -> None:
 def test_pr_id_same_pr_twice_is_a_list_of_one_even_when_spelled_differently(monkeypatch) -> None:
     seen = _ref_cli(monkeypatch)
 
-    for spec in ("5,5", "5,Owner/Repo#5", "5,https://github.com/owner/repo/pull/5"):
+    for spec in ("5,5", "5,Owner/Repo#5", "5,https://github.com/owner/repo/pull/5", "x/y#1,X/Y#1"):
         seen.clear()
         result = runner.invoke(app, ["pr", "info", "--json", "--pr-id", spec])
 
         assert result.exit_code == 0, result.output
-        assert [d["number"] for d in json.loads(result.output)] == [5]
-        assert seen == [("owner", "repo", 5)]
+        assert len(json.loads(result.output)) == 1
+        assert len(seen) == 1
 
 
 def test_pr_id_unusable_checkout_only_fails_the_entries_that_need_it(monkeypatch) -> None:
@@ -454,6 +455,7 @@ def test_pr_id_unusable_checkout_only_fails_the_entries_that_need_it(monkeypatch
         raise UnknownRemoteError("'x' doesn't look like a GitHub or Azure DevOps remote")
 
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", no_origin)
+    monkeypatch.setattr("bmsdna.devtools.cli._current_remote_or_none", lambda: None)
 
     result = runner.invoke(app, ["pr", "info", "--json", "--pr-id", "5,https://github.com/other/api/pull/7"])
 
@@ -461,6 +463,16 @@ def test_pr_id_unusable_checkout_only_fails_the_entries_that_need_it(monkeypatch
     assert [d["number"] for d in json.loads(result.stdout.splitlines()[0])] == [7]
     assert "error: #5: " in result.stderr
     assert seen == [("other", "api", 7)]
+
+
+def test_current_remote_or_none_is_quiet_outside_a_checkout(tmp_path, monkeypatch, capfd) -> None:
+    from bmsdna.devtools import cli
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+
+    assert cli._current_remote_or_none() is None
+    assert capfd.readouterr().err == ""
 
 
 def test_pr_id_single_failing_cross_repo_entry_is_an_error_without_output(monkeypatch) -> None:

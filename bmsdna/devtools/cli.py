@@ -189,9 +189,13 @@ _REMOTE_ERRORS = (UnknownRemoteError, NotGitHubRemoteError, NotAzureDevOpsRemote
 
 
 def _current_remote_or_none() -> AdoRemote | GitHubRemote | None:
+    """The current repo's remote, or None outside a checkout -- without git's own complaint, as that is no error here."""
+    r = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, encoding="utf-8")
+    if r.returncode != 0:
+        return None
     try:
-        return current_remote()
-    except (SystemExit, *_REMOTE_ERRORS):
+        return parse_remote(r.stdout.strip())
+    except _REMOTE_ERRORS:
         return None
 
 
@@ -619,7 +623,10 @@ def pr_info(
             raise typer.BadParameter(str(e), param_hint="--pr-id") from None
         here = _current_remote_or_none() if any(r.remote for r in parsed) else None
         # `5,5` and `5,owner/repo#5` are still a list of what they name once
-        refs = list(dict.fromkeys(pr_ref.canonical(r, here) for r in parsed))
+        unique: dict[str, pr_ref.PrRef] = {}
+        for ref in (pr_ref.canonical(r, here) for r in parsed):
+            unique.setdefault(str(ref).casefold(), ref)
+        refs = list(unique.values())
     if all_prs and refs:
         raise typer.BadParameter("--all lists the PRs of the current branch, it can't be combined with --pr-id", param_hint="--all")
 
