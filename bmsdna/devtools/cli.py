@@ -170,6 +170,20 @@ def _current_pr_info(pr_id: int | None, target_branch: str | None, pat: str | No
     return pr_info_mod.ado_info(session, pr, remote)
 
 
+def _open_prs_info(target_branch: str | None, pat: str | None) -> list[pr_info_mod.PrInfo]:
+    """`_current_pr_info` for every open PR from the current branch, `[]` if there is none."""
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh = require_gh()
+        return [
+            pr_info_mod.github_info(gh_pr.get_pr(gh, number, fields=gh_pr.PR_INFO_FIELDS), remote)
+            for number in gh_pr.open_pr_numbers(gh, target_branch)
+        ]
+    session = requests.Session()
+    session.headers.update(auth_header(pat))
+    return [pr_info_mod.ado_info(session, pr, remote) for pr in pr_build.get_active_prs(session, remote, current_branch(), target_branch)]
+
+
 def _gh_branch_for(gh: GitHubClient, pr_id: int | None, *, needed: bool) -> str:
     """Branch to namespace uploaded screenshots/files under (see `gh_pr.push_assets`) --
     the checked-out branch normally, or (when acting on a PR by `--pr-id`, which may not
@@ -510,25 +524,42 @@ def pr_status(
     pr_build.run(remote, pat, target_branch, wait, pr_id=pr_id, timeout=timeout)
 
 
+def _info_text(info: pr_info_mod.PrInfo) -> str:
+    flags = ", ".join([info.state, *(["draft"] if info.draft else []), f"build: {info.build}"])
+    return "\n".join([f"PR #{info.number}: {info.title} ({flags})", info.url, *(f"Issue #{i.number}: {i.url}" for i in info.issues)])
+
+
 @pr_app.command("info")
 def pr_info(
     as_json: bool = typer.Option(False, "--json", help="Print machine-readable JSON (for status integrations that poll it)"),
     target_branch: str | None = typer.Option(None, "--target-branch", help=_LOOKUP_TARGET_HELP),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
+    all_prs: bool = typer.Option(
+        False,
+        "--all",
+        help="Every open PR from the current branch (e.g. one into dev and one into main) instead of exactly one: "
+        "with --json a list of the objects, [] and exit 0 when there is none",
+    ),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)"),
 ) -> None:
     """One-shot summary of the PR opened from the current branch, or --pr-id directly: link, state,
     aggregate build state, and the issue(s)/work item(s) it closes. Exits 1 if there is no such PR.
     Build state is judged the way `pr status` does (latest build per pipeline on Azure DevOps).
     """
+    if all_prs:
+        if pr_id is not None:
+            raise typer.BadParameter("--all lists the PRs of the current branch, it can't be combined with --pr-id", param_hint="--all")
+        infos = _open_prs_info(target_branch, pat)
+        if as_json:
+            typer.echo(json.dumps([i.to_json_dict() for i in infos]))
+        else:
+            typer.echo("\n\n".join(_info_text(i) for i in infos))
+        return
     info = _current_pr_info(pr_id, target_branch, pat)
     if as_json:
         typer.echo(json.dumps(info.to_json_dict()))
         return
-    flags = ", ".join([info.state, *(["draft"] if info.draft else []), f"build: {info.build}"])
-    typer.echo(f"PR #{info.number}: {info.title} ({flags})\n{info.url}")
-    for issue in info.issues:
-        typer.echo(f"Issue #{issue.number}: {issue.url}")
+    typer.echo(_info_text(info))
 
 
 @pr_app.command("retry")

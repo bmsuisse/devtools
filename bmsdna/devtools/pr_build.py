@@ -207,6 +207,25 @@ def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, tar
     sys.exit(1)
 
 
+def get_active_prs(session: requests.Session, remote: AdoRemote, source_branch: str, target_branch: str | None) -> list[dict]:
+    """Every active PR from `source_branch` (into `target_branch` if given); `[]` if there is none.
+
+    Unlike `get_pr` nothing is asked about and merge conflicts aren't an error: the caller wants the whole list.
+    """
+    r = session.get(
+        f"{_base_url(remote)}/_apis/git/repositories/{remote.repo}/pullrequests",
+        params={
+            "searchCriteria.sourceRefName": f"refs/heads/{source_branch}",
+            **({"searchCriteria.targetRefName": f"refs/heads/{target_branch}"} if target_branch else {}),
+            "searchCriteria.status": "active",
+            "api-version": "7.1",
+        },
+        timeout=HTTP_TIMEOUT_SECS,
+    )
+    r.raise_for_status()
+    return r.json().get("value", [])
+
+
 def get_pr_by_id(session: requests.Session, remote: AdoRemote, pr_id: int) -> dict:
     """Fetch a PR directly by its ID -- for `--pr-id` overrides, where the caller wants to act
     on a specific PR without needing its source branch checked out locally (unlike `get_pr`,

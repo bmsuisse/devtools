@@ -104,7 +104,7 @@ it watches a branch-triggered build/workflow run, not any particular PR.)
 ## `bdt pr info`
 
 ```bash
-bdt pr info [--json] [--pr-id N] [--target-branch BRANCH]
+bdt pr info [--json] [--pr-id N] [--target-branch BRANCH] [--all]
 ```
 
 One-shot summary of the current branch's PR: link, state (open/merged/closed, draft), aggregate
@@ -114,6 +114,11 @@ a status integration reads (e.g. the Claude Code mod planned in bmsuisse/skills#
 the check rollup (only a failed check fails it; skipped/cancelled ones don't count), on Azure DevOps
 from the latest build of each pipeline (any failed result fails it; unfinished builds are pending, or
 `waiting` when a stage needs approval). `unknown` if Azure DevOps can't be asked.
+
+`--all` lists every open PR from the current branch (e.g. one into `dev` and one into `main`, which plain
+`bdt pr info` refuses to pick between): with `--json` an array of the same objects, `[]` (exit 0) when there is
+none; `--target-branch` narrows it, `--pr-id` can't be combined with it. Only open PRs are listed, and a PR with
+merge conflicts is listed like any other (plain `pr info` errors on it).
 
 Azure DevOps limits: the PR is found by the current branch (into `--target-branch` if given, else any target),
 a PR with merge conflicts is reported as an error (exit 1) like `pr status` does, and the closed

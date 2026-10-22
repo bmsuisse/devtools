@@ -190,6 +190,121 @@ def test_pr_info_passes_pr_id(monkeypatch) -> None:
     assert seen == {"pr_id": 5}
 
 
+def _two_open_prs(monkeypatch) -> list[tuple]:
+    """GitHub remote whose branch has PRs 69 and 70 open; returns the `(number, target)` lookups made."""
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.open_pr_numbers", lambda gh, target=None: [69, 70])
+    seen: list[tuple] = []
+
+    def get_pr(gh, pr_id=None, fields=""):
+        seen.append(pr_id)
+        return {**GH_PR, "number": pr_id, "title": f"PR {pr_id}", "isDraft": pr_id == 70}
+
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.get_pr", get_pr)
+    return seen
+
+
+def test_pr_info_all_json_lists_every_open_pr(monkeypatch) -> None:
+    seen = _two_open_prs(monkeypatch)
+
+    result = runner.invoke(app, ["pr", "info", "--json", "--all"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert [(d["number"], d["title"], d["draft"]) for d in data] == [(69, "PR 69", False), (70, "PR 70", True)]
+    assert set(data[0]) == set(pr_info.PrInfo(1, "", "", "open", False, "none").to_json_dict())
+    assert seen == [69, 70]
+
+
+def test_pr_info_all_text_separates_the_prs(monkeypatch) -> None:
+    _two_open_prs(monkeypatch)
+
+    result = runner.invoke(app, ["pr", "info", "--all"])
+
+    assert result.exit_code == 0, result.output
+    first, second = result.output.strip().split("\n\n")
+    assert first.startswith("PR #69: PR 69") and second.startswith("PR #70: PR 70 (open, draft")
+
+
+def test_pr_info_all_without_pr_is_an_empty_list(monkeypatch) -> None:
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.open_pr_numbers", lambda gh, target=None: [])
+
+    result = runner.invoke(app, ["pr", "info", "--json", "--all"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == []
+
+
+def test_pr_info_all_passes_target_branch(monkeypatch) -> None:
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
+    targets: list = []
+    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.open_pr_numbers", lambda gh, target=None: targets.append(target) or [])
+
+    assert runner.invoke(app, ["pr", "info", "--json", "--all", "--target-branch", "main"]).exit_code == 0
+    assert targets == ["main"]
+
+
+def test_pr_info_all_rejects_pr_id(monkeypatch) -> None:
+    result = runner.invoke(app, ["pr", "info", "--all", "--pr-id", "5"])
+
+    assert result.exit_code != 0
+    assert "--pr-id" in result.output
+
+
+def test_pr_info_all_on_azure_devops_lists_active_prs(monkeypatch) -> None:
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
+    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feat/widgets")
+    asked: list = []
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.pr_build.get_active_prs",
+        lambda session, remote, source, target: asked.append((source, target)) or [ADO_PR, {**ADO_PR, "pullRequestId": 43}],
+    )
+    _ado_builds(monkeypatch, [_build("completed", "succeeded")])
+
+    result = runner.invoke(app, ["pr", "info", "--json", "--all", "--target-branch", "main"])
+
+    assert result.exit_code == 0, result.output
+    assert [d["number"] for d in json.loads(result.output)] == [42, 43]
+    assert asked == [("feat/widgets", "main")]
+
+
+def test_gh_open_pr_numbers_lists_open_prs_of_the_branch(monkeypatch) -> None:
+    from bmsdna.devtools import gh_pr
+
+    monkeypatch.setattr(gh_pr, "current_branch", lambda: "feat")
+    asked: list = []
+    monkeypatch.setattr(gh_pr, "_branch_prs", lambda gh, branch, state="all", base=None: asked.append((branch, state, base)) or [{"number": 3}, {"number": 2}])
+
+    assert gh_pr.open_pr_numbers(None, "main") == [3, 2]  # ty: ignore[invalid-argument-type]
+    assert asked == [("feat", "open", "main")]
+
+
+def test_ado_get_active_prs_asks_for_active_prs_of_the_branch() -> None:
+    from bmsdna.devtools import pr_build
+
+    class Session:
+        def get(self, url, params, timeout):
+            self.params = params
+
+            class R:
+                def raise_for_status(self): ...
+                def json(self):
+                    return {"value": [{"pullRequestId": 1}]}
+
+            return R()
+
+    session = Session()
+    assert pr_build.get_active_prs(session, ADO_REMOTE, "feat", None) == [{"pullRequestId": 1}]  # ty: ignore[invalid-argument-type]
+    assert session.params["searchCriteria.status"] == "active"
+    assert session.params["searchCriteria.sourceRefName"] == "refs/heads/feat"
+    assert "searchCriteria.targetRefName" not in session.params
+
+
 # -- bdt issue take ---------------------------------------------------------
 
 

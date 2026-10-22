@@ -170,6 +170,11 @@ def resolve_pr_id(gh: GitHubClient, pr_id: int | None, target: str | None = None
     return prs[choose_pr(branch, candidates)]["number"]
 
 
+def open_pr_numbers(gh: GitHubClient, target: str | None = None) -> list[int]:
+    """Numbers of every open PR from the current branch (into `target` if given), newest first; `[]` if there is none."""
+    return [p["number"] for p in _branch_prs(gh, current_branch(), state="open", base=target)]
+
+
 _CONTEXT_FIELDS = """
 fragment ContextFields on StatusCheckRollupContext {
   __typename
