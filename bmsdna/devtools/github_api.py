@@ -55,6 +55,7 @@ class GitHubClient:
 
     def __init__(self, token: str, owner: str | None = None, repo: str | None = None, base_url: str = API_URL) -> None:
         self.base_url = base_url.rstrip("/")
+        self._token = token
         self._owner = owner
         self._repo = repo
         self.session = requests.Session()
@@ -66,6 +67,10 @@ class GitHubClient:
                 "User-Agent": "bdt",
             }
         )
+
+    def for_repo(self, owner: str, repo: str) -> GitHubClient:
+        """The same credentials, addressing another repo."""
+        return GitHubClient(self._token, owner, repo, self.base_url)
 
     @property
     def owner(self) -> str:

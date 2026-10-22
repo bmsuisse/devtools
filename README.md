@@ -104,7 +104,7 @@ it watches a branch-triggered build/workflow run, not any particular PR.)
 ## `bdt pr info`
 
 ```bash
-bdt pr info [--json] [--pr-id N] [--target-branch BRANCH] [--all]
+bdt pr info [--json] [--pr-id PR]... [--target-branch BRANCH] [--all]
 ```
 
 One-shot summary of the current branch's PR: link, state (open/merged/closed, draft), aggregate
@@ -119,6 +119,19 @@ from the latest build of each pipeline (any failed result fails it; unfinished b
 `bdt pr info` refuses to pick between): with `--json` an array of the same objects, `[]` (exit 0) when there is
 none; `--target-branch` narrows it, `--pr-id` can't be combined with it. Only open PRs are listed, and a PR with
 merge conflicts is listed like any other (plain `pr info` on Azure DevOps errors on it).
+
+`--pr-id` takes several PRs, also of other repos: repeat it and/or comma-separate (`--pr-id 12,34 --pr-id owner/repo#5`).
+Each entry is a bare number (a PR of the current repo), `owner/repo#N` (GitHub), `project/repo#N` or
+`org/project/repo#N` (Azure DevOps; the host is the current repo's, and the org is its org unless given), or the PR's
+URL (GitHub, `dev.azure.com` or `*.visualstudio.com`; the only form that needs no git checkout). One plain number
+behaves as before: the single object. One `owner/repo#N` is a single object too; two or more entries print a list in the
+order given (duplicates once), as `--json` an array like `--all`'s, as text with the repo in each header. A failing entry
+(unknown number, no access) doesn't hide the others: it is reported as `error: <entry>: <reason>` on stderr, the rest is
+still printed, and the exit code is 1. An unreadable entry is a usage error before anything is looked up. `--pr-id` can't
+be combined with `--all`; `--target-branch` is ignored for it, as before. Azure DevOps entries use one PAT/`az login` for
+every org, and a PR with merge conflicts is an error entry there.
+
+Every JSON object has a `repo` (`owner/repo` on GitHub, `org/project/repo` on Azure DevOps).
 
 Azure DevOps limits: the PR is found by the current branch (into `--target-branch` if given, else any target),
 a PR with merge conflicts is reported as an error (exit 1) like `pr status` does, and the closed

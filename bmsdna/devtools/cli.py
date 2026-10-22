@@ -32,7 +32,7 @@ from . import find_injection as find_injection_mod
 from . import lint as lint_mod
 from . import logs as logs_mod
 from . import translate as translate_mod
-from . import pr_build, pr_info as pr_info_mod, pr_issue_link, pr_labels, pull as pull_mod, worktree as worktree_mod
+from . import pr_build, pr_info as pr_info_mod, pr_issue_link, pr_ref, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
 from .bdt_config import find_pyproject, load_bdt_table
 from .cli_tools import CLI_TIMEOUT_SECS, EXIT_WAIT_TIMEOUT, detect_agent_session, require_gh
@@ -182,6 +182,39 @@ def _open_prs_info(target_branch: str | None, pat: str | None) -> list[pr_info_m
     session = requests.Session()
     session.headers.update(auth_header(pat))
     return [pr_info_mod.ado_info(session, pr, remote) for pr in pr_build.get_active_prs(session, remote, current_branch(), target_branch)]
+
+
+def _ref_pr_info(ref: pr_ref.PrRef, pat: str | None, clients: dict) -> pr_info_mod.PrInfo:
+    """The PR `ref` names, in its own repo (the current one for a bare number). `clients` caches the GitHub client
+    and Azure DevOps session across the entries of one call, so the token and auth are looked up once."""
+    remote = ref.remote or current_remote()
+    if isinstance(remote, GitHubRemote):
+        base = clients.setdefault("gh", require_gh())
+        gh = base if ref.remote is None else base.for_repo(remote.owner, remote.repo)
+        return pr_info_mod.github_info(gh_pr.get_pr(gh, ref.pr_id, fields=gh_pr.PR_INFO_FIELDS), remote)
+    if "session" not in clients:
+        clients["session"] = requests.Session()
+        clients["session"].headers.update(auth_header(pat))
+    session = clients["session"]
+    return pr_info_mod.ado_info(session, pr_build.get_pr_by_id(session, remote, ref.pr_id), remote)
+
+
+def _failure_text(e: BaseException) -> str:
+    return str(e.code) if isinstance(e, SystemExit) and isinstance(e.code, str) else str(e) or type(e).__name__
+
+
+def _ref_infos(refs: list[pr_ref.PrRef], pat: str | None) -> tuple[list[pr_info_mod.PrInfo], list[str]]:
+    """`_ref_pr_info` for each of `refs`, in order: the PRs found and one message per entry that failed, so one
+    unreachable repo or unknown number doesn't hide the others."""
+    clients: dict = {}
+    infos: list[pr_info_mod.PrInfo] = []
+    errors: list[str] = []
+    for ref in refs:
+        try:
+            infos.append(_ref_pr_info(ref, pat, clients))
+        except (SystemExit, requests.RequestException, KeyError) as e:
+            errors.append(f"{ref}: {_failure_text(e)}")
+    return infos, errors
 
 
 def _gh_branch_for(gh: GitHubClient, pr_id: int | None, *, needed: bool) -> str:
@@ -524,16 +557,29 @@ def pr_status(
     pr_build.run(remote, pat, target_branch, wait, pr_id=pr_id, timeout=timeout)
 
 
-def _info_text(info: pr_info_mod.PrInfo) -> str:
+def _info_text(info: pr_info_mod.PrInfo, with_repo: bool = False) -> str:
     flags = ", ".join([info.state, *(["draft"] if info.draft else []), f"build: {info.build}"])
-    return "\n".join([f"PR #{info.number}: {info.title} ({flags})", info.url, *(f"Issue #{i.number}: {i.url}" for i in info.issues)])
+    name = f"PR {info.repo}#{info.number}" if with_repo and info.repo else f"PR #{info.number}"
+    return "\n".join([f"{name}: {info.title} ({flags})", info.url, *(f"Issue #{i.number}: {i.url}" for i in info.issues)])
+
+
+def _echo_infos(infos: list[pr_info_mod.PrInfo], as_json: bool, with_repo: bool) -> None:
+    if as_json:
+        typer.echo(json.dumps([i.to_json_dict() for i in infos]))
+    elif infos:
+        typer.echo("\n\n".join(_info_text(i, with_repo) for i in infos))
 
 
 @pr_app.command("info")
 def pr_info(
     as_json: bool = typer.Option(False, "--json", help="Print machine-readable JSON (for status integrations that poll it)"),
     target_branch: str | None = typer.Option(None, "--target-branch", help=_LOOKUP_TARGET_HELP),
-    pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
+    pr_ids: list[str] | None = typer.Option(
+        None,
+        "--pr-id",
+        help="Summarise this PR directly, instead of resolving it from the current git branch (lets you skip having its "
+        f"branch checked out locally). Repeat it (or comma-separate) for several, as a list; a PR of another repo is {pr_ref.FORMS}",
+    ),
     all_prs: bool = typer.Option(
         False,
         "--all",
@@ -545,17 +591,39 @@ def pr_info(
     """One-shot summary of the PR opened from the current branch, or --pr-id directly: link, state,
     aggregate build state, and the issue(s)/work item(s) it closes. Exits 1 if there is no such PR.
     Build state is judged the way `pr status` does (latest build per pipeline on Azure DevOps).
+
+    --all and several --pr-id values list PRs instead (with --json an array, whatever the count).
     """
+    refs: list[pr_ref.PrRef] = []
+    if pr_ids:
+        try:
+            refs = list(dict.fromkeys(pr_ref.parse_pr_ref(v, current_remote) for v in pr_ref.split_values(pr_ids)))
+        except pr_ref.PrRefError as e:
+            raise typer.BadParameter(str(e), param_hint="--pr-id") from None
+        if not refs:
+            raise typer.BadParameter("no PR given", param_hint="--pr-id")
+    if all_prs and refs:
+        raise typer.BadParameter("--all lists the PRs of the current branch, it can't be combined with --pr-id", param_hint="--all")
+
     if all_prs:
-        if pr_id is not None:
-            raise typer.BadParameter("--all lists the PRs of the current branch, it can't be combined with --pr-id", param_hint="--all")
-        infos = _open_prs_info(target_branch, pat)
-        if as_json:
-            typer.echo(json.dumps([i.to_json_dict() for i in infos]))
-        else:
-            typer.echo("\n\n".join(_info_text(i) for i in infos))
+        _echo_infos(_open_prs_info(target_branch, pat), as_json, with_repo=False)
         return
-    info = _current_pr_info(pr_id, target_branch, pat)
+    if len(refs) > 1:
+        infos, errors = _ref_infos(refs, pat)
+        _echo_infos(infos, as_json, with_repo=True)
+        for error in errors:
+            typer.echo(f"error: {error}", err=True)
+        if errors:
+            raise typer.Exit(1)
+        return
+    if refs and refs[0].remote is not None:
+        infos, errors = _ref_infos(refs, pat)
+        if errors:
+            typer.echo(f"error: {errors[0]}", err=True)
+            raise typer.Exit(1)
+        info = infos[0]
+    else:
+        info = _current_pr_info(refs[0].pr_id if refs else None, target_branch, pat)
     if as_json:
         typer.echo(json.dumps(info.to_json_dict()))
         return

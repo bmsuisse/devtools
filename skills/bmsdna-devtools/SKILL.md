@@ -141,13 +141,16 @@ the command's own timeout (or run it in the background) longer than `--timeout`.
 ## PR summary
 
 ```bash
-bdt pr info [--json] [--all]
+bdt pr info [--json] [--all] [--pr-id PR]...
 ```
 
 PR link, state, aggregate build state and the issue(s) it closes, in one call -- cheaper than
 `bdt pr status` when you only need to know where things stand. Exits 1 if the branch has no PR.
 `--all` lists every open PR of the branch instead (a JSON array with `--json`, `[]` when there is none), for a branch
 with several PRs, e.g. into `dev` and `main`, where plain `pr info` has to ask which one.
+`--pr-id` (repeatable, comma-separated) names PRs directly, also of other repos: a number, `owner/repo#N` (GitHub),
+`project/repo#N` (Azure DevOps) or the PR's URL; two or more give a list, and a failing entry is an `error:` line on
+stderr with exit 1 while the others are still printed. Every JSON object carries its `repo`.
 (`bdt pr status --wait` is still what to use to wait for CI.)
 
 ## Creating a worktree
