@@ -1,6 +1,10 @@
+import shutil
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
+
+import pytest
+import requests
 
 from bmsdna.devtools.ado_issue import get_details, search
 from bmsdna.devtools.business_user import (
@@ -39,6 +43,7 @@ def _entitlements(licenses: dict[str, str | int]) -> MagicMock:
         outcome = licenses.get(identity_id, 404)
         response = MagicMock()
         response.status_code = outcome if isinstance(outcome, int) else 200
+        response.ok = response.status_code < 400
         response.json.return_value = {"accessLevel": {"accountLicenseType": outcome}} if isinstance(outcome, str) else {}
         return response
 
@@ -96,6 +101,28 @@ def test_get_license_is_none_when_the_api_refuses() -> None:
     assert get_license(_entitlements({}), REMOTE, "sales-id") is None
 
 
+@pytest.mark.parametrize("status", [429, 500, 503])
+def test_get_license_is_none_when_the_api_is_down_or_throttling(status: int) -> None:
+    assert get_license(_entitlements({"sales-id": status}), REMOTE, "sales-id") is None
+
+
+def test_get_license_is_none_when_the_api_cannot_be_reached() -> None:
+    session = MagicMock()
+    session.get.side_effect = requests.ConnectionError("boom")
+
+    assert get_license(session, REMOTE, "sales-id") is None
+
+
+def test_get_license_cannot_be_pointed_at_another_path_by_the_identity_id() -> None:
+    session = _entitlements({})
+
+    get_license(session, REMOTE, "../../_apis/x?y=1#z")
+
+    url = session.get.call_args.args[0]
+    assert url.startswith("https://vsaex.dev.azure.com/myorg/_apis/userentitlements/")
+    assert url.count("/") == 6 and "?" not in url and "#" not in url
+
+
 def test_get_license_calls_the_entitlement_api_of_the_org() -> None:
     session = _entitlements({"sales-id": "express"})
 
@@ -110,55 +137,57 @@ AUTHORS = CommitAuthors(emails=frozenset({"dev@example.com"}), names=frozenset({
 
 
 def test_classify_stakeholder_is_a_business_user_whatever_the_commits() -> None:
-    assert classify("stakeholder", AUTHORS, "dev@example.com", None) == Verdict(True, "Stakeholder license")
+    assert classify("stakeholder", lambda: AUTHORS, "dev@example.com", None) == Verdict(True, "Stakeholder license")
 
 
 def test_classify_licensed_user_with_commits_is_not_a_business_user() -> None:
-    assert classify("basic", AUTHORS, "dev@example.com", None).business_user is False
-    assert classify(None, AUTHORS, None, "Dora Dev").business_user is False  # matched by name when the email differs
+    assert classify("basic", lambda: AUTHORS, "dev@example.com", None).business_user is False
+    assert classify(None, lambda: AUTHORS, None, "Dora Dev").business_user is False  # matched by name when the email differs
 
 
 def test_classify_licensed_user_without_commits_is_a_business_user() -> None:
-    verdict = classify("basic", AUTHORS, "sales@example.com", "Sam Sales")
+    verdict = classify("basic", lambda: AUTHORS, "sales@example.com", "Sam Sales")
 
     assert verdict.business_user is True
     assert "no commits in the last 1000" in verdict.reason
 
 
 def test_classify_is_unknown_without_a_license_stakeholder_answer_and_without_history() -> None:
-    assert classify("basic", None, "sales@example.com", None).business_user is None
-    assert classify(None, None, "sales@example.com", None).business_user is None
+    assert classify("basic", lambda: None, "sales@example.com", None).business_user is None
+    assert classify(None, lambda: None, "sales@example.com", None).business_user is None
 
 
 # -- BusinessUserDetector ----------------------------------------------------------
 
 
-def test_detector_falls_back_to_commits_when_the_entitlement_api_refuses(tmp_path: Path) -> None:
-    repo = _repo_with_commits(tmp_path, [("Dora Dev", "dev@example.com")])
-    detector = BusinessUserDetector(_entitlements({"dev-id": 403, "sales-id": 403}), REMOTE, repo_dir=repo)
+def test_detector_falls_back_to_commits_when_the_entitlement_api_refuses(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(_repo_with_commits(tmp_path, [("Dora Dev", "dev@example.com")]))
+    detector = BusinessUserDetector(_entitlements({"dev-id": 403, "sales-id": 403}), REMOTE)
 
     assert detector.verdict(DEV).business_user is False
     assert detector.verdict(SALES).business_user is True
 
 
-def test_detector_stakeholder_needs_no_git_history(tmp_path: Path) -> None:
-    detector = BusinessUserDetector(_entitlements({"sales-id": "stakeholder"}), REMOTE, repo_dir=tmp_path)  # not a git repo
+def test_detector_stakeholder_needs_no_git_history(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)  # not a git repo
+    detector = BusinessUserDetector(_entitlements({"sales-id": "stakeholder"}), REMOTE)
 
     assert detector.verdict(SALES) == Verdict(True, "Stakeholder license")
 
 
 def test_detector_asks_each_license_and_reads_the_history_once(tmp_path: Path, monkeypatch) -> None:
     repo = _repo_with_commits(tmp_path, [("Dora Dev", "dev@example.com")])
+    monkeypatch.chdir(repo)
     session = _entitlements({"dev-id": "advanced"})
-    reads: list[int] = []
-    monkeypatch.setattr("bmsdna.devtools.business_user.read_commit_authors", lambda depth, cwd: reads.append(depth) or AUTHORS)
-    detector = BusinessUserDetector(session, REMOTE, repo_dir=repo)
+    detector = BusinessUserDetector(session, REMOTE)
+    first = detector.verdict(DEV)
 
-    for _ in range(3):
-        detector.verdict(DEV)
+    shutil.rmtree(repo / ".git")  # a second history read would now find nothing
+    again = [detector.verdict(DEV) for _ in range(2)]
 
+    assert first.business_user is False
+    assert again == [first, first]
     assert session.get.call_count == 1
-    assert reads == [1000]
 
 
 def test_detector_without_a_creator_is_unknown() -> None:
@@ -168,8 +197,8 @@ def test_detector_without_a_creator_is_unknown() -> None:
 # -- search / show integration -------------------------------------------------------
 
 
-def test_search_business_users_keeps_only_items_created_by_business_users(tmp_path: Path, capsys) -> None:
-    repo = _repo_with_commits(tmp_path, [("Dora Dev", "dev@example.com")])
+def test_search_business_users_keeps_only_items_created_by_business_users(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.chdir(_repo_with_commits(tmp_path, [("Dora Dev", "dev@example.com")]))
     session = _entitlements({"dev-id": "advanced", "sales-id": "stakeholder"})
     session.post.return_value.json.return_value = {"workItems": [{"id": 1}, {"id": 2}]}
     work_items = {
@@ -190,7 +219,7 @@ def test_search_business_users_keeps_only_items_created_by_business_users(tmp_pa
 
     session.get.side_effect = get
 
-    items = search(session, REMOTE, [], business_users=BusinessUserDetector(session, REMOTE, repo_dir=repo))
+    items = search(session, REMOTE, [], business_users=BusinessUserDetector(session, REMOTE))
 
     assert [i["id"] for i in items] == [2]
     assert "Sales'" in capsys.readouterr().out
@@ -241,3 +270,38 @@ def test_format_details_shows_a_developer_creator_and_an_unknown_one() -> None:
 
     assert "Created by: Dora (developer: advanced license, has commits)" in format_details(developer)
     assert "Created by: Dora (unknown: license unknown, commit history unavailable)" in format_details(unknown)
+
+
+def test_read_commit_authors_survives_unicode_line_separators_in_names(tmp_path: Path) -> None:
+    repo = _repo_with_commits(tmp_path, [("A\u2028B", "ab@example.com"), ("Müller", "mueller@example.com")])
+
+    authors = read_commit_authors(depth=10, cwd=repo)
+
+    assert authors is not None
+    assert authors.contains("mueller@example.com", None) and authors.contains(None, "müller")
+
+
+def test_get_license_is_none_for_a_body_that_is_not_json() -> None:
+    session = MagicMock()
+    session.get.return_value.status_code = 200
+    session.get.return_value.json.side_effect = ValueError("<html>sign in</html>")
+
+    assert get_license(session, REMOTE, "sales-id") is None
+
+
+def test_detector_does_not_judge_service_identities() -> None:
+    build_service = {"id": "svc", "uniqueName": "Build\\5b1f", "displayName": "Project Collection Build Service (myorg)"}
+
+    assert BusinessUserDetector(_entitlements({}), REMOTE).verdict(build_service) == Verdict(None, "not a person")
+
+
+def test_search_business_users_returns_at_most_top_items(monkeypatch) -> None:
+    session = MagicMock()
+    session.post.return_value.json.return_value = {"workItems": [{"id": i} for i in range(1, 21)]}
+    session.get.return_value.json.return_value = {
+        "value": [{"id": i, "fields": {"System.Title": "t", "System.State": "New", "System.CreatedBy": SALES}} for i in range(1, 21)]
+    }
+    detector = BusinessUserDetector(session, REMOTE)
+    monkeypatch.setattr(detector, "verdict", lambda creator: Verdict(True, "x"))
+
+    assert len(search(session, REMOTE, [], top=3, business_users=detector)) == 3

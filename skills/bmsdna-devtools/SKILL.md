@@ -97,7 +97,7 @@ session-link comment instead.
 ## Reading and linking an issue
 
 ```bash
-bdt issue show 1234 [--json]        # state, description, tags, area/iteration, links (parent/children/blocked by/blocks), comments
+bdt issue show 1234 [--json]        # state, description, tags, area/iteration, links (parent/children/blocked by/blocks), comments, creator + business-user verdict (Azure DevOps)
 bdt issue create --title "..." --parent 1200 --blocked-by 1210 [--iteration 'Project\Sprint 1']
 bdt issue update 1234 --parent 1200 --blocked-by 1210 [--iteration 'Project\Sprint 1']
 ```

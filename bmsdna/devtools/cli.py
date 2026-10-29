@@ -984,6 +984,8 @@ def issue_search(
         raise typer.BadParameter("Must be one of: open, closed, all", param_hint="--state")
     if business_user and org_wide:
         raise typer.BadParameter("--business-user checks the commits of this repo, so it can't be combined with --org-wide", param_hint="--business-user")
+    if commit_depth != business_user_mod.DEFAULT_COMMIT_DEPTH and not business_user:
+        raise typer.BadParameter("--commit-depth only works together with --business-user", param_hint="--commit-depth")
     if take and not for_me:
         raise typer.BadParameter("--take only works together with --for-me", param_hint="--take")
     if take and limit < 1:
@@ -1026,12 +1028,16 @@ def issue_search(
     else:
         remote = current_remote()
 
+    if business_user and isinstance(remote, GitHubRemote):
+        raise typer.BadParameter("--business-user is only available for Azure DevOps work items", param_hint="--business-user")
+    # one detector for all polls of --wait: it caches the git history and the licenses it asked for
+    detector: business_user_mod.BusinessUserDetector | None = None
+
     def search_once() -> tuple[list[dict], tuple[AdoRemote | GitHubRemote, int] | None]:
         """One search (the backend prints the matches, or "No matching ...", itself); with the first match's
         remote and number, which is where `--take` claims it."""
+        nonlocal detector
         if isinstance(remote, GitHubRemote):
-            if business_user:
-                raise typer.BadParameter("--business-user is only available for Azure DevOps work items", param_hint="--business-user")
             resolved_board = gh_issue.resolve_board(board)
             items = gh_issue.search(
                 require_gh(), remote.owner, remote.repo, keywords or [], since, limit, state, board=resolved_board, org_wide=org_wide, labels=tags_or_labels, **search_extra
@@ -1042,7 +1048,8 @@ def issue_search(
             session.headers.update(auth_header(pat))
             resolved_board = ado_issue.resolve_board(board)
             if business_user:
-                search_extra["business_users"] = business_user_mod.BusinessUserDetector(session, remote, commit_depth)
+                detector = detector or business_user_mod.BusinessUserDetector(session, remote, commit_depth)
+                search_extra["business_users"] = detector
             items = ado_issue.search(
                 session, remote, keywords or [], since=since, board=resolved_board, top=limit, state=state, org_wide=org_wide, tags=tags_or_labels, **search_extra
             )

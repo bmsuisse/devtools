@@ -315,8 +315,10 @@ adds/edits/deletes comments on one, auto-detected from `origin` like `bdt pr
 `issue show NUMBER` prints one issue / work item: state, title, URL, description, tags, links to other
 issues (parent, children, blocked by, blocks; related on Azure DevOps), the Azure DevOps Type / Area /
 Iteration / Assigned to (GitHub: assignees, milestone) and all comments (Azure DevOps HTML is shown as plain
-text). `--json` prints the same as one JSON document (`number, title, state, url, body, tags, fields,
-parent, children, blocked_by, blocks, related, comments`).
+text). On Azure DevOps it also prints `Created by:` with whether the creator is a business user (see
+[`bdt issue search --business-user`](#bdt-issue-search---business-user)). `--json` prints the same as one JSON
+document (`number, title, state, url, body, tags, fields, parent, children, blocked_by, blocks, related,
+comments, created_by, business_user, business_user_reason`; the last three are `null` on GitHub).
 
 `--parent ID` and `--blocked-by ID` (repeatable) on `create` and `update` link the item to its parent and to
 the issues / work items that block it, on both backends. On `update` only the links that are missing are
@@ -536,8 +538,9 @@ A creator is a business user when
    also decides when the license can't be read (missing PAT scope, ...) -- the license is then "unknown"; it is
    not an error.
 
-The commit check matches the creator's email, else display name, against the authors and committers of those
-commits (`.mailmap` applied). A developer whose last commit is older than that window, or who works in other
+The commit check matches the creator's email, else display name (a heuristic: two people sharing a name are
+taken for one), against the authors and committers of those commits (`.mailmap` applied). Identities that are
+not a person (build service, service accounts: no email as `uniqueName`) stay "unknown". A developer whose last commit is older than that window, or who works in other
 repos, counts as a business user here. A shallow clone with less history than `--commit-depth` can't say who never
 committed, so the creator stays "unknown" and is not returned by `--business-user`. `issue show` prints the reason
 next to the creator -- `business user`, `developer` or `unknown` -- and `--json` has `created_by`, `business_user`

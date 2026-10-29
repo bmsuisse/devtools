@@ -13,8 +13,11 @@ reachable the license is treated as unknown and only the commit check decides.
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
+from urllib.parse import quote
 
 import requests
 
@@ -23,8 +26,6 @@ from .gitrepo import AdoRemote
 DEFAULT_COMMIT_DEPTH = 1000
 STAKEHOLDER = "stakeholder"
 _ENTITLEMENT_API_VERSION = "7.1-preview.3"
-# Statuses that mean "this token may not (or cannot) ask", not "the user doesn't exist"
-_UNAVAILABLE_STATUSES = (401, 403, 404)
 
 
 @dataclass(frozen=True)
@@ -50,15 +51,21 @@ class CommitAuthors:
 def read_commit_authors(depth: int = DEFAULT_COMMIT_DEPTH, cwd: Path | None = None) -> CommitAuthors | None:
     """The authors of the last `depth` commits of the repo at `cwd`, or None when that history can't tell who never
     committed: not a git repo, or a shallow clone that has fewer than `depth` commits."""
-    # %aE/%aN/%cE/%cN honour .mailmap
+    # %aE/%aN/%cE/%cN honour .mailmap; \x1f can't occur in a name, and a name can't hold a newline
     log = subprocess.run(
-        ["git", "log", "-n", str(depth), "--format=%aE%x09%aN%x09%cE%x09%cN"], capture_output=True, text=True, cwd=cwd, check=False
+        ["git", "log", "-n", str(depth), "--format=%aE%x1f%aN%x1f%cE%x1f%cN"],
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=cwd,
+        check=False,
     )
     if log.returncode != 0:
         return None
-    rows = [line.split("\t") for line in log.stdout.splitlines() if line]
-    shallow = subprocess.run(["git", "rev-parse", "--is-shallow-repository"], capture_output=True, text=True, cwd=cwd, check=False)
-    if shallow.stdout.strip() == "true" and len(rows) < depth:
+    rows = [fields for line in log.stdout.split("\n") if len(fields := line.split("\x1f")) == 4]
+    # `--is-shallow-repository` needs git 2.15; the shallow file's presence works everywhere
+    shallow_file = subprocess.run(["git", "rev-parse", "--git-path", "shallow"], capture_output=True, text=True, cwd=cwd, check=False)
+    if shallow_file.returncode == 0 and (cwd or Path()).joinpath(shallow_file.stdout.strip()).exists() and len(rows) < depth:
         return None
     return CommitAuthors(
         emails=frozenset(v.casefold() for row in rows for v in (row[0], row[2]) if v),
@@ -69,22 +76,33 @@ def read_commit_authors(depth: int = DEFAULT_COMMIT_DEPTH, cwd: Path | None = No
 
 def get_license(session: requests.Session, remote: AdoRemote, identity_id: str) -> str | None:
     """The account license type of an identity, lowercased (`stakeholder`, `express`, `advanced`, `none`, ...), or None
-    when the entitlement API doesn't answer (missing PAT scope, user not in the org, ...)."""
-    r = session.get(
-        f"https://vsaex.dev.azure.com/{remote.org}/_apis/userentitlements/{identity_id}",
-        params={"api-version": _ENTITLEMENT_API_VERSION},
-    )
-    if r.status_code in _UNAVAILABLE_STATUSES:
+    when the entitlement API doesn't answer (missing PAT scope, user not in the org, outage, ...): the license is
+    optional enrichment, and the commit check still has a say without it."""
+    try:
+        r = session.get(
+            f"https://vsaex.dev.azure.com/{remote.org}/_apis/userentitlements/{quote(identity_id, safe='')}",
+            params={"api-version": _ENTITLEMENT_API_VERSION},
+        )
+    except requests.RequestException:
         return None
-    r.raise_for_status()
-    license_type = (r.json().get("accessLevel") or {}).get("accountLicenseType")
-    return license_type.casefold() if license_type else None
+    if r.status_code != 200:
+        return None
+    try:
+        body = r.json()
+    except ValueError:  # e.g. an HTML sign-in page for a PAT that may not use this API
+        return None
+    license_type = ((body.get("accessLevel") if isinstance(body, dict) else None) or {}).get("accountLicenseType")
+    return license_type.casefold() if isinstance(license_type, str) else None
 
 
-def classify(license_type: str | None, authors: CommitAuthors | None, email: str | None, name: str | None) -> Verdict:
-    """Stakeholder license -> business user; else, no commit by this person in `authors` -> business user."""
+def classify(
+    license_type: str | None, read_authors: Callable[[], CommitAuthors | None], email: str | None, name: str | None
+) -> Verdict:
+    """Stakeholder license -> business user; else, no commit by this person in `read_authors()` (only called when the
+    license doesn't settle it) -> business user."""
     if license_type == STAKEHOLDER:
         return Verdict(True, "Stakeholder license")
+    authors = read_authors()
     known_license = f"{license_type} license" if license_type else "license unknown"
     if authors is None:
         return Verdict(None, f"{known_license}, commit history unavailable")
@@ -95,24 +113,17 @@ def classify(license_type: str | None, authors: CommitAuthors | None, email: str
 
 class BusinessUserDetector:
     """Judges work item creators (the `System.CreatedBy` identity dict), looking up each license once and reading
-    the git history once per detector."""
+    the git history of the current directory's repo once per detector."""
 
-    def __init__(
-        self, session: requests.Session, remote: AdoRemote, commit_depth: int = DEFAULT_COMMIT_DEPTH, repo_dir: Path | None = None
-    ) -> None:
+    def __init__(self, session: requests.Session, remote: AdoRemote, commit_depth: int = DEFAULT_COMMIT_DEPTH) -> None:
         self._session = session
         self._remote = remote
         self._commit_depth = commit_depth
-        self._repo_dir = repo_dir
-        self._authors: CommitAuthors | None = None
-        self._authors_read = False
         self._licenses: dict[str, str | None] = {}
 
+    @cached_property
     def _commit_authors(self) -> CommitAuthors | None:
-        if not self._authors_read:
-            self._authors = read_commit_authors(self._commit_depth, self._repo_dir)
-            self._authors_read = True
-        return self._authors
+        return read_commit_authors(self._commit_depth)
 
     def _license(self, identity_id: str | None) -> str | None:
         if not identity_id:
@@ -121,11 +132,13 @@ class BusinessUserDetector:
             self._licenses[identity_id] = get_license(self._session, self._remote, identity_id)
         return self._licenses[identity_id]
 
-    def verdict(self, creator: dict | str | None) -> Verdict:
+    def verdict(self, creator: dict | None) -> Verdict:
         """`creator` is the `System.CreatedBy` field: an identity dict (`id`, `uniqueName`, `displayName`)."""
         if not isinstance(creator, dict):
             return Verdict(None, "creator unknown")
-        license_type = self._license(creator.get("id"))
-        if license_type == STAKEHOLDER:
-            return classify(license_type, None, None, None)
-        return classify(license_type, self._commit_authors(), creator.get("uniqueName"), creator.get("displayName"))
+        if "@" not in (creator.get("uniqueName") or ""):
+            # build service, service accounts, ...: no license, no commits, and not someone to ask questions
+            return Verdict(None, "not a person")
+        identity_id = creator.get("id")
+        license_type = self._license(identity_id if isinstance(identity_id, str) else None)
+        return classify(license_type, lambda: self._commit_authors, creator.get("uniqueName"), creator.get("displayName"))

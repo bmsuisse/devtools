@@ -798,6 +798,8 @@ def search(
     items = get_work_items(session, remote, ids, org_wide=org_wide, with_creator=business_users is not None)
     if business_users:
         items = [i for i in items if business_users.verdict(i["fields"].get("System.CreatedBy")).business_user]
+        if not comment_filter:
+            items = items[:top]
     if comment_filter:
         items = _filter_by_last_comment(session, remote, items, top, comment_filter)
     for item in items:
