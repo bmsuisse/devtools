@@ -6,6 +6,7 @@ from bmsdna.devtools.issue_watch import (
     MAX_CONSECUTIVE_ERRORS,
     Comment,
     build_accept,
+    follow,
     format_comment,
     html_to_text,
     poll_until,
@@ -53,6 +54,10 @@ def sequence(*polls):
 
 def run(fetch, clock: FakeClock, **kwargs):
     return watch(fetch, sleep=clock.sleep, clock=clock.clock, log=lambda msg: None, **kwargs)
+
+
+def run_follow(fetch, clock: FakeClock, **kwargs):
+    return follow(fetch, sleep=clock.sleep, clock=clock.clock, log=lambda msg: None, **kwargs)
 
 
 def test_returns_comment_that_arrives_after_start() -> None:
@@ -234,3 +239,69 @@ def test_to_comments_converts_html_only_when_asked() -> None:
     raw = [{"id": "3", "author": "a", "created_at": "t", "url": "u", "body": "<div>x</div>"}]
     assert to_comments(raw)[0].body == "<div>x</div>"
     assert to_comments(raw, is_html=True) == [Comment(3, "a", "t", "u", "x")]
+
+
+# -- follow --------------------------------------------------------------------------
+
+
+def test_follow_yields_each_new_batch_once() -> None:
+    clock = FakeClock()
+    fetch = sequence([c(1)], [c(1)], [c(1), c(2), c(3)], [c(1), c(2), c(3)], [c(1), c(2), c(3), c(4)])
+
+    batches = run_follow(fetch, clock, timeout=100, interval=10)
+
+    assert [[x.id for x in batch] for batch in batches] == [[2, 3], [4]]
+
+
+def test_follow_does_not_reevaluate_comments_it_rejected() -> None:
+    clock = FakeClock()
+    seen: list[int] = []
+
+    def accept(comment: Comment) -> bool:
+        seen.append(comment.id)
+        return comment.id == 3
+
+    fetch = sequence([c(1)], [c(1), c(2)], [c(1), c(2), c(3)])
+
+    batches = list(run_follow(fetch, clock, accept=accept, timeout=60, interval=10))
+
+    assert [[x.id for x in batch] for batch in batches] == [[3]]
+    assert seen == [2, 3]
+
+
+def test_follow_ends_at_the_timeout() -> None:
+    clock = FakeClock()
+
+    batches = list(run_follow(sequence([c(1)]), clock, timeout=50, interval=20))
+
+    assert batches == []
+    assert clock.now - 1000.0 == 50
+
+
+def test_follow_without_timeout_keeps_going_until_the_consumer_stops() -> None:
+    clock = FakeClock()
+    polls = [[c(1)]] + [[c(i) for i in range(1, n + 2)] for n in range(1, 50)]
+    stream = run_follow(sequence(*polls), clock, interval=5)
+
+    first_three = [next(stream)[0].id for _ in range(3)]
+
+    assert first_three == [2, 3, 4]
+
+
+def test_follow_since_id_reports_earlier_comments_first() -> None:
+    clock = FakeClock()
+    fetch = sequence([c(1), c(2), c(3)], [c(1), c(2), c(3), c(4)])
+
+    batches = list(run_follow(fetch, clock, since_id=1, timeout=30, interval=10))
+
+    assert [[x.id for x in batch] for batch in batches] == [[2, 3], [4]]
+
+
+def test_follow_survives_a_transient_error_but_raises_repeated_ones() -> None:
+    clock = FakeClock()
+    fetch = sequence([c(1)], RuntimeError("blip"), [c(1), c(2)])
+    assert [[x.id for x in b] for b in run_follow(fetch, clock, timeout=30, interval=10)] == [[2]]
+
+    clock = FakeClock()
+    with pytest.raises(RuntimeError):
+        list(run_follow(sequence([c(1)], *[RuntimeError("down")] * MAX_CONSECUTIVE_ERRORS), clock, timeout=500, interval=10))

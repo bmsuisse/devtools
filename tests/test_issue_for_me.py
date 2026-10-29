@@ -678,16 +678,18 @@ def _comment(id: int, body: str = "answer", author: str = "alice") -> Comment:
     return Comment(id, author, "2026-10-13T08:00:00Z", f"https://example.test/{id}", body)
 
 
-def _patch_watch(monkeypatch, comments: list[Comment] | None, remote=None) -> dict:
+def _patch_watch(monkeypatch, comments: list[Comment] | list[list[Comment]] | None, remote=None) -> dict:
+    """Patch the CLI's `follow`; `comments` is one batch (a list of Comments), several batches (a list of lists) or None for none."""
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote or GitHubRemote("o", "r"))
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     captured: dict = {}
+    batches = [] if not comments else comments if isinstance(comments[0], list) else [comments]
 
-    def fake_watch(fetch, *, since_id=None, accept=None, interval=20.0, timeout=None, **kwargs):
+    def fake_follow(fetch, *, since_id=None, accept=None, interval=20.0, timeout=None, **kwargs):
         captured.update(fetch=fetch, since_id=since_id, accept=accept, interval=interval, timeout=timeout)
-        return comments
+        return iter(batches)
 
-    monkeypatch.setattr("bmsdna.devtools.cli.issue_watch_mod.watch", fake_watch)
+    monkeypatch.setattr("bmsdna.devtools.cli.issue_watch_mod.follow", fake_follow)
     return captured
 
 
@@ -726,6 +728,46 @@ def test_issue_watch_timeout_zero_means_no_timeout(monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert captured["timeout"] is None
+
+
+def test_issue_watch_returns_after_the_first_batch(monkeypatch) -> None:
+    _patch_watch(monkeypatch, [[_comment(5, "one")], [_comment(6, "two")]])
+
+    result = runner.invoke(app, ["issue", "watch", "84", "--json"], catch_exceptions=False)
+
+    assert [json.loads(line)["id"] for line in result.stdout.splitlines()] == [5]
+
+
+def test_issue_watch_follow_prints_every_batch_and_exits_zero(monkeypatch) -> None:
+    _patch_watch(monkeypatch, [[_comment(5, "one")], [_comment(6, "two"), _comment(7, "three")]])
+
+    result = runner.invoke(app, ["issue", "watch", "84", "--follow", "--json"], catch_exceptions=False)
+
+    assert result.exit_code == 0, result.output
+    assert [json.loads(line)["id"] for line in result.stdout.splitlines()] == [5, 6, 7]
+
+
+def test_issue_watch_follow_without_batches_is_not_a_timeout(monkeypatch) -> None:
+    _patch_watch(monkeypatch, None)
+
+    result = runner.invoke(app, ["issue", "watch", "84", "--follow", "--timeout", "1"])
+
+    assert result.exit_code == 0, result.output
+    assert "No new comment" not in result.output
+
+
+def test_issue_watch_follow_defaults_to_no_timeout(monkeypatch) -> None:
+    captured = _patch_watch(monkeypatch, None)
+    runner.invoke(app, ["issue", "watch", "84", "--follow"])
+    assert captured["timeout"] is None
+
+    captured = _patch_watch(monkeypatch, None)
+    runner.invoke(app, ["issue", "watch", "84"])
+    assert captured["timeout"] == issue_watch_mod.DEFAULT_TIMEOUT
+
+    captured = _patch_watch(monkeypatch, None)
+    runner.invoke(app, ["issue", "watch", "84", "--follow", "--timeout", "30"])
+    assert captured["timeout"] == 30
 
 
 def test_watch_issue_alias(monkeypatch) -> None:

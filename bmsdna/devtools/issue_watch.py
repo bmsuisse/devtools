@@ -3,6 +3,7 @@
 Lets an agent ask a question in an issue and wait for the answer: post the question with
 `bdt issue comment add`, then `bdt issue watch` returns (exit 0) with the comment(s) that came in
 since -- or exits `EXIT_TIMEOUT` if none did within `--timeout`.
+With `--follow` it keeps streaming every new comment instead of returning after the first batch.
 
 Everything here is backend-agnostic: the caller injects a `fetch` that lists the issue's comments
 (`gh_issue.list_comments` / `ado_issue.list_comments`), plus the clock and `sleep` in tests.
@@ -15,7 +16,7 @@ import json
 import re
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass
 
 from .agent_mentions import mentions_agent
@@ -111,6 +112,49 @@ def poll_until[T](
             sleep(interval)
 
 
+def follow(
+    fetch: Callable[[], list[Comment]],
+    *,
+    since_id: int | None = None,
+    accept: Callable[[Comment], bool] = lambda c: True,
+    interval: float = DEFAULT_INTERVAL,
+    timeout: float | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+    log: Callable[[str], None] = lambda msg: print(msg, file=sys.stderr, flush=True),
+) -> Iterator[list[Comment]]:
+    """Poll `fetch` every `interval` seconds and yield each batch of comments newer than the baseline that `accept`
+    (oldest first), until `timeout` seconds (None = never) pass.
+
+    The baseline is `since_id` (a comment id: everything after it counts, even if it was already
+    posted before the watch started) or, by default, the newest comment existing at the start. It moves
+    past every comment seen, so nothing is yielded twice and nothing posted between two batches is lost.
+    """
+    baseline = since_id
+
+    def probe() -> list[Comment] | None:
+        nonlocal baseline
+        comments = fetch()
+        if baseline is None:
+            baseline = max((c.id for c in comments), default=0)
+            return None
+        newer = [c for c in comments if c.id > baseline]
+        if newer:
+            baseline = max(c.id for c in newer)
+        return [c for c in newer if accept(c)] or None
+
+    deadline = None if timeout is None else clock() + timeout
+    while True:
+        remaining = None if deadline is None else deadline - clock()
+        if remaining is not None and remaining <= 0:
+            return
+        batch = poll_until(probe, interval=interval, timeout=remaining, sleep=sleep, clock=clock, log=log)
+        if batch is None:
+            return
+        yield batch
+        sleep(interval)
+
+
 def watch(
     fetch: Callable[[], list[Comment]],
     *,
@@ -122,23 +166,8 @@ def watch(
     clock: Callable[[], float] = time.monotonic,
     log: Callable[[str], None] = lambda msg: print(msg, file=sys.stderr, flush=True),
 ) -> list[Comment] | None:
-    """Poll `fetch` every `interval` seconds until comments newer than the baseline that `accept`
-    appear; return them (oldest first). None when `timeout` seconds (None = never) pass first.
-
-    The baseline is `since_id` (a comment id: everything after it counts, even if it was already
-    posted before the watch started) or, by default, the newest comment existing at the start.
-    """
-    baseline = since_id
-
-    def probe() -> list[Comment] | None:
-        nonlocal baseline
-        comments = fetch()
-        if baseline is None:
-            baseline = max((c.id for c in comments), default=0)
-            return None
-        return [c for c in comments if c.id > baseline and accept(c)] or None
-
-    return poll_until(probe, interval=interval, timeout=timeout, sleep=sleep, clock=clock, log=log)
+    """The first batch of `follow`; None when `timeout` seconds (None = never) pass without one."""
+    return next(follow(fetch, since_id=since_id, accept=accept, interval=interval, timeout=timeout, sleep=sleep, clock=clock, log=log), None)
 
 
 def html_to_text(text: str) -> str:

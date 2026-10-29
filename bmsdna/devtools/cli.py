@@ -1288,7 +1288,18 @@ def _capture(cmd: list[str]) -> subprocess.CompletedProcess | None:
 def issue_watch(
     number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
     interval: float = typer.Option(issue_watch_mod.DEFAULT_INTERVAL, "--interval", help="Seconds between polls"),
-    timeout: float = typer.Option(issue_watch_mod.DEFAULT_TIMEOUT, "--timeout", help="Give up after this many seconds (0 = wait forever); exits 4 on timeout"),
+    timeout: float | None = typer.Option(
+        None,
+        "--timeout",
+        help=f"Give up after this many seconds (0 = wait forever; default {issue_watch_mod.DEFAULT_TIMEOUT:g}, or 0 with --follow); exits 4 on timeout, "
+        "except with --follow, where reaching it ends the stream normally",
+    ),
+    follow: bool = typer.Option(
+        False,
+        "--follow",
+        help="Keep running and print every new comment as it arrives instead of exiting after the first batch -- "
+        "for a background process whose output lines are notifications (e.g. Claude Code's Monitor tool)",
+    ),
     since_comment: int | None = typer.Option(
         None,
         "--since-comment",
@@ -1312,8 +1323,11 @@ def issue_watch(
 ) -> None:
     """Wait for new comments on an issue / work item -- so an agent can ask a question in the issue and
     block until someone answers. Prints the new comment(s) and exits 0; exits 4 if none arrived within
-    --timeout. Progress notes go to stderr, so stdout holds only the comments (JSON lines with --json).
+    --timeout. With --follow it keeps printing every new comment instead. Progress notes go to stderr, so
+    stdout holds only the comments (JSON lines with --json).
     """
+    if timeout is None:
+        timeout = 0 if follow else issue_watch_mod.DEFAULT_TIMEOUT
     _check_poll_options(interval, timeout)
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
@@ -1336,14 +1350,19 @@ def issue_watch(
         own_author=_current_user(remote) if skip_own and own_session is None else None,
     )
     typer.echo(f"Watching #{number} for new comments (every {interval:g}s, {f'up to {timeout:g}s' if timeout else 'no timeout'})", err=True)
-    new = issue_watch_mod.watch(fetch, since_id=since_comment, accept=accept, interval=interval, timeout=timeout or None)
-    if new is None:
+    batches = issue_watch_mod.follow(fetch, since_id=since_comment, accept=accept, interval=interval, timeout=timeout or None)
+    reported = False
+    for batch in batches:
+        reported = True
+        for comment in batch:
+            typer.echo(issue_watch_mod.format_comment(comment, as_json=as_json))
+            if not as_json:
+                typer.echo("")
+        if not follow:
+            return
+    if not reported and not follow:
         typer.echo(f"No new comment on #{number} within {timeout:g}s", err=True)
         raise typer.Exit(issue_watch_mod.EXIT_TIMEOUT)
-    for comment in new:
-        typer.echo(issue_watch_mod.format_comment(comment, as_json=as_json))
-        if not as_json:
-            typer.echo("")
 
 
 issue_app.command("watch")(issue_watch)

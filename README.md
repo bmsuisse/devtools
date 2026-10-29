@@ -456,7 +456,7 @@ at this?` on an issue, and the agent finds it; the agent asks a question in an i
 
 ```bash
 bdt issue search --for-me [--agent claude] [--state all] [--limit 10] [--take] [--wait [--timeout 900] [--interval 20]]
-bdt issue watch 84 [--timeout 900] [--interval 20] [--since-comment ID] [--for-me] [--skip-own] [--json]
+bdt issue watch 84 [--timeout 900] [--interval 20] [--since-comment ID] [--for-me] [--skip-own] [--follow] [--json]
 ```
 
 **`issue search --for-me`** only keeps issues (GitHub) / work items (Azure DevOps) whose **last comment**
@@ -510,6 +510,10 @@ bdt issue comment add 84 --message "@aersam Should this also cover Azure DevOps?
 bdt issue watch 84 --since-comment 123 --skip-own --json --timeout 1800
 ```
 
+- `--follow` doesn't exit after the first batch: it keeps polling and prints every new comment as it arrives
+  (`--timeout` then defaults to `0`, i.e. forever; reaching an explicit one ends the stream with exit 0, not 4). Nothing
+  posted between two polls is lost or printed twice. It is meant for a background process whose output lines are
+  notifications, e.g. Claude Code's `Monitor` tool: `bdt issue watch 84 --follow --skip-own --json` (one line per comment).
 - `--for-me` only reports new comments that address the calling agent (same matching and `--agent` as `search`).
 - `--skip-own` ignores comments this agent wrote itself: those carrying its session note (bdt appends
   `<Agent> Session: <id>` to every comment it posts under an agent) or, outside an agent, those authored by the
