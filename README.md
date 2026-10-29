@@ -1,7 +1,7 @@
 # bmsdna-devtools
 
 Shared developer tooling for BMS projects: PR build/check status and a
-one-shot PR summary (`bdt pr info`), PR creation, claiming an issue (`bdt issue take`), issue/work item creation and comments, finding issues addressed to an agent (`bdt issue search --for-me`) and waiting for new comments (`bdt issue watch`), git worktrees (creation and
+one-shot PR summary (`bdt pr info`), PR creation, claiming an issue (`bdt issue take`), issue/work item creation and comments, finding issues addressed to an agent (`bdt issue search --for-me`), finding issues filed by business users (`bdt issue search --business-user`) and waiting for new comments (`bdt issue watch`), git worktrees (creation and
 merged-worktree/orphaned-test-DB cleanup), a commit-and-push helper with
 pre-flight checks, Azure log queries, and static checks (`bdt lint`) for
 postgres/psycopg (and arrowbricks) SQL rules, pydantic-model placement, hand-wired HTTP access in
@@ -517,6 +517,32 @@ bdt issue watch 84 --since-comment 123 --skip-own --json --timeout 1800
   stderr, so stdout holds only the comments.
 - A single failed poll (network blip, API error) is retried; three in a row abort with the error.
 - On Azure DevOps only the newest 100 comments of a work item are looked at per poll.
+
+## `bdt issue search --business-user`
+
+Business users file work items too, often with vague wording, and those need a different handling than a
+developer's. `--business-user` (Azure DevOps only) keeps the work items **created by a business user**:
+
+```bash
+bdt issue search --business-user [--commit-depth 1000] [--tag needs-techie] [--for-me] [--state open] ...
+bdt issue show 1234        # also prints: Created by: Sam Sales (business user: Stakeholder license)
+```
+
+A creator is a business user when
+
+1. their license is **Stakeholder** (Member Entitlement API; needs a PAT with the *Member Entitlement
+   Management (read)* scope), or
+2. they authored **none of the last `--commit-depth` commits** (default 1000) of the repo you run `bdt` in. This
+   also decides when the license can't be read (missing PAT scope, ...) -- the license is then "unknown"; it is
+   not an error.
+
+The commit check matches the creator's email, else display name, against the authors and committers of those
+commits (`.mailmap` applied). A developer whose last commit is older than that window, or who works in other
+repos, counts as a business user here. A shallow clone with less history than `--commit-depth` can't say who never
+committed, so the creator stays "unknown" and is not returned by `--business-user`. `issue show` prints the reason
+next to the creator -- `business user`, `developer` or `unknown` -- and `--json` has `created_by`, `business_user`
+and `business_user_reason`. `--business-user` can't be combined with `--org-wide` (the commit check is about this
+repo's history).
 
 ## `bdt env get-keys`
 

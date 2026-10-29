@@ -27,6 +27,7 @@ from . import find_repo as find_repo_mod
 from . import issue_do as issue_do_mod
 from . import issue_watch as issue_watch_mod
 from . import gh_issue, gh_pr
+from . import business_user as business_user_mod
 from . import issue_show as issue_show_mod
 from . import find_injection as find_injection_mod
 from . import lint as lint_mod
@@ -926,6 +927,19 @@ def issue_search(
         envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
         help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
     ),
+    business_user: bool = typer.Option(
+        False,
+        "--business-user",
+        help="Azure DevOps only: only work items created by a business user -- someone with a Stakeholder license, or "
+        "(when the license can't be read, or isn't Stakeholder) with no commit in the last --commit-depth commits of "
+        "this repo. The license lookup needs a PAT with the 'Member Entitlement Management (read)' scope.",
+    ),
+    commit_depth: int = typer.Option(
+        business_user_mod.DEFAULT_COMMIT_DEPTH,
+        "--commit-depth",
+        min=1,
+        help="With --business-user: how many of the latest commits of this repo count when checking whether a creator ever committed",
+    ),
     for_me: bool = typer.Option(
         False,
         "--for-me",
@@ -968,6 +982,8 @@ def issue_search(
     """
     if state not in ("open", "closed", "all"):
         raise typer.BadParameter("Must be one of: open, closed, all", param_hint="--state")
+    if business_user and org_wide:
+        raise typer.BadParameter("--business-user checks the commits of this repo, so it can't be combined with --org-wide", param_hint="--business-user")
     if take and not for_me:
         raise typer.BadParameter("--take only works together with --for-me", param_hint="--take")
     if take and limit < 1:
@@ -1014,6 +1030,8 @@ def issue_search(
         """One search (the backend prints the matches, or "No matching ...", itself); with the first match's
         remote and number, which is where `--take` claims it."""
         if isinstance(remote, GitHubRemote):
+            if business_user:
+                raise typer.BadParameter("--business-user is only available for Azure DevOps work items", param_hint="--business-user")
             resolved_board = gh_issue.resolve_board(board)
             items = gh_issue.search(
                 require_gh(), remote.owner, remote.repo, keywords or [], since, limit, state, board=resolved_board, org_wide=org_wide, labels=tags_or_labels, **search_extra
@@ -1023,6 +1041,8 @@ def issue_search(
             session = requests.Session()
             session.headers.update(auth_header(pat))
             resolved_board = ado_issue.resolve_board(board)
+            if business_user:
+                search_extra["business_users"] = business_user_mod.BusinessUserDetector(session, remote, commit_depth)
             items = ado_issue.search(
                 session, remote, keywords or [], since=since, board=resolved_board, top=limit, state=state, org_wide=org_wide, tags=tags_or_labels, **search_extra
             )
@@ -1343,7 +1363,7 @@ def issue_show(
     else:
         session = requests.Session()
         session.headers.update(auth_header(pat))
-        details = ado_issue.get_details(session, remote, number)
+        details = ado_issue.get_details(session, remote, number, business_user_mod.BusinessUserDetector(session, remote))
     typer.echo(issue_show_mod.format_details(details, as_json=as_json))
 
 

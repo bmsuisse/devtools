@@ -417,7 +417,7 @@ def test_issue_show_ado(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
     captured: dict = {}
 
-    def fake_get_details(session, remote, number):
+    def fake_get_details(session, remote, number, business_users=None):
         captured.update(remote=remote, number=number)
         return IssueDetails(number=number, title="Task", state="Active", url="u", body="", tags=[], fields={"Iteration": "MyProj\\Sprint 1"})
 
