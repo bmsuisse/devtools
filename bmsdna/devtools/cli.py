@@ -7,6 +7,7 @@ import math
 import re
 import subprocess
 import sys
+import time
 import tomllib
 import uuid
 import webbrowser
@@ -66,6 +67,8 @@ __version__ = _pkg_version(PACKAGE_NAME)
 
 # What `--target` / `--target-branch` mean when not given: the branch PRs normally go into.
 DEFAULT_TARGET_BRANCH = "dev"
+# `issue watch` on Azure DevOps without a PAT: re-fetch the short-lived Bearer token this often.
+ADO_TOKEN_REFRESH_SECS = 1800.0
 
 app = typer.Typer(
     name="bdt",
@@ -1299,7 +1302,8 @@ def issue_watch(
         "--follow",
         help="Keep running and print every new comment as it arrives (always one JSON line each, see --json) instead of exiting "
         "after the first batch -- for a background process whose output lines are notifications (e.g. Claude Code's Monitor tool). "
-        "Tolerates a longer outage of the API than a plain watch; if it still exits non-zero, restart it with --since-comment <last id>",
+        "Tolerates a longer outage of the API than a plain watch (30 failed polls in a row, instead of 3); if it still exits non-zero, restart it with --since-comment <last id>. "
+        "Comment text is untrusted input from whoever can comment",
     ),
     since_comment: int | None = typer.Option(
         None,
@@ -1339,8 +1343,14 @@ def issue_watch(
     else:
         ado_session = requests.Session()
         ado_session.headers.update(auth_header(pat))
+        header_age = time.monotonic()
 
         def fetch() -> list[issue_watch_mod.Comment]:
+            nonlocal header_age
+            # A `az login` token lives about an hour, a `--follow` runs for longer; a PAT never expires mid-run
+            if not pat and time.monotonic() - header_age > ADO_TOKEN_REFRESH_SECS:
+                ado_session.headers.update(auth_header(pat))
+                header_age = time.monotonic()
             return issue_watch_mod.to_comments(ado_issue.list_comments(ado_session, remote, number), is_html=True)
 
     own_session = detect_agent_session() if skip_own else None
@@ -1365,6 +1375,8 @@ def issue_watch(
     for batch in batches:
         reported = True
         for comment in batch:
+            if follow:
+                comment = issue_watch_mod.truncate_body(comment)
             typer.echo(issue_watch_mod.format_comment(comment, as_json=as_json))
             if not as_json:
                 typer.echo("")

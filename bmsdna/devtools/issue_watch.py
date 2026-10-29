@@ -17,7 +17,7 @@ import re
 import sys
 import time
 from collections.abc import Callable, Iterator
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 
 from .agent_mentions import mentions_agent
 
@@ -25,7 +25,7 @@ from .agent_mentions import mentions_agent
 # Deliberately not 1 (an error), 2 (usage error, Click/Typer) or 3 (`pr status --wait`: needs approval).
 EXIT_TIMEOUT = 4
 
-# Defaults of `--interval` / `--timeout` of `issue watch` and `issue search --wait`.
+# Defaults of `--interval` / `--timeout` of `issue watch` and `issue search --wait` (`issue watch --follow` defaults to no timeout).
 DEFAULT_INTERVAL = 20.0
 DEFAULT_TIMEOUT = 900.0
 
@@ -36,6 +36,14 @@ FOLLOW_MAX_CONSECUTIVE_ERRORS = 30
 
 _HTML_BREAK_RE = re.compile(r"(?i)<br\s*/?>|</(?:div|p|li)>")
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+# Text a human never sees in the rendered comment but an agent reading the raw body would: HTML comments (Markdown and HTML)
+# and the contents of <style> / <script> elements.
+_HIDDEN_RE = re.compile(r"(?is)<!--.*?-->|<(style|script)\b[^>]*>.*?</\1\s*>")
+# Comment bodies are pushed to an agent unattended by `--follow`: cap what one comment can cost.
+MAX_FOLLOW_BODY = 4000
+# Besides \n and \r, JSON leaves these raw with ensure_ascii=False although line splitters (str.splitlines, Node readline)
+# treat them as line ends, which would turn one comment into several notifications.
+_LINE_SEPARATORS = {"\u2028": "\\u2028", "\u2029": "\\u2029", "\x85": "\\u0085"}
 
 
 @dataclass(frozen=True)
@@ -49,7 +57,7 @@ class Comment:
 
 def to_comments(raw: list[dict], *, is_html: bool = False) -> list[Comment]:
     """The backends' `list_comments` dicts as `Comment`s; `is_html` converts Azure DevOps's HTML bodies to text."""
-    return [Comment(int(c["id"]), c["author"], c["created_at"], c["url"], html_to_text(c["body"]) if is_html else c["body"]) for c in raw]
+    return [Comment(int(c["id"]), c["author"], c["created_at"], c["url"], html_to_text(c["body"]) if is_html else strip_hidden(c["body"])) for c in raw]
 
 
 def build_accept(
@@ -178,13 +186,26 @@ def watch(
     return next(follow(fetch, since_id=since_id, accept=accept, interval=interval, timeout=timeout, sleep=sleep, clock=clock, log=log), None)
 
 
+def strip_hidden(text: str) -> str:
+    """`text` without HTML comments and <style> / <script> elements: invisible when rendered, so a reader of the raw body must not see them either."""
+    return _HIDDEN_RE.sub("", text)
+
+
 def html_to_text(text: str) -> str:
-    """An Azure DevOps comment (HTML) as plain text; GitHub comments (Markdown) pass through unchanged."""
-    return html_lib.unescape(_HTML_TAG_RE.sub("", _HTML_BREAK_RE.sub("\n", text))).strip()
+    """An Azure DevOps comment (HTML) as plain text, without what is invisible when rendered; GitHub comments (Markdown) are only `strip_hidden`."""
+    return html_lib.unescape(_HTML_TAG_RE.sub("", _HTML_BREAK_RE.sub("\n", strip_hidden(text)))).strip()
+
+
+def truncate_body(comment: Comment, limit: int = MAX_FOLLOW_BODY) -> Comment:
+    """`comment` with a body longer than `limit` characters cut short, saying so and where to read the rest."""
+    if len(comment.body) <= limit:
+        return comment
+    return replace(comment, body=f"{comment.body[:limit]}... [truncated, {len(comment.body) - limit} more characters, see {comment.url}]")
 
 
 def format_comment(comment: Comment, *, as_json: bool = False) -> str:
     """One comment as a JSON line (`as_json`) or a short human-readable block."""
     if as_json:
-        return json.dumps(asdict(comment), ensure_ascii=False)
+        line = json.dumps(asdict(comment), ensure_ascii=False)
+        return line.translate(str.maketrans(_LINE_SEPARATORS))
     return f"Comment #{comment.id} by {comment.author} at {comment.created_at}\n{comment.url}\n\n{comment.body}"

@@ -797,6 +797,49 @@ def test_issue_watch_follow_tolerates_a_longer_outage_than_a_plain_watch(monkeyp
     assert captured["max_errors"] == issue_watch_mod.MAX_CONSECUTIVE_ERRORS
 
 
+def test_issue_watch_follow_truncates_huge_bodies_but_plain_watch_does_not(monkeypatch) -> None:
+    big = "y" * (issue_watch_mod.MAX_FOLLOW_BODY + 500)
+    _patch_watch(monkeypatch, [_comment(5, big)])
+    followed = runner.invoke(app, ["issue", "watch", "84", "--follow"], catch_exceptions=False)
+    assert "500 more characters" in json.loads(followed.stdout)["body"]
+
+    _patch_watch(monkeypatch, [_comment(5, big)])
+    plain = runner.invoke(app, ["issue", "watch", "84", "--json"], catch_exceptions=False)
+    assert json.loads(plain.stdout)["body"] == big
+
+
+def test_issue_watch_ado_refreshes_a_stale_bearer_token_but_not_a_pat(monkeypatch) -> None:
+    ado = REMOTE
+    monkeypatch.delenv("AZURE_DEVOPS_EXT_PAT", raising=False)
+    monkeypatch.delenv("AZURE_DEVOPS_PAT", raising=False)
+    clock = {"now": 1000.0}
+    monkeypatch.setattr("bmsdna.devtools.cli.time.monotonic", lambda: clock["now"])
+    headers: list[str] = []
+
+    def fake_auth_header(pat):
+        headers.append("x")
+        return {}
+
+    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", fake_auth_header)
+    captured = _patch_watch(monkeypatch, None, remote=ado)
+    monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.list_comments", lambda *a, **k: [])
+
+    runner.invoke(app, ["issue", "watch", "84", "--follow"])
+    fetch = captured["fetch"]
+    fetch()
+    assert len(headers) == 1  # fetched at startup, still fresh
+    clock["now"] += 1801
+    fetch()
+    assert len(headers) == 2  # refreshed
+
+    headers.clear()
+    captured = _patch_watch(monkeypatch, None, remote=ado)
+    runner.invoke(app, ["issue", "watch", "84", "--follow", "--pat", "secret"])
+    clock["now"] += 99999
+    captured["fetch"]()
+    assert len(headers) == 1  # a PAT is never re-derived
+
+
 def test_watch_issue_alias(monkeypatch) -> None:
     _patch_watch(monkeypatch, [_comment(5)])
     assert runner.invoke(app, ["watch-issue", "84"]).exit_code == 0
