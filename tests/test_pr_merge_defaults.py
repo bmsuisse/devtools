@@ -61,3 +61,13 @@ def test_configured_list_replaces_the_default() -> None:
     opts = PrCreateOptions()
     apply_merge_defaults(opts, "ado", "dev", ("trunk",))
     assert (opts.squash, opts.delete_source_branch) == (True, True)
+
+
+def test_long_lived_match_ignores_case_and_ref_prefix(tmp_path) -> None:
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.pr]\nlong_lived_branches = ["refs/heads/trunk"]\n')
+    configured = long_lived_branches(tmp_path)
+    assert configured == ("trunk",)
+    for source in ("trunk", "Trunk"):
+        opts = PrCreateOptions()
+        apply_merge_defaults(opts, "ado", source, configured)
+        assert (opts.squash, opts.delete_source_branch) == (None, None)

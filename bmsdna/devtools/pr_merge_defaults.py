@@ -26,7 +26,7 @@ def long_lived_branches(start: Path | None = None) -> tuple[str, ...]:
     raw = load_bdt_table("pr", start).get("long_lived_branches")
     if not isinstance(raw, list) or not all(isinstance(name, str) for name in raw):
         return DEFAULT_LONG_LIVED_BRANCHES
-    return tuple(raw)
+    return tuple(name.removeprefix("refs/heads/") for name in raw)
 
 
 def apply_merge_defaults(options: PrCreateOptions, host: Host, source_branch: str, long_lived: tuple[str, ...]) -> None:
@@ -36,7 +36,8 @@ def apply_merge_defaults(options: PrCreateOptions, host: Host, source_branch: st
     DevOps takes both as completion options; GitHub has no per-PR delete-branch switch and only uses `squash` to pick
     the method of an auto-merge.
     """
-    if source_branch in long_lived:
+    # Azure DevOps resolves branch names case-insensitively, so `--head Dev` is still `dev`
+    if source_branch.lower() in {name.lower() for name in long_lived}:
         return
     if options.squash is None and (host == "ado" or options.auto_complete):
         options.squash = True
