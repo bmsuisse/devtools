@@ -3,6 +3,7 @@ import json
 import pytest
 
 from bmsdna.devtools.issue_watch import (
+    FOLLOW_MAX_CONSECUTIVE_ERRORS,
     MAX_CONSECUTIVE_ERRORS,
     Comment,
     build_accept,
@@ -305,3 +306,42 @@ def test_follow_survives_a_transient_error_but_raises_repeated_ones() -> None:
     clock = FakeClock()
     with pytest.raises(RuntimeError):
         list(run_follow(sequence([c(1)], *[RuntimeError("down")] * MAX_CONSECUTIVE_ERRORS), clock, timeout=500, interval=10))
+
+
+def test_follow_polls_once_more_at_the_deadline_after_a_batch() -> None:
+    clock = FakeClock()
+    # batch at t=0+interval, then the next poll lands exactly on the deadline and still sees comment 3
+    fetch = sequence([c(1)], [c(1), c(2)], [c(1), c(2), c(3)])
+
+    batches = list(run_follow(fetch, clock, timeout=20, interval=10))
+
+    assert [[x.id for x in batch] for batch in batches] == [[2], [3]]
+
+
+def test_follow_never_sleeps_past_the_deadline_after_a_batch() -> None:
+    clock = FakeClock()
+    fetch = sequence([c(1)], [c(1), c(2)], [c(1), c(2)])
+
+    list(run_follow(fetch, clock, timeout=15, interval=10))
+
+    assert clock.now - 1000.0 <= 15
+
+
+def test_follow_with_zero_timeout_polls_once() -> None:
+    clock = FakeClock()
+
+    batches = list(run_follow(sequence([c(1), c(2)]), clock, since_id=1, timeout=0))
+
+    assert [[x.id for x in batch] for batch in batches] == [[2]]
+
+
+def test_follow_error_budget_is_configurable_for_long_runs() -> None:
+    errors = [RuntimeError("down")] * (MAX_CONSECUTIVE_ERRORS + 5)
+    clock = FakeClock()
+    fetch = sequence([c(1)], *errors, [c(1), c(2)])
+    first = next(run_follow(fetch, clock, interval=10, max_errors=FOLLOW_MAX_CONSECUTIVE_ERRORS))
+    assert [x.id for x in first] == [2]
+
+    clock = FakeClock()
+    with pytest.raises(RuntimeError):
+        list(run_follow(sequence([c(1)], *errors), clock, interval=10))

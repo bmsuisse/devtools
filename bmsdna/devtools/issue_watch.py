@@ -31,6 +31,8 @@ DEFAULT_TIMEOUT = 900.0
 
 # Consecutive failed polls tolerated before giving up: a long watch shouldn't die of one network blip.
 MAX_CONSECUTIVE_ERRORS = 3
+# `follow` runs for hours in the background: a VPN drop or rate-limit blip must not end it (30 polls = 10 min at the default interval).
+FOLLOW_MAX_CONSECUTIVE_ERRORS = 30
 
 _HTML_BREAK_RE = re.compile(r"(?i)<br\s*/?>|</(?:div|p|li)>")
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
@@ -81,12 +83,13 @@ def poll_until[T](
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
     log: Callable[[str], None] = lambda msg: print(msg, file=sys.stderr, flush=True),
+    max_errors: int = MAX_CONSECUTIVE_ERRORS,
 ) -> T | None:
     """Call `probe` (immediately, then every `interval` seconds) until it returns something other than None;
     return that. None when `timeout` seconds (None = never) pass first. The timeout only stops *new* polls: a probe
     already running when it passes is not cut off, and a match it returns is still returned.
 
-    A failing probe is retried, `MAX_CONSECUTIVE_ERRORS` failures in a row are raised: a long poll
+    A failing probe is retried, `max_errors` failures in a row are raised: a long poll
     shouldn't die of one network blip, but must not turn a persistent failure into "nothing found".
     """
     deadline = None if timeout is None else clock() + timeout
@@ -97,9 +100,9 @@ def poll_until[T](
             errors = 0
         except (Exception, SystemExit) as e:
             errors += 1
-            if errors >= MAX_CONSECUTIVE_ERRORS:
+            if errors >= max_errors:
                 raise
-            log(f"Polling failed ({e}); retrying ({errors}/{MAX_CONSECUTIVE_ERRORS - 1})")
+            log(f"Polling failed ({e}); retrying ({errors}/{max_errors - 1})")
         else:
             if result is not None:
                 return result
@@ -122,6 +125,7 @@ def follow(
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
     log: Callable[[str], None] = lambda msg: print(msg, file=sys.stderr, flush=True),
+    max_errors: int = MAX_CONSECUTIVE_ERRORS,
 ) -> Iterator[list[Comment]]:
     """Poll `fetch` every `interval` seconds and yield each batch of comments newer than the baseline that `accept`
     (oldest first), until `timeout` seconds (None = never) pass.
@@ -129,6 +133,7 @@ def follow(
     The baseline is `since_id` (a comment id: everything after it counts, even if it was already
     posted before the watch started) or, by default, the newest comment existing at the start. It moves
     past every comment seen, so nothing is yielded twice and nothing posted between two batches is lost.
+    A final poll runs at the deadline, so a comment from the last interval is still yielded. `max_errors` polls failing in a row are raised.
     """
     baseline = since_id
 
@@ -145,14 +150,17 @@ def follow(
 
     deadline = None if timeout is None else clock() + timeout
     while True:
-        remaining = None if deadline is None else deadline - clock()
-        if remaining is not None and remaining <= 0:
-            return
-        batch = poll_until(probe, interval=interval, timeout=remaining, sleep=sleep, clock=clock, log=log)
+        remaining = None if deadline is None else max(deadline - clock(), 0)
+        batch = poll_until(probe, interval=interval, timeout=remaining, sleep=sleep, clock=clock, log=log, max_errors=max_errors)
         if batch is None:
             return
         yield batch
-        sleep(interval)
+        if deadline is None:
+            sleep(interval)
+        elif (left := deadline - clock()) > 0:
+            sleep(min(interval, left))
+        else:
+            return
 
 
 def watch(

@@ -1297,8 +1297,9 @@ def issue_watch(
     follow: bool = typer.Option(
         False,
         "--follow",
-        help="Keep running and print every new comment as it arrives instead of exiting after the first batch -- "
-        "for a background process whose output lines are notifications (e.g. Claude Code's Monitor tool)",
+        help="Keep running and print every new comment as it arrives (always one JSON line each, see --json) instead of exiting "
+        "after the first batch -- for a background process whose output lines are notifications (e.g. Claude Code's Monitor tool). "
+        "Tolerates a longer outage of the API than a plain watch; if it still exits non-zero, restart it with --since-comment <last id>",
     ),
     since_comment: int | None = typer.Option(
         None,
@@ -1350,7 +1351,16 @@ def issue_watch(
         own_author=_current_user(remote) if skip_own and own_session is None else None,
     )
     typer.echo(f"Watching #{number} for new comments (every {interval:g}s, {f'up to {timeout:g}s' if timeout else 'no timeout'})", err=True)
-    batches = issue_watch_mod.follow(fetch, since_id=since_comment, accept=accept, interval=interval, timeout=timeout or None)
+    if follow:
+        as_json = True  # one line per comment: each stdout line of a background process is one notification
+    batches = issue_watch_mod.follow(
+        fetch,
+        since_id=since_comment,
+        accept=accept,
+        interval=interval,
+        timeout=timeout or None,
+        max_errors=issue_watch_mod.FOLLOW_MAX_CONSECUTIVE_ERRORS if follow else issue_watch_mod.MAX_CONSECUTIVE_ERRORS,
+    )
     reported = False
     for batch in batches:
         reported = True

@@ -686,7 +686,7 @@ def _patch_watch(monkeypatch, comments: list[Comment] | list[list[Comment]] | No
     batches = [] if not comments else comments if isinstance(comments[0], list) else [comments]
 
     def fake_follow(fetch, *, since_id=None, accept=None, interval=20.0, timeout=None, **kwargs):
-        captured.update(fetch=fetch, since_id=since_id, accept=accept, interval=interval, timeout=timeout)
+        captured.update(fetch=fetch, since_id=since_id, accept=accept, interval=interval, timeout=timeout, **kwargs)
         return iter(batches)
 
     monkeypatch.setattr("bmsdna.devtools.cli.issue_watch_mod.follow", fake_follow)
@@ -768,6 +768,33 @@ def test_issue_watch_follow_defaults_to_no_timeout(monkeypatch) -> None:
     captured = _patch_watch(monkeypatch, None)
     runner.invoke(app, ["issue", "watch", "84", "--follow", "--timeout", "30"])
     assert captured["timeout"] == 30
+
+
+def test_issue_watch_follow_always_prints_one_json_line_per_comment(monkeypatch) -> None:
+    _patch_watch(monkeypatch, [_comment(5, "line one\nline two")])
+
+    result = runner.invoke(app, ["issue", "watch", "84", "--follow"], catch_exceptions=False)
+
+    lines = result.stdout.splitlines()
+    assert len(lines) == 1 and json.loads(lines[0])["body"] == "line one\nline two"
+
+
+def test_issue_watch_follow_explicit_timeout_zero_means_forever(monkeypatch) -> None:
+    captured = _patch_watch(monkeypatch, None)
+
+    runner.invoke(app, ["issue", "watch", "84", "--follow", "--timeout", "0"])
+
+    assert captured["timeout"] is None
+
+
+def test_issue_watch_follow_tolerates_a_longer_outage_than_a_plain_watch(monkeypatch) -> None:
+    captured = _patch_watch(monkeypatch, None)
+    runner.invoke(app, ["issue", "watch", "84", "--follow"])
+    assert captured["max_errors"] == issue_watch_mod.FOLLOW_MAX_CONSECUTIVE_ERRORS
+
+    captured = _patch_watch(monkeypatch, None)
+    runner.invoke(app, ["issue", "watch", "84"])
+    assert captured["max_errors"] == issue_watch_mod.MAX_CONSECUTIVE_ERRORS
 
 
 def test_watch_issue_alias(monkeypatch) -> None:
