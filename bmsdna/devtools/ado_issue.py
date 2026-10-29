@@ -50,6 +50,7 @@ from urllib.parse import quote
 import requests
 
 from .bdt_config import load_bdt_table
+from .business_user import BusinessUserDetector
 from .cli_tools import ensure_agent_session_note
 from .gitrepo import AdoRemote
 from .issue_show import IssueDetails
@@ -324,9 +325,12 @@ def get_work_item(session: requests.Session, remote: AdoRemote, work_item_id: in
     return r.json()
 
 
-def get_details(session: requests.Session, remote: AdoRemote, work_item_id: int) -> IssueDetails:
+def get_details(
+    session: requests.Session, remote: AdoRemote, work_item_id: int, business_users: BusinessUserDetector | None = None
+) -> IssueDetails:
     """What `bdt issue show` prints for a work item: its fields, links and comments. Long text
-    (Description, comments) is HTML as stored; it is shown as plain text."""
+    (Description, comments) is HTML as stored; it is shown as plain text. With `business_users`, also who
+    created it and whether that is a business user."""
     work_item = get_work_item(session, remote, work_item_id)
     fields = work_item.get("fields", {})
     relations = work_item.get("relations") or []
@@ -338,6 +342,8 @@ def get_details(session: requests.Session, remote: AdoRemote, work_item_id: int)
     if isinstance(assigned_to, dict):
         assigned_to = assigned_to.get("displayName")
     parents = linked(PARENT_REL)
+    creator = fields.get("System.CreatedBy")
+    verdict = business_users.verdict(creator) if business_users else None
     return IssueDetails(
         number=work_item_id,
         title=fields.get("System.Title", ""),
@@ -357,6 +363,9 @@ def get_details(session: requests.Session, remote: AdoRemote, work_item_id: int)
         blocks=linked(BLOCKS_REL),
         related=linked(RELATED_REL),
         comments=to_comments(list_all_comments(session, remote, work_item_id), is_html=True),
+        created_by=creator.get("displayName") if isinstance(creator, dict) else None,
+        business_user=verdict.business_user if verdict else None,
+        business_user_reason=verdict.reason if verdict else None,
     )
 
 
@@ -700,7 +709,9 @@ def run_wiql(session: requests.Session, remote: AdoRemote, wiql: str, top: int, 
     return [wi["id"] for wi in r.json()["workItems"]]
 
 
-def get_work_items(session: requests.Session, remote: AdoRemote, ids: list[int], org_wide: bool = False) -> list[dict]:
+def get_work_items(
+    session: requests.Session, remote: AdoRemote, ids: list[int], org_wide: bool = False, with_creator: bool = False
+) -> list[dict]:
     """Batch-fetch Title/State (plus TeamProject when `org_wide`) for a set of work item ids, in
     the given `ids` order — WIQL only returns ids (not field values), and this batch endpoint
     doesn't guarantee it echoes them back in the order they were requested, so the caller's WIQL
@@ -708,12 +719,14 @@ def get_work_items(session: requests.Session, remote: AdoRemote, ids: list[int],
 
     `org_wide` fetches via the org-level endpoint (ids from an org-wide `run_wiql` may belong to
     a project other than `remote.project`) and also asks for `System.TeamProject`, so `search()`
-    can show which project each result came from.
+    can show which project each result came from. `with_creator` also asks for `System.CreatedBy`.
     """
     if not ids:
         return []
     base = _org_url(remote) if org_wide else _base_url(remote)
     fields = "System.Title,System.State,System.TeamProject" if org_wide else "System.Title,System.State"
+    if with_creator:
+        fields += ",System.CreatedBy"
     r = session.get(
         f"{base}/_apis/wit/workitems",
         params={"ids": ",".join(map(str, ids)), "fields": fields, "api-version": "7.1"},
@@ -756,6 +769,7 @@ def search(
     tags: list[str] | None = None,
     comment_filter: Callable[[str | None], bool] | None = None,
     scan_limit: int | None = None,
+    business_users: BusinessUserDetector | None = None,
 ) -> list[dict]:
     """Search (or, with no keywords, just list) work items by keywords (ANDed, matched against
     Title or Description) and state, most recently changed first. `board` is an Azure Boards team
@@ -771,13 +785,21 @@ def search(
     e.g. `bdt issue search --for-me`. WIQL can't query comments, so up to `_COMMENT_FILTER_POOL`
     candidates are fetched and checked one by one, stopping once `top` have matched. `scan_limit` sizes that
     pool as if it were `top` (default: `top`), for a caller that wants few results out of a wide scan.
+
+    `business_users` keeps only work items created by a business user (see `business_user.py`), checked before
+    `comment_filter` since it costs no request per work item.
     """
     if org_wide and board:
         sys.exit("--board can't be combined with --org-wide (a board's Area Path is scoped to a single project).")
     area_path = get_team_area_path(session, remote, board) if board else None
     wiql = build_search_wiql(keywords, since, area_path, state, org_wide=org_wide, tags=tags)
-    ids = run_wiql(session, remote, wiql, min((scan_limit or top) * 10, _COMMENT_FILTER_POOL) if comment_filter else top, org_wide=org_wide)
-    items = get_work_items(session, remote, ids, org_wide=org_wide)
+    filtered = comment_filter or business_users
+    ids = run_wiql(session, remote, wiql, min((scan_limit or top) * 10, _COMMENT_FILTER_POOL) if filtered else top, org_wide=org_wide)
+    items = get_work_items(session, remote, ids, org_wide=org_wide, with_creator=business_users is not None)
+    if business_users:
+        items = [i for i in items if business_users.verdict(i["fields"].get("System.CreatedBy")).business_user]
+        if not comment_filter:
+            items = items[:top]
     if comment_filter:
         items = _filter_by_last_comment(session, remote, items, top, comment_filter)
     for item in items:

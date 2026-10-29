@@ -33,10 +33,21 @@ class IssueDetails:
     blocks: list[int] = field(default_factory=list)
     related: list[int] = field(default_factory=list)
     comments: list[Comment] = field(default_factory=list)
+    # Azure DevOps with a business-user check: who created it, and whether that is a business user (None = unknown)
+    created_by: str | None = None
+    business_user: bool | None = None
+    business_user_reason: str | None = None
 
 
 def _refs(numbers: list[int]) -> str:
     return ", ".join(f"#{n}" for n in numbers)
+
+
+def _creator_note(details: IssueDetails) -> str:
+    if details.business_user_reason is None:
+        return ""
+    kind = {True: "business user", False: "developer", None: "unknown"}[details.business_user]
+    return f" ({kind}: {details.business_user_reason})"
 
 
 def format_details(details: IssueDetails, *, as_json: bool = False) -> str:
@@ -45,6 +56,8 @@ def format_details(details: IssueDetails, *, as_json: bool = False) -> str:
         return json.dumps(asdict(details), ensure_ascii=False, indent=2)
     lines = [f"#{details.number} [{details.state}] {details.title}", details.url]
     lines += [f"{name}: {value}" for name, value in details.fields.items() if value]
+    if details.created_by:
+        lines.append(f"Created by: {details.created_by}{_creator_note(details)}")
     if details.tags:
         lines.append(f"Tags: {', '.join(details.tags)}")
     if details.parent is not None:

@@ -417,7 +417,7 @@ def test_issue_show_ado(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
     captured: dict = {}
 
-    def fake_get_details(session, remote, number):
+    def fake_get_details(session, remote, number, business_users=None):
         captured.update(remote=remote, number=number)
         return IssueDetails(number=number, title="Task", state="Active", url="u", body="", tags=[], fields={"Iteration": "MyProj\\Sprint 1"})
 
@@ -519,3 +519,70 @@ def test_issue_create_and_update_github_reject_iteration(monkeypatch) -> None:
 
     assert runner.invoke(app, ["issue", "create", "--title", "t", "--iteration", "Sprint 1"]).exit_code == 2
     assert runner.invoke(app, ["issue", "update", "1", "--iteration", "Sprint 1"]).exit_code == 2
+
+
+# -- `issue search --business-user` -----------------------------------------------
+
+
+def _ado_search_setup(monkeypatch, remote: AdoRemote | GitHubRemote) -> dict:
+    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
+    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    captured: dict = {}
+
+    def fake_search(session, remote, keywords, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.search", fake_search)
+    return captured
+
+
+def test_search_business_user_hands_a_detector_with_the_commit_depth_to_the_ado_search(monkeypatch) -> None:
+    captured = _ado_search_setup(monkeypatch, AdoRemote("myorg", "MyProj", "myrepo"))
+
+    result = runner.invoke(app, ["issue", "search", "--business-user", "--commit-depth", "5"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["business_users"]._commit_depth == 5
+
+
+def test_search_without_business_user_passes_no_detector(monkeypatch) -> None:
+    captured = _ado_search_setup(monkeypatch, AdoRemote("myorg", "MyProj", "myrepo"))
+
+    assert runner.invoke(app, ["issue", "search"]).exit_code == 0
+
+    assert "business_users" not in captured
+
+
+def test_search_business_user_with_org_wide_is_rejected(monkeypatch) -> None:
+    _ado_search_setup(monkeypatch, AdoRemote("myorg", "MyProj", "myrepo"))
+
+    result = runner.invoke(app, ["issue", "search", "--business-user", "--org-wide"])
+
+    assert result.exit_code == 2
+    assert "--org-wide" in _ANSI_RE.sub("", result.output)
+
+
+def test_search_business_user_on_github_is_rejected(monkeypatch) -> None:
+    _ado_search_setup(monkeypatch, GitHubRemote("owner", "repo"))
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: object())
+
+    result = runner.invoke(app, ["issue", "search", "--business-user"])
+
+    assert result.exit_code == 2
+    assert "Azure DevOps" in _ANSI_RE.sub("", result.output)
+
+
+def test_search_commit_depth_must_be_positive(monkeypatch) -> None:
+    _ado_search_setup(monkeypatch, AdoRemote("myorg", "MyProj", "myrepo"))
+
+    assert runner.invoke(app, ["issue", "search", "--business-user", "--commit-depth", "0"]).exit_code == 2
+
+
+def test_search_commit_depth_without_business_user_is_rejected(monkeypatch) -> None:
+    _ado_search_setup(monkeypatch, AdoRemote("myorg", "MyProj", "myrepo"))
+
+    result = runner.invoke(app, ["issue", "search", "--commit-depth", "5"])
+
+    assert result.exit_code == 2
+    assert "--business-user" in _ANSI_RE.sub("", result.output)

@@ -4,7 +4,7 @@ description: >
   Use the `bdt` CLI (from the bmsdna-devtools package) instead of ad hoc git/az/gh
   commands or repo-local scripts for: checking PR build/check status, creating
   a PR, creating a git worktree, committing and pushing files (with pre-flight
-  checks), claiming an issue / work item (`bdt issue take`), showing an issue / work item and linking it to a parent / blockers (`bdt issue show`, `--parent`, `--blocked-by`, `--iteration`), finding issues addressed to you (`bdt issue search --for-me`), waiting for a reply on an issue (`bdt issue watch`), a one-shot PR summary
+  checks), claiming an issue / work item (`bdt issue take`), showing an issue / work item and linking it to a parent / blockers (`bdt issue show`, `--parent`, `--blocked-by`, `--iteration`), finding issues addressed to you (`bdt issue search --for-me`), finding work items filed by business users (`bdt issue search --business-user`), waiting for a reply on an issue (`bdt issue watch`), a one-shot PR summary
   (`bdt pr info`: link, build state, closed issues), querying Azure logs, and static checks (`bdt lint`: SQL/psycopg/arrowbricks rules, pydantic placement, tooling; `bdt dead-code`:
   unreferenced .sql files and backend routes nothing calls), listing which env vars a repo defines (`bdt env get-keys`, names only). `bdt pr *` works against both Azure DevOps
   and GitHub — it auto-detects which one from the `origin` remote. Trigger
@@ -97,7 +97,7 @@ session-link comment instead.
 ## Reading and linking an issue
 
 ```bash
-bdt issue show 1234 [--json]        # state, description, tags, area/iteration, links (parent/children/blocked by/blocks), comments
+bdt issue show 1234 [--json]        # state, description, tags, area/iteration, links (parent/children/blocked by/blocks), comments, creator + business-user verdict (Azure DevOps)
 bdt issue create --title "..." --parent 1200 --blocked-by 1210 [--iteration 'Project\Sprint 1']
 bdt issue update 1234 --parent 1200 --blocked-by 1210 [--iteration 'Project\Sprint 1']
 ```
@@ -106,6 +106,12 @@ Use these instead of `az boards` / the web UI. `--parent` and `--blocked-by` (re
 Azure DevOps; `update` only adds missing links, so it's safe to repeat. `--iteration` (Azure DevOps only,
 exit 2 on GitHub) sets the Iteration Path, which Basic-process work items need to show on the team backlog;
 on `create` it defaults to `[tool.bdt.ado].iteration` in `pyproject.toml`.
+
+Azure DevOps only: `bdt issue show` names the creator and whether they are a **business user** (Stakeholder license,
+or no commit in the last 1000 commits of this repo; the license lookup needs the *Member Entitlement Management
+(read)* PAT scope, else only commits decide), and `bdt issue search --business-user [--commit-depth N]` lists only
+work items created by business users (not with `--org-wide`). Combine with `--tag` to find e.g. their items tagged
+`needs-techie`.
 
 ## Finding issues meant for you, and asking via an issue
 
