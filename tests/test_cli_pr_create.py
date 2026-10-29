@@ -459,3 +459,40 @@ def test_required_label_group_is_satisfied_by_a_passthrough_label(monkeypatch) -
     assert ok.exit_code == 0, ok.output
     assert calls[0]["labels"] == ["breaking"]
     assert missing.exit_code != 0 and "risk" in missing.output
+
+
+def test_feature_branch_pr_on_ado_defaults_to_squash_and_delete_source(monkeypatch) -> None:
+    calls = _ado(monkeypatch)
+
+    result = runner.invoke(app, ["pr", "create", "--target", "dev"])
+
+    assert result.exit_code == 0, result.output
+    assert (calls[0]["options"].squash, calls[0]["options"].delete_source_branch) == (True, True)
+
+
+def test_promotion_pr_on_ado_keeps_commits_and_source_branch(monkeypatch) -> None:
+    calls = _ado(monkeypatch)
+    monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "dev")
+
+    result = runner.invoke(app, ["pr", "create", "--target", "test"])
+
+    assert result.exit_code == 0, result.output
+    assert (calls[0]["options"].squash, calls[0]["options"].delete_source_branch) == (None, None)
+
+
+def test_explicit_merge_flags_beat_the_defaults(monkeypatch) -> None:
+    calls = _ado(monkeypatch)
+
+    result = runner.invoke(app, ["pr", "create", "--target", "dev", "--", "--squash", "false", "--delete-source-branch", "false"])
+
+    assert result.exit_code == 0, result.output
+    assert (calls[0]["options"].squash, calls[0]["options"].delete_source_branch) == (False, False)
+
+
+def test_github_pr_gets_no_ignored_flag_notes_from_the_defaults(monkeypatch) -> None:
+    calls = _github(monkeypatch)
+
+    result = runner.invoke(app, ["pr", "create", "--target", "dev"])
+
+    assert result.exit_code == 0, result.output
+    assert (calls[0]["options"].squash, calls[0]["options"].delete_source_branch) == (None, None)
