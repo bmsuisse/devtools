@@ -281,12 +281,13 @@ A PR from a feature branch also defaults to **squash** and **delete source branc
 options; on GitHub only `--squash` as the auto-merge method with `--auto-complete`, since there is no per-PR
 delete-branch switch). A PR whose *source* is a long-lived branch (a promotion `dev` -> `test` -> `main`, or a
 back-merge `main` -> `dev`) gets neither: squashing promotions makes every later one conflict again, and the source
-branch must survive. The long-lived branches default to `dev`, `develop`, `test` and `main`; override them with
-`[tool.bdt.pr].long_lived_branches`. An explicit `--squash` / `--delete-source-branch` (also `--squash false`) always wins.
+branch must survive. The long-lived branches default to `dev`, `develop`, `test`, `main`, `master` and `release/*`; override them (case-insensitive
+globs) with `[tool.bdt.pr].long_lived_branches`. A stacked PR's source branch (the target of another open PR) is not
+detected: pass `--delete-source-branch false` for it. An explicit `--squash` / `--delete-source-branch` (also `--squash false`) always wins.
 
 ```toml
 [tool.bdt.pr]
-long_lived_branches = ["dev", "test", "main"]
+long_lived_branches = ["dev", "test", "main", "staging", "release/*"]
 ```
 
 If `--target` has a build policy configured (an Azure DevOps Build policy,

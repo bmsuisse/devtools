@@ -79,7 +79,7 @@ branch's commit info, so it never blocks waiting on an interactive prompt. Give 
 `Note: ... is ignored on <host>` line on stderr instead of being dropped silently.
 
 A PR from a feature branch defaults to squash + delete source branch (ADO completion options); a PR whose source is a
-long-lived branch (`dev`, `develop`, `test`, `main`, or `[tool.bdt.pr].long_lived_branches`) -- i.e. a promotion or
+long-lived branch (`dev`, `develop`, `test`, `main`, `master`, `release/*`, or `[tool.bdt.pr].long_lived_branches`) -- i.e. a promotion or
 back-merge -- gets neither. Explicit `--squash` / `--delete-source-branch` (also `--squash false`) win.
 
 After creating a PR, use `bdt pr status` (see above) to check whether the

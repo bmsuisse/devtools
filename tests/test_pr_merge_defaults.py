@@ -19,9 +19,10 @@ def test_long_lived_branches_may_be_emptied(tmp_path) -> None:
 
 
 @pytest.mark.parametrize("raw", ['"dev"', "[1, 2]"])
-def test_long_lived_branches_ignores_malformed_value(tmp_path, raw: str) -> None:
+def test_long_lived_branches_malformed_value_warns_and_uses_defaults(tmp_path, capsys, raw: str) -> None:
     (tmp_path / "pyproject.toml").write_text(f"[tool.bdt.pr]\nlong_lived_branches = {raw}\n")
     assert long_lived_branches(tmp_path) == DEFAULT_LONG_LIVED_BRANCHES
+    assert "long_lived_branches must be a list" in capsys.readouterr().err
 
 
 def test_feature_branch_on_ado_squashes_and_deletes_source() -> None:
@@ -30,7 +31,7 @@ def test_feature_branch_on_ado_squashes_and_deletes_source() -> None:
     assert (opts.squash, opts.delete_source_branch) == (True, True)
 
 
-@pytest.mark.parametrize("source", DEFAULT_LONG_LIVED_BRANCHES)
+@pytest.mark.parametrize("source", ["dev", "develop", "test", "main", "master", "release/1.0"])
 def test_long_lived_source_keeps_commits_and_branch(source: str) -> None:
     opts = PrCreateOptions()
     apply_merge_defaults(opts, "ado", source, DEFAULT_LONG_LIVED_BRANCHES)
@@ -71,3 +72,9 @@ def test_long_lived_match_ignores_case_and_ref_prefix(tmp_path) -> None:
         opts = PrCreateOptions()
         apply_merge_defaults(opts, "ado", source, configured)
         assert (opts.squash, opts.delete_source_branch) == (None, None)
+
+
+def test_hotfix_branch_is_not_long_lived() -> None:
+    opts = PrCreateOptions()
+    apply_merge_defaults(opts, "ado", "hotfix/x", DEFAULT_LONG_LIVED_BRANCHES)
+    assert (opts.squash, opts.delete_source_branch) == (True, True)

@@ -396,7 +396,7 @@ def pr_create(
         "--delete-source-branch, --merge-commit-message, --bypass-policy[-reason], --transition-work-items, "
         "--organization, --project, --repository. A flag the host cannot honour is reported on stderr. "
         "Squash + delete-source-branch default to on unless the source branch is in [tool.bdt.pr].long_lived_branches "
-        "(default dev, develop, test, main); opt out with `--squash false` / `--delete-source-branch false`"),
+        "(default dev, develop, test, main, master, release/*; globs); opt out with `--squash false` / `--delete-source-branch false`"),
 ) -> None:
     """Create a PR from the current branch into --target (Azure DevOps or GitHub, auto-detected)."""
     for path in screenshot:
