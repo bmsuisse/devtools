@@ -33,7 +33,7 @@ from . import find_injection as find_injection_mod
 from . import lint as lint_mod
 from . import logs as logs_mod
 from . import translate as translate_mod
-from . import pr_build, pr_info as pr_info_mod, pr_issue_link, pr_ref, pr_labels, pull as pull_mod, worktree as worktree_mod
+from . import pr_build, pr_info as pr_info_mod, pr_issue_link, pr_merge_defaults, pr_ref, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import auth_header
 from .bdt_config import find_pyproject, load_bdt_table
 from .cli_tools import CLI_TIMEOUT_SECS, EXIT_WAIT_TIMEOUT, detect_agent_session, require_gh
@@ -444,6 +444,7 @@ def pr_create(
     issue_numbers = list(dict.fromkeys(issue_numbers))
 
     source_branch = options.head or current_branch()
+    pr_merge_defaults.apply_merge_defaults(options, host, source_branch, pr_merge_defaults.long_lived_branches())
 
     pr_url: str | None = None
     if isinstance(remote, GitHubRemote):
