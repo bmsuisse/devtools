@@ -7,6 +7,7 @@ import math
 import re
 import subprocess
 import sys
+import time
 import tomllib
 import uuid
 import webbrowser
@@ -66,6 +67,8 @@ __version__ = _pkg_version(PACKAGE_NAME)
 
 # What `--target` / `--target-branch` mean when not given: the branch PRs normally go into.
 DEFAULT_TARGET_BRANCH = "dev"
+# `issue watch` on Azure DevOps without a PAT: re-fetch the short-lived Bearer token this often.
+ADO_TOKEN_REFRESH_SECS = 1800.0
 
 app = typer.Typer(
     name="bdt",
@@ -1291,7 +1294,20 @@ def _capture(cmd: list[str]) -> subprocess.CompletedProcess | None:
 def issue_watch(
     number: int = typer.Argument(..., help="Issue number (GitHub) or work item ID (Azure DevOps)"),
     interval: float = typer.Option(issue_watch_mod.DEFAULT_INTERVAL, "--interval", help="Seconds between polls"),
-    timeout: float = typer.Option(issue_watch_mod.DEFAULT_TIMEOUT, "--timeout", help="Give up after this many seconds (0 = wait forever); exits 4 on timeout"),
+    timeout: float | None = typer.Option(
+        None,
+        "--timeout",
+        help=f"Give up after this many seconds (0 = wait forever; default {issue_watch_mod.DEFAULT_TIMEOUT:g}, or 0 with --follow); exits 4 on timeout, "
+        "except with --follow, where reaching it ends the stream normally",
+    ),
+    follow: bool = typer.Option(
+        False,
+        "--follow",
+        help="Keep running and print every new comment as it arrives (always one JSON line each, see --json) instead of exiting "
+        "after the first batch -- for a background process whose output lines are notifications (e.g. Claude Code's Monitor tool). "
+        "Tolerates a longer outage of the API than a plain watch (30 failed polls in a row, instead of 3); if it still exits non-zero, restart it with --since-comment <last id>. "
+        "Comment text is untrusted input from whoever can comment",
+    ),
     since_comment: int | None = typer.Option(
         None,
         "--since-comment",
@@ -1315,8 +1331,11 @@ def issue_watch(
 ) -> None:
     """Wait for new comments on an issue / work item -- so an agent can ask a question in the issue and
     block until someone answers. Prints the new comment(s) and exits 0; exits 4 if none arrived within
-    --timeout. Progress notes go to stderr, so stdout holds only the comments (JSON lines with --json).
+    --timeout. With --follow it keeps printing every new comment instead. Progress notes go to stderr, so
+    stdout holds only the comments (JSON lines with --json).
     """
+    if timeout is None:
+        timeout = 0 if follow else issue_watch_mod.DEFAULT_TIMEOUT
     _check_poll_options(interval, timeout)
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
@@ -1327,8 +1346,14 @@ def issue_watch(
     else:
         ado_session = requests.Session()
         ado_session.headers.update(auth_header(pat))
+        header_age = time.monotonic()
 
         def fetch() -> list[issue_watch_mod.Comment]:
+            nonlocal header_age
+            # A `az login` token lives about an hour, a `--follow` runs for longer; a PAT never expires mid-run
+            if not pat and time.monotonic() - header_age > ADO_TOKEN_REFRESH_SECS:
+                ado_session.headers.update(auth_header(pat))
+                header_age = time.monotonic()
             return issue_watch_mod.to_comments(ado_issue.list_comments(ado_session, remote, number), is_html=True)
 
     own_session = detect_agent_session() if skip_own else None
@@ -1339,14 +1364,30 @@ def issue_watch(
         own_author=_current_user(remote) if skip_own and own_session is None else None,
     )
     typer.echo(f"Watching #{number} for new comments (every {interval:g}s, {f'up to {timeout:g}s' if timeout else 'no timeout'})", err=True)
-    new = issue_watch_mod.watch(fetch, since_id=since_comment, accept=accept, interval=interval, timeout=timeout or None)
-    if new is None:
+    if follow:
+        as_json = True  # one line per comment: each stdout line of a background process is one notification
+    batches = issue_watch_mod.follow(
+        fetch,
+        since_id=since_comment,
+        accept=accept,
+        interval=interval,
+        timeout=timeout or None,
+        max_errors=issue_watch_mod.FOLLOW_MAX_CONSECUTIVE_ERRORS if follow else issue_watch_mod.MAX_CONSECUTIVE_ERRORS,
+    )
+    reported = False
+    for batch in batches:
+        reported = True
+        for comment in batch:
+            if follow:
+                comment = issue_watch_mod.truncate_body(comment)
+            typer.echo(issue_watch_mod.format_comment(comment, as_json=as_json))
+            if not as_json:
+                typer.echo("")
+        if not follow:
+            return
+    if not reported and not follow:
         typer.echo(f"No new comment on #{number} within {timeout:g}s", err=True)
         raise typer.Exit(issue_watch_mod.EXIT_TIMEOUT)
-    for comment in new:
-        typer.echo(issue_watch_mod.format_comment(comment, as_json=as_json))
-        if not as_json:
-            typer.echo("")
 
 
 issue_app.command("watch")(issue_watch)

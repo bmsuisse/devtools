@@ -678,16 +678,18 @@ def _comment(id: int, body: str = "answer", author: str = "alice") -> Comment:
     return Comment(id, author, "2026-10-13T08:00:00Z", f"https://example.test/{id}", body)
 
 
-def _patch_watch(monkeypatch, comments: list[Comment] | None, remote=None) -> dict:
+def _patch_watch(monkeypatch, comments: list[Comment] | list[list[Comment]] | None, remote=None) -> dict:
+    """Patch the CLI's `follow`; `comments` is one batch (a list of Comments), several batches (a list of lists) or None for none."""
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote or GitHubRemote("o", "r"))
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     captured: dict = {}
+    batches = [] if not comments else comments if isinstance(comments[0], list) else [comments]
 
-    def fake_watch(fetch, *, since_id=None, accept=None, interval=20.0, timeout=None, **kwargs):
-        captured.update(fetch=fetch, since_id=since_id, accept=accept, interval=interval, timeout=timeout)
-        return comments
+    def fake_follow(fetch, *, since_id=None, accept=None, interval=20.0, timeout=None, **kwargs):
+        captured.update(fetch=fetch, since_id=since_id, accept=accept, interval=interval, timeout=timeout, **kwargs)
+        return iter(batches)
 
-    monkeypatch.setattr("bmsdna.devtools.cli.issue_watch_mod.watch", fake_watch)
+    monkeypatch.setattr("bmsdna.devtools.cli.issue_watch_mod.follow", fake_follow)
     return captured
 
 
@@ -726,6 +728,116 @@ def test_issue_watch_timeout_zero_means_no_timeout(monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert captured["timeout"] is None
+
+
+def test_issue_watch_returns_after_the_first_batch(monkeypatch) -> None:
+    _patch_watch(monkeypatch, [[_comment(5, "one")], [_comment(6, "two")]])
+
+    result = runner.invoke(app, ["issue", "watch", "84", "--json"], catch_exceptions=False)
+
+    assert [json.loads(line)["id"] for line in result.stdout.splitlines()] == [5]
+
+
+def test_issue_watch_follow_prints_every_batch_and_exits_zero(monkeypatch) -> None:
+    _patch_watch(monkeypatch, [[_comment(5, "one")], [_comment(6, "two"), _comment(7, "three")]])
+
+    result = runner.invoke(app, ["issue", "watch", "84", "--follow", "--json"], catch_exceptions=False)
+
+    assert result.exit_code == 0, result.output
+    assert [json.loads(line)["id"] for line in result.stdout.splitlines()] == [5, 6, 7]
+
+
+def test_issue_watch_follow_without_batches_is_not_a_timeout(monkeypatch) -> None:
+    _patch_watch(monkeypatch, None)
+
+    result = runner.invoke(app, ["issue", "watch", "84", "--follow", "--timeout", "1"])
+
+    assert result.exit_code == 0, result.output
+    assert "No new comment" not in result.output
+
+
+def test_issue_watch_follow_defaults_to_no_timeout(monkeypatch) -> None:
+    captured = _patch_watch(monkeypatch, None)
+    runner.invoke(app, ["issue", "watch", "84", "--follow"])
+    assert captured["timeout"] is None
+
+    captured = _patch_watch(monkeypatch, None)
+    runner.invoke(app, ["issue", "watch", "84"])
+    assert captured["timeout"] == issue_watch_mod.DEFAULT_TIMEOUT
+
+    captured = _patch_watch(monkeypatch, None)
+    runner.invoke(app, ["issue", "watch", "84", "--follow", "--timeout", "30"])
+    assert captured["timeout"] == 30
+
+
+def test_issue_watch_follow_always_prints_one_json_line_per_comment(monkeypatch) -> None:
+    _patch_watch(monkeypatch, [_comment(5, "line one\nline two")])
+
+    result = runner.invoke(app, ["issue", "watch", "84", "--follow"], catch_exceptions=False)
+
+    lines = result.stdout.splitlines()
+    assert len(lines) == 1 and json.loads(lines[0])["body"] == "line one\nline two"
+
+
+def test_issue_watch_follow_explicit_timeout_zero_means_forever(monkeypatch) -> None:
+    captured = _patch_watch(monkeypatch, None)
+
+    runner.invoke(app, ["issue", "watch", "84", "--follow", "--timeout", "0"])
+
+    assert captured["timeout"] is None
+
+
+def test_issue_watch_follow_tolerates_a_longer_outage_than_a_plain_watch(monkeypatch) -> None:
+    captured = _patch_watch(monkeypatch, None)
+    runner.invoke(app, ["issue", "watch", "84", "--follow"])
+    assert captured["max_errors"] == issue_watch_mod.FOLLOW_MAX_CONSECUTIVE_ERRORS
+
+    captured = _patch_watch(monkeypatch, None)
+    runner.invoke(app, ["issue", "watch", "84"])
+    assert captured["max_errors"] == issue_watch_mod.MAX_CONSECUTIVE_ERRORS
+
+
+def test_issue_watch_follow_truncates_huge_bodies_but_plain_watch_does_not(monkeypatch) -> None:
+    big = "y" * (issue_watch_mod.MAX_FOLLOW_BODY + 500)
+    _patch_watch(monkeypatch, [_comment(5, big)])
+    followed = runner.invoke(app, ["issue", "watch", "84", "--follow"], catch_exceptions=False)
+    assert "500 more characters" in json.loads(followed.stdout)["body"]
+
+    _patch_watch(monkeypatch, [_comment(5, big)])
+    plain = runner.invoke(app, ["issue", "watch", "84", "--json"], catch_exceptions=False)
+    assert json.loads(plain.stdout)["body"] == big
+
+
+def test_issue_watch_ado_refreshes_a_stale_bearer_token_but_not_a_pat(monkeypatch) -> None:
+    ado = REMOTE
+    monkeypatch.delenv("AZURE_DEVOPS_EXT_PAT", raising=False)
+    monkeypatch.delenv("AZURE_DEVOPS_PAT", raising=False)
+    clock = {"now": 1000.0}
+    monkeypatch.setattr("bmsdna.devtools.cli.time.monotonic", lambda: clock["now"])
+    headers: list[str] = []
+
+    def fake_auth_header(pat):
+        headers.append("x")
+        return {}
+
+    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", fake_auth_header)
+    captured = _patch_watch(monkeypatch, None, remote=ado)
+    monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.list_comments", lambda *a, **k: [])
+
+    runner.invoke(app, ["issue", "watch", "84", "--follow"])
+    fetch = captured["fetch"]
+    fetch()
+    assert len(headers) == 1  # fetched at startup, still fresh
+    clock["now"] += 1801
+    fetch()
+    assert len(headers) == 2  # refreshed
+
+    headers.clear()
+    captured = _patch_watch(monkeypatch, None, remote=ado)
+    runner.invoke(app, ["issue", "watch", "84", "--follow", "--pat", "secret"])
+    clock["now"] += 99999
+    captured["fetch"]()
+    assert len(headers) == 1  # a PAT is never re-derived
 
 
 def test_watch_issue_alias(monkeypatch) -> None:
