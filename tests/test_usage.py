@@ -159,13 +159,43 @@ def phases(con) -> dict[str, str]:
 
 def test_phase_assignment(con) -> None:
     p = phases(con)
-    assert p["m0"] == "outside"
+    assert p["m0"] == "pre_workflow"
     assert p["m1"] == "setup"
     assert p["m2"] == "plan"
     assert p["m3"] == "implement"
     assert p["m4"] == "test"  # test runs only count for their own turn
     assert p["m5"] == "implement"
     assert p["m6"] == "review_full"
+
+
+def test_before_and_after_loading_dev_workflow_are_kept_apart(con, tmp_path) -> None:
+    before, after = con.execute("SELECT cost_before_workflow, cost_after_workflow FROM v_summary").fetchone()
+    (m0,) = con.execute("SELECT cost FROM facts WHERE mid = 'm0'").fetchone()
+    assert before == pytest.approx(m0)
+    (total,) = con.execute("SELECT sum(cost) FROM v_steps WHERE phase <> 'pre_workflow'").fetchone()
+    assert after == pytest.approx(total)
+    assert con.execute("SELECT label FROM v_steps ORDER BY ord LIMIT 1").fetchone() == ("Before dev-workflow was loaded",)
+
+    c = duckdb.connect()
+    pipeline.build(c, tmp_path / "claude", tmp_path / "codex", scope="all")
+    assert phases(c)["m0"] == "pre_workflow"  # scope=all does not fold the turns before the workflow into the steps
+    assert phases(c)["o1"] == "setup"
+
+
+def test_subagents_spawned_before_the_workflow_was_loaded_are_pre_workflow(tmp_path) -> None:
+    proj = tmp_path / "proj"
+    sid = "55555555-5555-5555-5555-555555555555"
+    _write(proj / f"{sid}.jsonl", [
+        _assistant("a0", sid, 0, ("Agent", "toolu_B", {"subagent_type": "Explore", "description": "x", "prompt": "look around"})),
+        _assistant("a1", sid, 5, ("Skill", "t1", {"skill": "dev-workflow:dev-workflow"})),
+        _assistant("a2", sid, 6, ("Bash", "t2", {"command": "bdt pr create --draft"})),
+    ])
+    sub = proj / sid / "subagents"
+    _write(sub / "agent-BBB.jsonl", [{**_assistant("b1", sid, 1, ("Edit", "t9", {"file_path": "/repo/a.py"}), sidechain=True), "agentId": "BBB"}])
+    (sub / "agent-BBB.meta.json").write_text(json.dumps({"agentType": "Explore", "description": "x", "toolUseId": "toolu_B", "spawnDepth": 1}))
+    c = duckdb.connect()
+    pipeline.build(c, proj)
+    assert phases(c) == {"a0": "pre_workflow", "b1": "pre_workflow", "a1": "setup", "a2": "plan"}  # an edit pre-workflow stays pre-workflow
 
 
 def test_other_sessions_stay_out_of_scope(con) -> None:
