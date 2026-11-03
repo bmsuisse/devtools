@@ -105,6 +105,9 @@ def _ensure_worktree_gitignore(root: Path) -> None:
     if not missing:
         return
     gitignore = root / ".gitignore"
+    if gitignore.is_symlink():
+        print(f"warning: {gitignore} is a symlink; not touching it. Add {' and '.join(missing)} to your ignore rules yourself.", file=sys.stderr)
+        return
     content = gitignore.read_text() if gitignore.exists() else ""
     with gitignore.open("a") as f:
         if content and not content.endswith("\n"):

@@ -843,3 +843,15 @@ def test_clean_current_worktree_removes_a_worktree_containing_a_submodule(tmp_pa
     clean_current_worktree(path, confirm=True, keep_db=True, pg_host="localhost", pg_port=54322, pg_user="tester")
 
     assert not path.exists()
+
+
+def test_create_does_not_follow_gitignore_symlink(tmp_path, capsys) -> None:
+    repo = init_repo(tmp_path / "repo")
+    target = tmp_path / "shared-ignore"
+    target.write_text("*.log\n")
+    (repo / ".gitignore").symlink_to(target)
+
+    create("my-feature", base="main", submodules=False, root=repo)
+
+    assert target.read_text() == "*.log\n"
+    assert "symlink" in capsys.readouterr().err
