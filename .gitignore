@@ -219,3 +219,5 @@ __marimo__/
 
 # CodeGraph local index
 .codegraph/
+.worktrees/
+.claude/worktrees/

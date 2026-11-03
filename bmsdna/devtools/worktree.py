@@ -96,6 +96,23 @@ def _start_point(root: Path, base: str) -> tuple[str, bool]:
     return base, False
 
 
+def _ensure_worktree_gitignore(root: Path) -> None:
+    missing = [
+        entry
+        for entry in (".worktrees/", ".claude/worktrees/")
+        if not _git_ok(["check-ignore", "-q", entry], root)
+    ]
+    if not missing:
+        return
+    gitignore = root / ".gitignore"
+    content = gitignore.read_text() if gitignore.exists() else ""
+    with gitignore.open("a") as f:
+        if content and not content.endswith("\n"):
+            f.write("\n")
+        f.write("\n".join(missing) + "\n")
+    print(f"Updated {gitignore} to ignore worktree directories; please commit it.")
+
+
 def create(
     name: str,
     base: str = "dev",
@@ -112,6 +129,7 @@ def create(
     start, remote_start = _start_point(root, base)
     # --no-track: the new branch must not push to / compare against origin/<base>
     _run(["git", "worktree", "add", *(["--no-track"] if remote_start else []), str(path), "-b", name, start], cwd=root)
+    _ensure_worktree_gitignore(root)
 
     if submodules and (root / ".gitmodules").exists():
         _run(["git", "submodule", "update", "--init"], cwd=path)

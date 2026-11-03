@@ -627,6 +627,8 @@ Creates `.worktrees/<name>` branched from `--base`. It first fetches `origin/<ba
 a local base that is ahead of or has diverged from the remote is kept as is. Then it initializes submodules
 (unless `--no-submodules`), and copies an env file into the new worktree as
 `.env` (auto-detects `.local_env` then `.env` if `--env-file` isn't given).
+It also adds `.worktrees/` and `.claude/worktrees/` to the repo root's `.gitignore` if Git
+doesn't already ignore them, and reminds you to commit the change.
 
 ## `bdt find-repo`
 

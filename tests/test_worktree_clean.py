@@ -48,6 +48,67 @@ def add_submodule(repo, sub_repo, sub_path="vendor/sub"):
 # --- create (`bdt worktree`) -------------------------------------------------
 
 
+def test_create_creates_gitignore_when_absent(tmp_path, capsys) -> None:
+    repo = init_repo(tmp_path / "repo")
+
+    create("my-feature", base="main", submodules=False, root=repo)
+
+    assert (repo / ".gitignore").read_text() == ".worktrees/\n.claude/worktrees/\n"
+    for entry in (".worktrees/", ".claude/worktrees/"):
+        assert (
+            _git(["check-ignore", "-q", entry], cwd=repo, check=False).returncode == 0
+        )
+    out = capsys.readouterr().out
+    assert f"Updated {repo / '.gitignore'}" in out
+    assert "please commit it" in out
+
+
+@pytest.mark.parametrize(
+    "existing, missing",
+    [(".worktrees/", ".claude/worktrees/"), (".claude/worktrees/", ".worktrees/")],
+)
+@pytest.mark.parametrize("ending", ["", "\n"])
+def test_create_appends_only_missing_gitignore_entry(
+    tmp_path, existing, missing, ending
+) -> None:
+    repo = init_repo(tmp_path / "repo")
+    (repo / ".gitignore").write_text(existing + ending)
+
+    create("my-feature", base="main", submodules=False, root=repo)
+
+    assert (repo / ".gitignore").read_text() == f"{existing}\n{missing}\n"
+
+
+def test_create_gitignore_is_idempotent(tmp_path, capsys) -> None:
+    repo = init_repo(tmp_path / "repo")
+    create("first-feature", base="main", submodules=False, root=repo)
+    gitignore = repo / ".gitignore"
+    content = gitignore.read_bytes()
+    modified = gitignore.stat().st_mtime_ns
+    capsys.readouterr()
+
+    create("second-feature", base="main", submodules=False, root=repo)
+
+    assert gitignore.read_bytes() == content
+    assert gitignore.stat().st_mtime_ns == modified
+    assert "Updated" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "patterns", ["/.worktrees/\n/.claude/worktrees/\n", ".worktrees\n.claude/\n"]
+)
+def test_create_does_not_duplicate_equivalent_gitignore_patterns(
+    tmp_path, capsys, patterns
+) -> None:
+    repo = init_repo(tmp_path / "repo")
+    (repo / ".gitignore").write_text(patterns)
+
+    create("my-feature", base="main", submodules=False, root=repo)
+
+    assert (repo / ".gitignore").read_text() == patterns
+    assert "Updated" not in capsys.readouterr().out
+
+
 def test_create_hints_plain_bdt_pull_when_base_is_not_main_or_master(tmp_path, capsys) -> None:
     repo = init_repo(tmp_path / "repo")
     _git(["branch", "dev"], cwd=repo)
