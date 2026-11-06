@@ -1149,6 +1149,10 @@ writes `report.html` (charts plus a table view, light/dark) with CSV / Parquet e
 (`~/.cache/bdt/usage/`, or `--db` / `--out`). The report is self-contained and contains your session titles and agent
 descriptions, so look at it before sharing it.
 
+- **Before vs. after:** the turns of a session before it loaded `dev-workflow` (or ran its first workflow command such as
+  `bdt worktree`) are their own step, "Before dev-workflow was loaded", for the main thread and for the subagents spawned
+  then. Everything from that point on is split into the steps below. The summary has `cost_before_workflow` /
+  `cost_after_workflow`. Sessions that never load it are not counted, unless `--scope all`.
 - **Steps:** setup, plan, plan review, implement, test, screenshots, design review, quick review, full review, publish / CI.
   Every model turn is assigned to one by markers in its tool calls: skill calls (`bms-code-review --quick|--full`,
   `design-review`, `bms-plan-review`; for codex, reading the skill's `SKILL.md`), `bdt` commands, edits (`apply_patch` for

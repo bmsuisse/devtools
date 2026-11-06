@@ -1,4 +1,5 @@
--- All "v_" views only look at in-scope rows (phase <> 'outside') and report shares of that total.
+-- All "v_" views only look at in-scope rows (phase <> 'outside') and report shares of that total. That includes
+-- 'pre_workflow': what a workflow-following thread did before it loaded dev-workflow, kept apart from the steps after it.
 -- `facts` keeps cost NULL for turns of a model without a price; the views count those as 0 (they say how many there
 -- are: v_summary.unpriced_msgs) so every number below is a plain number.
 CREATE OR REPLACE VIEW f AS
@@ -95,6 +96,9 @@ CREATE OR REPLACE VIEW v_summary AS
 SELECT count(DISTINCT session_id) AS sessions, count(DISTINCT thread_id) AS threads, count(*) AS msgs,
        sum(total_tok) AS tokens, sum(fresh_tok) AS fresh_tokens, sum(cost) AS cost,
        100 * sum(cost) FILTER (WHERE actor_kind = 'subagent') / sum(cost) AS pct_cost_subagents,
+       coalesce(sum(cost) FILTER (WHERE phase = 'pre_workflow'), 0) AS cost_before_workflow,
+       coalesce(sum(cost) FILTER (WHERE phase <> 'pre_workflow'), 0) AS cost_after_workflow,
+       100 * coalesce(sum(cost) FILTER (WHERE phase = 'pre_workflow'), 0) / sum(cost) AS pct_cost_before_workflow,
        (SELECT count(*) FROM images i WHERE i.thread_id IN (SELECT thread_id FROM f)) AS images,
        count(*) FILTER (WHERE NOT priced) AS unpriced_msgs,
        string_agg(DISTINCT model, ', ') FILTER (WHERE NOT priced) AS unpriced_models,
