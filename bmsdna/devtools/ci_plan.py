@@ -7,7 +7,7 @@ Configured under `[tool.bdt.ci.plan]` in pyproject.toml (the table must exist, e
     non_code = ["docs/**", "*.md"]  # files no test reads or ships; explicit per repo (`*.md` = root only, `**/*.md` = all)
 
     [tool.bdt.ci.plan.tiers.unit]   # default tiers: unit = tests/unit, e2e = tests/e2e
-    dir = "tests/unit"              # areas = sub-folders (snake_case folder <-> kebab-case label)
+    dir = "tests/unit"              # areas = sub-folders with tests (snake_case folder <-> kebab-case label)
 
     [tool.bdt.ci.plan.tiers.e2e]
     dir = "tests/e2e"               # flat folder: an area table maps test files to areas instead
@@ -58,10 +58,24 @@ class BranchFlowError(Exception):
     """A fix branch for `main` that was not cut from `main`."""
 
 
+def _is_test_file(name: str) -> bool:
+    return any(PurePosixPath(name).match(g) for g in (TEST_FILE_GLOB, "*_test.py"))
+
+
+def _has_tests(folder: Path) -> bool:
+    return any(
+        p.is_file()
+        and _is_test_file(p.name)
+        and "__pycache__" not in p.relative_to(folder).parts
+        for p in folder.rglob("*.py")
+    )
+
+
 @dataclass(frozen=True)
 class Tier:
-    """One test tier (unit, e2e, ...). Areas are sub-folders of `dir`, or, with a `globs` table, groups of the
-    `test_*.py` files directly in `dir`."""
+    """One test tier (unit, e2e, ...). Areas are the sub-folders of `dir` that contain tests (`test_*.py` or
+    `*_test.py`; output and helper folders are not areas), or, with a `globs` table, groups of the `test_*.py` files
+    directly in `dir`."""
 
     name: str
     dir: str
@@ -96,11 +110,17 @@ class Tier:
         return sorted(
             d.name
             for d in base.iterdir()
-            if d.is_dir() and not d.name.startswith(("_", "."))
+            if d.is_dir() and not d.name.startswith(("_", ".")) and _has_tests(d)
         )
 
-    def area_of(self, path: str) -> frozenset[str] | None:
-        """Areas owning a repo-relative file, or None when the file is not an area test of this tier."""
+    def area_of(
+        self, root: Path, path: str, areas: Collection[str]
+    ) -> frozenset[str] | None:
+        """Areas owning a repo-relative file, or None when the file is not an area file of this tier (a helper
+        folder, a file directly in the tier folder): changing it can affect any test, so the plan runs everything.
+        In folder mode a file of an area folder counts, helpers like conftest.py included. A test file whose
+        whole folder was removed still names its (now gone) area. `areas` is `self.areas(root)`, computed once per
+        plan by the caller."""
         pure = PurePosixPath(path)
         if not pure.is_relative_to(self.dir):
             return None
@@ -111,11 +131,10 @@ class Tier:
                 if len(parts) == 1 and pure.match(TEST_FILE_GLOB)
                 else None
             )
-        return (
-            frozenset({parts[0]})
-            if len(parts) > 1 and not parts[0].startswith(("_", "."))
-            else None
-        )
+        if len(parts) < 2 or parts[0].startswith(("_", ".")):
+            return None
+        removed = not (root / self.dir / parts[0]).exists() and _is_test_file(pure.name)
+        return frozenset({parts[0]}) if parts[0] in areas or removed else None
 
     def paths(self, root: Path, selected: Collection[str] | None) -> list[str]:
         """What the test runner gets: the selected areas' folders or files, or (None) the whole tier."""
@@ -308,11 +327,16 @@ def _from_labels(
 def _from_files(files: list[str], config: PlanConfig, warnings: list[str]) -> Plan:
     if not files:
         return Plan("none", "no changed files (a sync merge)", warnings=tuple(warnings))
+    known = {tier.name: frozenset(tier.areas(config.root)) for tier in config.tiers}
     areas: set[str] = set()
     for path in files:
         if config.is_non_code(path):
             continue
-        owners = [owned for tier in config.tiers if (owned := tier.area_of(path))]
+        owners = [
+            owned
+            for tier in config.tiers
+            if (owned := tier.area_of(config.root, path, known[tier.name]))
+        ]
         if not owners:
             return _full(
                 config,
@@ -326,9 +350,9 @@ def _from_files(files: list[str], config: PlanConfig, warnings: list[str]) -> Pl
             f"all {len(files)} changed file(s) are non-code",
             warnings=tuple(warnings),
         )
-    areas &= (
-        config.all_areas()
-    )  # an area whose folder or files were all removed has nothing left to run
+    areas &= frozenset().union(
+        *known.values()
+    )  # a removed area has nothing left to run
     if not areas:
         return Plan(
             "none",

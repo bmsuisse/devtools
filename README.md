@@ -862,7 +862,7 @@ on_missing = "infer"            # PR without a usable label: infer from the chan
 non_code = ["docs/**", "*.md"]  # files no test reads or ships; explicit per repo (full-match globs: `*.md` = root only, `**/*.md` = every folder)
 
 [tool.bdt.ci.plan.tiers.unit]   # default tiers: unit = tests/unit, e2e = tests/e2e (a tier whose folder is missing is skipped)
-dir = "tests/unit"              # areas = sub-folders; folder `route_planning` <-> label `test-route-planning`
+dir = "tests/unit"              # areas = sub-folders with tests (test_*.py / *_test.py); `route_planning` <-> `test-route-planning`
 
 [tool.bdt.ci.plan.tiers.e2e]
 dir = "tests/e2e"               # flat folder: map the test_*.py files to areas instead
@@ -872,7 +872,9 @@ areas = { chat = ["test_chat*.py"], review = ["test_review_*.py"] }  # unmatched
 Labels on the PR: `test-<area>` (one per touched area, selects it in every tier), `test-shared` (just the area
 `shared`), `test-full` (everything), `test-none` (no tests; lint and build still run). Legacy `e2e-<area>` labels count
 as `test-<area>`. With the table present, `bdt pr create` requires one of them (group `test_area`, generated from the
-same folders; a hand-written `test_area` group in `[tool.bdt.pr.required_labels]` wins).
+same folders; a hand-written `test_area` group in `[tool.bdt.pr.required_labels]` wins). Folders without tests (output
+folders like `test-results`, helper packages) are not areas; a changed file in one of them, or directly in the tier
+folder, selects everything because any test may use it.
 
 Order of decision, always logged with its reason:
 
