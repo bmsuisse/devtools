@@ -905,8 +905,11 @@ Order of decision, always logged with its reason:
 4. Anything unreadable (label API, change list) runs everything: a missing decision never silently skips tests.
 
 Outputs (Azure Pipelines variables with `isOutput=true`; plain `name=value` lines elsewhere): `runTests`, and per tier
-(`unit`, `e2e`, ...) `<tier>Run`, `<tier>Areas` and `<tier>Paths`, a shell-quoted argument list for the runner. A
-tier you do not configure and split by area (e.g. flat unit tests) is simply gated on `runTests`.
+(`unit`, `e2e`, ...) `<tier>Run`, `<tier>Areas` and `<tier>Paths`, a shell-quoted argument list for the runner (repo-
+relative). A tier you do not configure and split by area (e.g. flat unit tests) is simply gated on `runTests`. For
+custom sharding or a runner that does not take paths, use `<tier>Areas`: in folder mode the `<tier>Paths` of a full run
+is the bare tier folder, which may also hold things that are not tests (`.venv`, `test-results`); in glob mode it is the
+list of test files either way. A moved file counts as changed under both its old and its new path.
 
 ```yaml
 - stage: Plan
