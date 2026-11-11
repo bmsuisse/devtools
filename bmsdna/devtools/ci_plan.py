@@ -64,9 +64,10 @@ def _is_test_file(name: str) -> bool:
 
 def _has_tests(folder: Path) -> bool:
     return any(
-        _is_test_file(p.name)
+        p.is_file()
+        and _is_test_file(p.name)
+        and "__pycache__" not in p.relative_to(folder).parts
         for p in folder.rglob("*.py")
-        if "__pycache__" not in p.parts
     )
 
 
@@ -112,11 +113,14 @@ class Tier:
             if d.is_dir() and not d.name.startswith(("_", ".")) and _has_tests(d)
         )
 
-    def area_of(self, root: Path, path: str) -> frozenset[str] | None:
+    def area_of(
+        self, root: Path, path: str, areas: Collection[str]
+    ) -> frozenset[str] | None:
         """Areas owning a repo-relative file, or None when the file is not an area file of this tier (a helper
         folder, a file directly in the tier folder): changing it can affect any test, so the plan runs everything.
         In folder mode a file of an area folder counts, helpers like conftest.py included. A test file whose
-        whole folder was removed still names its (now gone) area."""
+        whole folder was removed still names its (now gone) area. `areas` is `self.areas(root)`, computed once per
+        plan by the caller."""
         pure = PurePosixPath(path)
         if not pure.is_relative_to(self.dir):
             return None
@@ -129,10 +133,8 @@ class Tier:
             )
         if len(parts) < 2 or parts[0].startswith(("_", ".")):
             return None
-        folder = root / self.dir / parts[0]
-        if _has_tests(folder) or (not folder.exists() and _is_test_file(pure.name)):
-            return frozenset({parts[0]})
-        return None
+        removed = not (root / self.dir / parts[0]).exists() and _is_test_file(pure.name)
+        return frozenset({parts[0]}) if parts[0] in areas or removed else None
 
     def paths(self, root: Path, selected: Collection[str] | None) -> list[str]:
         """What the test runner gets: the selected areas' folders or files, or (None) the whole tier."""
@@ -325,12 +327,15 @@ def _from_labels(
 def _from_files(files: list[str], config: PlanConfig, warnings: list[str]) -> Plan:
     if not files:
         return Plan("none", "no changed files (a sync merge)", warnings=tuple(warnings))
+    known = {tier.name: frozenset(tier.areas(config.root)) for tier in config.tiers}
     areas: set[str] = set()
     for path in files:
         if config.is_non_code(path):
             continue
         owners = [
-            owned for tier in config.tiers if (owned := tier.area_of(config.root, path))
+            owned
+            for tier in config.tiers
+            if (owned := tier.area_of(config.root, path, known[tier.name]))
         ]
         if not owners:
             return _full(
@@ -345,9 +350,9 @@ def _from_files(files: list[str], config: PlanConfig, warnings: list[str]) -> Pl
             f"all {len(files)} changed file(s) are non-code",
             warnings=tuple(warnings),
         )
-    areas &= (
-        config.all_areas()
-    )  # an area whose folder or files were all removed has nothing left to run
+    areas &= frozenset().union(
+        *known.values()
+    )  # a removed area has nothing left to run
     if not areas:
         return Plan(
             "none",

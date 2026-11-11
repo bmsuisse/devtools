@@ -51,6 +51,10 @@ def config(repo) -> PlanConfig:
     return loaded
 
 
+def area_of(tier: Tier, root, path: str):
+    return tier.area_of(root, path, tier.areas(root))
+
+
 def no_fix_check() -> None:
     return None
 
@@ -161,13 +165,13 @@ def test_missing_tier_dir_has_no_areas_or_paths(tmp_path) -> None:
 def test_area_of(config) -> None:
     unit, e2e = config.tiers
     root = config.root
-    assert unit.area_of(root, "tests/unit/orders/test_a.py") == {"orders"}
-    assert unit.area_of(root, "tests/unit/conftest.py") is None
-    assert unit.area_of(root, "tests/unit/__pycache__/x.pyc") is None
-    assert unit.area_of(root, "src/app.py") is None
-    assert e2e.area_of(root, "tests/e2e/test_chat_one.py") == {"chat"}
-    assert e2e.area_of(root, "tests/e2e/test_misc.py") == {"shared"}
-    assert e2e.area_of(root, "tests/e2e/conftest.py") is None
+    assert area_of(unit, root, "tests/unit/orders/test_a.py") == {"orders"}
+    assert area_of(unit, root, "tests/unit/conftest.py") is None
+    assert area_of(unit, root, "tests/unit/__pycache__/x.pyc") is None
+    assert area_of(unit, root, "src/app.py") is None
+    assert area_of(e2e, root, "tests/e2e/test_chat_one.py") == {"chat"}
+    assert area_of(e2e, root, "tests/e2e/test_misc.py") == {"shared"}
+    assert area_of(e2e, root, "tests/e2e/conftest.py") is None
 
 
 def test_folders_without_tests_are_not_areas(config) -> None:
@@ -176,8 +180,8 @@ def test_folders_without_tests_are_not_areas(config) -> None:
     )
     unit = config.tiers[0]
     assert unit.areas(config.root) == ["customers", "orders", "shared"]
-    assert unit.area_of(config.root, "tests/unit/helpers/util.py") is None
-    assert unit.area_of(config.root, "tests/unit/test-results/report.xml") is None
+    assert area_of(unit, config.root, "tests/unit/helpers/util.py") is None
+    assert area_of(unit, config.root, "tests/unit/test-results/report.xml") is None
 
 
 def test_area_folder_helpers_select_their_area(config) -> None:
@@ -187,8 +191,8 @@ def test_area_folder_helpers_select_their_area(config) -> None:
         "tests/unit/orders/fixtures/data.json",
     )
     unit = config.tiers[0]
-    assert unit.area_of(config.root, "tests/unit/orders/conftest.py") == {"orders"}
-    assert unit.area_of(config.root, "tests/unit/orders/fixtures/data.json") == {
+    assert area_of(unit, config.root, "tests/unit/orders/conftest.py") == {"orders"}
+    assert area_of(unit, config.root, "tests/unit/orders/fixtures/data.json") == {
         "orders"
     }
 
@@ -200,8 +204,8 @@ def test_nested_and_suffix_style_tests_make_an_area(tmp_path) -> None:
 
 def test_removed_area_test_file_still_names_the_area(config) -> None:
     unit = config.tiers[0]
-    assert unit.area_of(config.root, "tests/unit/legacy/test_x.py") == {"legacy"}
-    assert unit.area_of(config.root, "tests/unit/legacy/helper.py") is None
+    assert area_of(unit, config.root, "tests/unit/legacy/test_x.py") == {"legacy"}
+    assert area_of(unit, config.root, "tests/unit/legacy/helper.py") is None
 
 
 def test_changed_helper_folder_file_runs_everything(config) -> None:
@@ -472,3 +476,24 @@ def test_non_code_star_is_root_only_and_double_star_is_recursive(config) -> None
     assert recursive.is_non_code("README.md") and recursive.is_non_code(
         "src/pkg/README.md"
     )
+
+
+def test_a_directory_named_like_a_test_file_is_not_a_test(tmp_path) -> None:
+    touch(
+        tmp_path,
+        "tests/unit/helpers/test_fixture.py/data.json",
+        "tests/unit/helpers/util.py",
+    )
+    tier = Tier("unit", "tests/unit")
+    assert tier.areas(tmp_path) == []
+    assert area_of(tier, tmp_path, "tests/unit/helpers/util.py") is None
+
+
+def test_pycache_in_the_checkout_path_does_not_hide_areas(tmp_path) -> None:
+    root = tmp_path / "__pycache__" / "repo"
+    touch(
+        root, "tests/unit/orders/test_a.py", "tests/unit/orders/__pycache__/test_a.py"
+    )
+    assert Tier("unit", "tests/unit").areas(root) == ["orders"]
+    touch(root, "tests/unit/cached/__pycache__/test_b.py")
+    assert Tier("unit", "tests/unit").areas(root) == ["orders"]
