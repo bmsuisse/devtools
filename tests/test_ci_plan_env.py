@@ -376,6 +376,9 @@ def test_changed_files_lists_a_moved_file_under_its_old_path_too(
 ) -> None:
     """Rename detection would show only docs/app.py: code moved into a non_code folder must not look like a docs change."""
     monkeypatch.chdir(clone)
+    git(
+        clone, "config", "diff.renames", "true"
+    )  # the detection --no-renames must override, whatever the user has set
     (clone / "src").mkdir()
     (clone / "docs").mkdir()
     (clone / "src/app.py").write_text("def f():\n    return 1\n")
@@ -394,4 +397,16 @@ def test_changed_files_lists_a_moved_file_under_its_old_path_too(
     assert sorted(ci_plan_env.changed_files("main", merge_checkout=True)) == [
         "docs/app.py",
         "src/app.py",
+    ]
+
+
+def test_changed_files_keeps_non_ascii_names_unquoted(clone, monkeypatch) -> None:
+    monkeypatch.chdir(clone)
+    git(clone, "checkout", "-q", "-b", "umlaut")
+    (clone / "tests").mkdir()
+    (clone / "tests/test_über.py").write_text("")
+    git(clone, "add", "-A")
+    git(clone, "commit", "-q", "-m", "umlaut")
+    assert ci_plan_env.changed_files("main", merge_checkout=False) == [
+        "tests/test_über.py"
     ]

@@ -118,15 +118,13 @@ def changed_files(target: str, *, merge_checkout: bool) -> list[str]:
     """Files the PR changes: in CI HEAD is the synthetic PR merge commit, compared with its first parent (the target);
     for a local dry run the branch is compared with `origin/<target>` (it may contain ordinary merges).
     `--no-renames` lists a moved file under its old path too: rename detection would hide the old path, so code moved
-    into a `non_code` folder (or a test moved between areas) would look like nothing happened to the old place."""
+    into a `non_code` folder (or a test moved between areas) would look like nothing happened to the old place.
+    `-z` keeps non-ASCII and other unusual names unquoted (git's default quoting would defeat every glob)."""
     diff = ("HEAD^1", "HEAD") if merge_checkout else (f"origin/{target}...HEAD",)
+    out = _git("diff", "--name-only", "--no-renames", "-z", *diff).stdout
     return [
-        line
-        for line in _git(
-            "diff", "--name-only", "--no-renames", *diff
-        ).stdout.splitlines()
-        if line
-    ]
+        path for path in out.split("\0") if path
+    ]  # -z: git would quote names like test_\303\274ber.py
 
 
 def verify_fix_base(env: Mapping[str, str]) -> None:

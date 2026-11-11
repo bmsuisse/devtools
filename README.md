@@ -907,7 +907,8 @@ Order of decision, always logged with its reason:
 Outputs (Azure Pipelines variables with `isOutput=true`; plain `name=value` lines elsewhere): `runTests`, and per tier
 (`unit`, `e2e`, ...) `<tier>Run`, `<tier>Areas` and `<tier>Paths`, a shell-quoted argument list for the runner (repo-
 relative). A tier you do not configure and split by area (e.g. flat unit tests) is simply gated on `runTests`. For
-custom sharding or a runner that does not take paths, use `<tier>Areas`: in folder mode the `<tier>Paths` of a full run
+custom sharding or a runner that does not take paths, use `<tier>Areas` (a space-separated list: keep area names free
+of whitespace if you split it): in folder mode the `<tier>Paths` of a full run
 is the bare tier folder, which may also hold things that are not tests (`.venv`, `test-results`); in glob mode it is the
 list of test files either way. A moved file counts as changed under both its old and its new path.
 
