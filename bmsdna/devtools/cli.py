@@ -21,6 +21,7 @@ import requests
 import typer
 from pgdevkit.testdb import constants as pgdevkit_constants
 
+from . import ci_plan_env
 from . import ado_issue, agent_mentions, api_usage as api_usage_mod, app_service_logs, commit as commit_mod, dead_code as dead_code_mod
 from . import env_config
 from . import env_files as env_files_mod
@@ -121,6 +122,9 @@ logs_app = typer.Typer(name="logs", help="Application Insights / Log Analytics q
 app.add_typer(logs_app, name="logs")
 
 app.add_typer(usage_app, name="usage")
+
+ci_app = typer.Typer(name="ci", help="CI helpers (Azure Pipelines)")
+app.add_typer(ci_app, name="ci")
 
 cleanup_app = typer.Typer(
     name="cleanup",
@@ -1644,6 +1648,24 @@ def pull(
     hits a merge conflict.
     """
     pull_mod.run(remote=remote, no_default=no_default, dry_run=dry_run, pull_args=pull_args or [])
+
+
+@ci_app.command("plan")
+def ci_plan_cmd(
+    pr_source: str = typer.Option(None, "--pr-source", help="Dry run: simulate a PR from this branch (needs --pr-target)."),
+    pr_target: str = typer.Option(None, "--pr-target", help="Dry run: simulate a PR into this branch (needs --pr-source)."),
+    label: list[str] = typer.Option(None, "--label", help="Dry run: a label on the simulated PR (repeatable)."),
+) -> None:
+    """Decide which tests this CI run executes from the PR's `test-<area>` / `test-full` / `test-none` labels and
+    changed files, check the branch flow (dev -> test -> main), and publish the result as pipeline variables:
+    `runTests` and per tier (unit, e2e, ...) `<tier>Run`, `<tier>Areas`, `<tier>Paths`.
+    Configured by `[tool.bdt.ci.plan]` in pyproject.toml. Exit 1 on a branch-flow violation (or a missing label
+    with `on_missing = "fail"`); anything unreadable runs everything. In Azure Pipelines give the step a `name:`
+    and `SYSTEM_ACCESSTOKEN: $(System.AccessToken)` so later stages can read the outputs.
+    """
+    if bool(pr_source) != bool(pr_target):
+        raise typer.BadParameter("--pr-source and --pr-target go together")
+    raise typer.Exit(ci_plan_env.run(pr_source, pr_target, label))
 
 
 @app.command("lint")

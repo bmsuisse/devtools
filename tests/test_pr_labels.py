@@ -105,3 +105,21 @@ def test_label_for_scope_returns_configured_label() -> None:
 
 def test_label_for_scope_matches_case_insensitively() -> None:
     assert label_for_scope({"Customers": "e2e-customers"}, "CUSTOMERS") == "e2e-customers"
+
+
+def test_required_label_groups_generates_test_area_group_from_ci_plan(tmp_path) -> None:
+    (tmp_path / "tests/unit/orders").mkdir(parents=True)
+    write_pyproject(tmp_path, "[tool.bdt.ci.plan]\n")
+    groups = required_label_groups(tmp_path)
+    assert {"test-orders", "test-full", "test-none"} <= set(groups["test_area"])
+
+
+def test_required_label_groups_keeps_a_hand_written_test_area_group(tmp_path) -> None:
+    write_pyproject(tmp_path, '[tool.bdt.ci.plan]\n[tool.bdt.pr.required_labels]\ntest_area = ["test-x"]\n')
+    assert required_label_groups(tmp_path) == {"test_area": ["test-x"]}
+
+
+def test_required_label_groups_unchanged_without_ci_plan(tmp_path) -> None:
+    (tmp_path / "tests/unit/orders").mkdir(parents=True)
+    write_pyproject(tmp_path, "[project]\nname = 'x'\n")
+    assert required_label_groups(tmp_path) == {}

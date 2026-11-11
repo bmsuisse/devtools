@@ -850,6 +850,70 @@ bdt logs fetch --env prod
 bdt logs fetch --env prod --out logs/ --keep-archive
 ```
 
+## `bdt ci plan`
+
+Decides which tests a CI run executes, so every pipeline selects tests the same way (the dev -> test -> main flow of
+the `branching-strategy` skill). Add the table to pyproject.toml (an empty one selects the defaults) and pin
+`bmsdna-devtools` as a dev dependency:
+
+```toml
+[tool.bdt.ci.plan]
+on_missing = "infer"            # PR without a usable label: infer from the changed files (default) or "fail"
+non_code = ["docs/**", "*.md"]  # files no test reads or ships; explicit per repo (full-match globs, `**` crosses folders)
+
+[tool.bdt.ci.plan.tiers.unit]   # default tiers: unit = tests/unit, e2e = tests/e2e (a tier whose folder is missing is skipped)
+dir = "tests/unit"              # areas = sub-folders; folder `route_planning` <-> label `test-route-planning`
+
+[tool.bdt.ci.plan.tiers.e2e]
+dir = "tests/e2e"               # flat folder: map the test_*.py files to areas instead
+areas = { chat = ["test_chat*.py"], review = ["test_review_*.py"] }  # unmatched files form the area `shared`
+```
+
+Labels on the PR: `test-<area>` (one per touched area, selects it in every tier), `test-shared` (just the area
+`shared`), `test-full` (everything), `test-none` (no tests; lint and build still run). Legacy `e2e-<area>` labels count
+as `test-<area>`. With the table present, `bdt pr create` requires one of them (group `test_area`, generated from the
+same folders; a hand-written `test_area` group in `[tool.bdt.pr.required_labels]` wins).
+
+Order of decision, always logged with its reason:
+
+1. Not a PR: a push to `test`/`main` runs nothing (that code was tested on its way into `dev`); the nightly, manual
+   runs and forks run everything. A manual run of `refs/pull/<id>/merge` is planned like that PR.
+2. Branch flow: promotions (`dev` -> `test`, `test` -> `main`, `main` -> `dev`) run nothing. `fix/*` / `hotfix/*` into
+   `main` are tested and must be cut from `main` (no unreleased `dev` commits; skipped with a warning if the refs cannot
+   be fetched). Any other PR into `test` / `main` fails the build.
+3. PR labels decide. No usable label (none, or only unknown `test-*` ones, which are warned about): the changed files
+   (merge commit against its first parent) decide. Nothing changed or only `non_code` files -> nothing runs, only area
+   tests -> those areas, any other file -> everything. `on_missing = "fail"` fails the build instead.
+4. Anything unreadable (label API, change list) runs everything: a missing decision never silently skips tests.
+
+Outputs (Azure Pipelines variables with `isOutput=true`; plain `name=value` lines elsewhere): `runTests`, and per tier
+(`unit`, `e2e`, ...) `<tier>Run`, `<tier>Areas` and `<tier>Paths`, a space-separated argument list for the runner. A
+tier you do not configure and split by area (e.g. flat unit tests) is simply gated on `runTests`.
+
+```yaml
+- stage: Plan
+  jobs:
+    - job: plan
+      steps:
+        - script: uv run bdt ci plan
+          name: plan          # required for isOutput
+          env:
+            SYSTEM_ACCESSTOKEN: $(System.AccessToken)   # reads the PR labels
+
+- stage: Test
+  dependsOn: Plan
+  condition: and(succeeded(), eq(dependencies.Plan.outputs['plan.plan.unitRun'], 'true'))
+  variables:
+    unitPaths: $[ stageDependencies.Plan.plan.outputs['plan.unitPaths'] ]
+  jobs:
+    - job: unit
+      steps:
+        - script: uv run pytest --maxfail=3 $(unitPaths)
+```
+
+Dry run locally: `uv run bdt ci plan --pr-source feat/x --pr-target dev --label test-orders` (or without `--label` to
+see what the changed files select).
+
 ## `bdt lint`
 
 Static checks (implementing [bmsuisse/skills#52](https://github.com/bmsuisse/skills/issues/52))

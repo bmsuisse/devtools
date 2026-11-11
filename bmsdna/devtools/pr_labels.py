@@ -30,15 +30,25 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from . import ci_plan
 from .bdt_config import load_bdt_table
 
 
+TEST_AREA_GROUP = "test_area"
+
+
 def required_label_groups(start: Path | None = None) -> dict[str, list[str]]:
-    """`[tool.bdt.pr.required_labels]` -> {group name: [allowed label, ...]}."""
+    """`[tool.bdt.pr.required_labels]` -> {group name: [allowed label, ...]}.
+
+    A repo with a `[tool.bdt.ci.plan]` table also gets the group `test_area` (`test-<area>` for every test area,
+    `test-full`, `test-none`), generated from the same folders CI plans with, unless it defines that group itself.
+    """
     raw = load_bdt_table("pr", start).get("required_labels", {})
-    if not isinstance(raw, dict):
-        return {}
-    return {name: choices for name, choices in raw.items() if isinstance(choices, list)}
+    groups = {name: choices for name, choices in raw.items() if isinstance(choices, list)} if isinstance(raw, dict) else {}
+    plan = ci_plan.load_plan_config(start)
+    if plan is not None:
+        groups.setdefault(TEST_AREA_GROUP, ci_plan.required_label_choices(plan))
+    return groups
 
 
 def scope_labels(start: Path | None = None) -> dict[str, str]:
