@@ -530,6 +530,14 @@ def test_paths_table_overrides_and_extends(tmp_path) -> None:
         extra='[tool.bdt.ci.plan.paths]\ninfra = ["deploy/**"]\nfrontend = ["web/**"]\n',
     )
     assert config.paths == {"infra": ("deploy/**",), "frontend": ("web/**",)}
+    assert plan_for(config, pr(), files=["web/app.ts"]).areas == {"frontend"}
+    assert plan_for(config, pr(), files=["deploy/main.bicep"]).areas == {"infra"}
+    assert plan_for(config, pr(), files=["web/app.ts", "deploy/main.bicep"]).areas == {
+        "frontend",
+        "infra",
+    }
+    # the default no longer applies once overridden: infra/ files are unowned again
+    assert plan_for(config, pr(), files=["infra/main.bicep"]).kind == "full"
 
 
 def test_invalid_paths_config_is_rejected(tmp_path) -> None:

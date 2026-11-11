@@ -882,7 +882,9 @@ folder, selects everything because any test may use it.
 
 `infra` is an ordinary area that owns `infra/**` (the Bicep folder) by default, whenever the repo has an `infra/`
 folder. An area may have no tests: an infra-only PR (labelled `test-infra`, or inferred from the changed files)
-plans `runTests=true` but no tier runs, so lint, types and the infra guards still run and nothing else does. A
+plans `runTests=true` but none of the configured tiers runs (every `<tier>Run` is false), so lint, types and the infra
+guards still run. A tier you did not split by area (e.g. flat unit tests, gated on `runTests` alone) still runs, which is
+what you want when your infra tests live in it. A
 repo that does test its infra files (Bicep settings checks and the like) puts those tests in a `tests/unit/infra/`
 folder (or an `infra` glob area) and the same label selects exactly them. Do not list `infra/**` under `non_code`
 in such a repo: that would skip those tests.
