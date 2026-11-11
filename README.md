@@ -876,18 +876,21 @@ same folders; a hand-written `test_area` group in `[tool.bdt.pr.required_labels]
 
 Order of decision, always logged with its reason:
 
-1. Not a PR: a push to `test`/`main` runs nothing (that code was tested on its way into `dev`); the nightly, manual
-   runs and forks run everything. A manual run of `refs/pull/<id>/merge` is planned like that PR.
+1. Not a PR: the CI run after a push (merge) to `test`/`main` runs nothing (that code was tested on its way into
+   `dev`); the nightly, manual runs (also on `test`/`main`), other branches and forks run everything. A manual run of
+   `refs/pull/<id>/merge` is planned like that PR (a fork PR still runs everything).
 2. Branch flow: promotions (`dev` -> `test`, `test` -> `main`, `main` -> `dev`) run nothing. `fix/*` / `hotfix/*` into
-   `main` are tested and must be cut from `main` (no unreleased `dev` commits; skipped with a warning if the refs cannot
-   be fetched). Any other PR into `test` / `main` fails the build.
+   `main` are tested and must be cut from `main` (no unreleased `dev` commits). That check needs full history
+   (`fetchDepth: 0` on the checkout); in a shallow checkout or when the refs cannot be fetched it is skipped with a
+   warning instead of guessing. Any other PR into `test` / `main` fails the build. Area folders must not be called
+   `full` or `none` (they would collide with the labels).
 3. PR labels decide. No usable label (none, or only unknown `test-*` ones, which are warned about): the changed files
    (merge commit against its first parent) decide. Nothing changed or only `non_code` files -> nothing runs, only area
    tests -> those areas, any other file -> everything. `on_missing = "fail"` fails the build instead.
 4. Anything unreadable (label API, change list) runs everything: a missing decision never silently skips tests.
 
 Outputs (Azure Pipelines variables with `isOutput=true`; plain `name=value` lines elsewhere): `runTests`, and per tier
-(`unit`, `e2e`, ...) `<tier>Run`, `<tier>Areas` and `<tier>Paths`, a space-separated argument list for the runner. A
+(`unit`, `e2e`, ...) `<tier>Run`, `<tier>Areas` and `<tier>Paths`, a shell-quoted argument list for the runner. A
 tier you do not configure and split by area (e.g. flat unit tests) is simply gated on `runTests`.
 
 ```yaml

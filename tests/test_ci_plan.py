@@ -337,13 +337,27 @@ def test_fix_base_check_only_runs_for_main(config) -> None:
 
 
 def test_push_to_test_or_main_runs_nothing(config) -> None:
-    assert plan_for(config, Context(branch="main")).kind == "none"
-    assert plan_for(config, Context(branch="test")).kind == "none"
+    for branch in ("main", "test"):
+        for reason in ("IndividualCI", "BatchedCI"):
+            assert (
+                plan_for(config, Context(branch=branch, reason=reason)).kind == "none"
+            )
+
+
+@pytest.mark.parametrize("branch", ["main", "test"])
+@pytest.mark.parametrize("reason", ["Manual", "Schedule", ""])
+def test_manual_and_scheduled_runs_on_test_or_main_run_everything(
+    config, branch, reason
+) -> None:
+    assert plan_for(config, Context(branch=branch, reason=reason)).kind == "full"
 
 
 def test_nightly_dev_and_other_branches_run_everything(config) -> None:
-    assert plan_for(config, Context(branch="dev")).kind == "full"
-    assert plan_for(config, Context(branch="feature/x")).kind == "full"
+    assert plan_for(config, Context(branch="dev", reason="Schedule")).kind == "full"
+    assert (
+        plan_for(config, Context(branch="feature/x", reason="IndividualCI")).kind
+        == "full"
+    )
 
 
 def test_fork_runs_everything(config) -> None:
@@ -382,4 +396,22 @@ def test_outputs_for_none_run_nothing(config, labels) -> None:
         out["runTests"] == "false"
         and out["unitRun"] == "false"
         and out["e2ePaths"] == ""
+    )
+
+
+def test_area_named_like_a_control_label_is_rejected(tmp_path) -> None:
+    touch(tmp_path, "tests/unit/none/test_a.py")
+    (tmp_path / "pyproject.toml").write_text("[tool.bdt.ci.plan]\n")
+    with pytest.raises(ValueError, match="collide"):
+        load_plan_config(tmp_path)
+
+
+def test_paths_with_spaces_are_shell_quoted(tmp_path) -> None:
+    touch(tmp_path, "tests/unit/customer orders/test_a.py")
+    (tmp_path / "pyproject.toml").write_text("[tool.bdt.ci.plan]\n")
+    config = load_plan_config(tmp_path)
+    assert config is not None
+    result = Plan("areas", "x", frozenset({"customer orders"}))
+    assert (
+        ci_plan.outputs(result, config)["unitPaths"] == "'tests/unit/customer orders'"
     )

@@ -77,14 +77,19 @@ def context_from_env(env: Mapping[str, str]) -> Context:
     if reason == "Manual" and merge_ref:
         number = int(merge_ref[1])
         pr = _get_json(_api_url(env, f"pullrequests/{number}?"), env)
-        source = pr.get("sourceRefName") if isinstance(pr, dict) else None
-        target = pr.get("targetRefName") if isinstance(pr, dict) else None
+        if not isinstance(pr, dict):
+            raise ValueError("unexpected response from the pull request API")
+        source, target = pr.get("sourceRefName"), pr.get("targetRefName")
         if not isinstance(source, str) or not isinstance(target, str):
             raise ValueError("unexpected response from the pull request API")
         return Context(
-            branch=ref, pr_id=number, source=_branch(source), target=_branch(target)
+            branch=ref,
+            pr_id=number,
+            source=_branch(source),
+            target=_branch(target),
+            is_fork=bool(pr.get("forkSource")),
         )
-    return Context(branch=_branch(ref))
+    return Context(branch=_branch(ref), reason=reason)
 
 
 def _git(
@@ -109,10 +114,10 @@ def _git(
     return done
 
 
-def changed_files(target: str) -> list[str]:
-    """Files the PR changes: the merge commit CI checks out against its first parent, else against `origin/<target>`."""
-    parents = _git("rev-list", "--parents", "-n", "1", "HEAD").stdout.split()
-    diff = ("HEAD^1", "HEAD") if len(parents) == 3 else (f"origin/{target}...HEAD",)
+def changed_files(target: str, *, merge_checkout: bool) -> list[str]:
+    """Files the PR changes: in CI HEAD is the synthetic PR merge commit, compared with its first parent (the target);
+    for a local dry run the branch is compared with `origin/<target>` (it may contain ordinary merges)."""
+    diff = ("HEAD^1", "HEAD") if merge_checkout else (f"origin/{target}...HEAD",)
     return [
         line for line in _git("diff", "--name-only", *diff).stdout.splitlines() if line
     ]
@@ -127,6 +132,10 @@ def verify_fix_base(env: Mapping[str, str]) -> None:
     parents = _git("rev-list", "--parents", "-n", "1", "HEAD").stdout.split()
     if len(parents) != 3:
         raise RuntimeError("HEAD is not a PR merge commit")
+    if _git("rev-parse", "--is-shallow-repository").stdout.strip() == "true":
+        raise RuntimeError(
+            "shallow checkout: set `fetchDepth: 0` on the checkout step to verify fix branches"
+        )
     token = env.get("SYSTEM_ACCESSTOKEN")
     auth = (
         {
@@ -185,7 +194,11 @@ def run(
     """Plan the current CI run and print it. `source`/`target`/`labels` (the CLI's --pr-source/--pr-target/--label) simulate a PR for a local dry run."""
     env = os.environ if env is None else env
     ado = bool(env.get("TF_BUILD"))
-    config = ci_plan.load_plan_config(start)
+    try:
+        config = ci_plan.load_plan_config(start)
+    except ValueError as error:
+        log(ado, "error", str(error))
+        return 2
     if config is None:
         log(
             ado,
@@ -193,8 +206,9 @@ def run(
             "no [tool.bdt.ci.plan] table in pyproject.toml (an empty table selects the defaults)",
         )
         return 2
-    if source and target:
-        ctx = Context(pr_id=0, source=source, target=target)
+    dry_run = bool(source and target)
+    if dry_run:
+        ctx = Context(pr_id=0, source=source or "", target=target or "")
         label_provider = lambda: list(labels or [])  # noqa: E731
     else:
         try:
@@ -211,7 +225,7 @@ def run(
         ctx,
         config,
         labels=label_provider,
-        changed_files=lambda: changed_files(ctx.target),
+        changed_files=lambda: changed_files(ctx.target, merge_checkout=not dry_run),
         verify_fix_base=lambda: verify_fix_base(env),
     )
     for warning in plan.warnings:

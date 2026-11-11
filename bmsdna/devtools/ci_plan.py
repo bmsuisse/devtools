@@ -16,8 +16,8 @@ Configured under `[tool.bdt.ci.plan]` in pyproject.toml (the table must exist, e
 Labels: `test-<area>`, `test-full` (everything), `test-none` (no tests; lint and build still run). The legacy
 `e2e-<area>` labels count as `test-<area>`. Order of decision (the reason is always reported):
 
-1. Not a PR: a push to `test`/`main` runs nothing (promoted code was tested on its way into `dev`); anything else
-   (nightly, manual) and forks run everything.
+1. Not a PR: the CI run after a push (merge) to `test`/`main` runs nothing (promoted code was tested on its way
+   into `dev`); anything else (nightly, manual runs, other branches) and forks run everything.
 2. Branch flow: promotions (dev -> test -> main -> dev) run nothing; `fix/*` and `hotfix/*` into `main` are tested
    and must be cut from `main`; any other PR into `test`/`main` is an error.
 3. PR labels decide. Without a usable label the changed files decide (`on_missing = "infer"`): nothing changed or
@@ -25,6 +25,7 @@ Labels: `test-<area>`, `test-full` (everything), `test-none` (no tests; lint and
 4. Anything unreadable (label API, change list) selects everything.
 """
 
+import shlex
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -45,6 +46,12 @@ UNMATCHED_AREA = "shared"
 LONG_LIVED = frozenset({"dev", "test", "main"})
 PROMOTIONS = frozenset({("dev", "test"), ("test", "main"), ("main", "dev")})
 FIX_PREFIXES = ("fix/", "hotfix/")
+PUSH_REASONS = frozenset(
+    {"IndividualCI", "BatchedCI"}
+)  # a merge landed on the branch: deploy only
+RESERVED_AREAS = frozenset(
+    {"full", "none"}
+)  # test-full / test-none are the control labels
 
 
 class BranchFlowError(Exception):
@@ -177,12 +184,17 @@ def load_plan_config(start: Path | None = None) -> PlanConfig | None:
     tiers_raw = raw.get("tiers", {name: {} for name in DEFAULT_TIER_DIRS})
     if not isinstance(tiers_raw, dict):
         raise ValueError("[tool.bdt.ci.plan.tiers] must be a table")
-    return PlanConfig(
+    config = PlanConfig(
         root=pyproject.parent,
         tiers=tuple(_tier(name, t) for name, t in tiers_raw.items()),
         on_missing=on_missing,
         non_code=_strings(raw.get("non_code", []), "non_code"),
     )
+    if clash := sorted(config.all_areas() & RESERVED_AREAS):
+        raise ValueError(
+            f"[tool.bdt.ci.plan] the area name(s) {', '.join(clash)} collide with the test-full / test-none labels; rename them"
+        )
+    return config
 
 
 def area_label(area: str) -> str:
@@ -218,6 +230,7 @@ class Context:
     """What is being built: a PR (`pr_id` set) or a plain branch build."""
 
     branch: str = ""
+    reason: str = ""  # Azure's Build.Reason for branch builds (IndividualCI, BatchedCI, Schedule, Manual, ...)
     pr_id: int | None = None
     source: str = ""
     target: str = ""
@@ -332,7 +345,7 @@ def make_plan(
     """The decision. The three callables are the only I/O: PR labels, changed files, and the fix-branch base check
     (raises BranchFlowError on a violation). Unreadable inputs (OSError, ValueError, RuntimeError) select everything."""
     if ctx.pr_id is None:
-        if ctx.branch in {"test", "main"}:
+        if ctx.branch in {"test", "main"} and ctx.reason in PUSH_REASONS:
             return Plan(
                 "none",
                 f"push to {ctx.branch}: that code was tested on its way into dev, deploy only",
@@ -384,7 +397,7 @@ def make_plan(
 
 
 def outputs(plan: Plan, config: PlanConfig) -> dict[str, str]:
-    """Pipeline variables: `runTests`, then per tier `<tier>Run`, `<tier>Areas` and `<tier>Paths` (a space-separated
+    """Pipeline variables: `runTests`, then per tier `<tier>Run`, `<tier>Areas` and `<tier>Paths` (a shell-quoted
     argument list for the test runner)."""
     run = plan.kind in {"full", "areas"}
     selected = None if plan.kind == "full" else plan.areas
@@ -398,5 +411,5 @@ def outputs(plan: Plan, config: PlanConfig) -> dict[str, str]:
         )
         result[f"{tier.name}Run"] = str(bool(paths)).lower()
         result[f"{tier.name}Areas"] = " ".join(areas)
-        result[f"{tier.name}Paths"] = " ".join(paths)
+        result[f"{tier.name}Paths"] = shlex.join(paths)
     return result

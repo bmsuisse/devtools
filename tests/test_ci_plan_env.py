@@ -112,7 +112,7 @@ def test_context_for_branch_build() -> None:
     ctx = ci_plan_env.context_from_env(
         {"BUILD_REASON": "Schedule", "BUILD_SOURCEBRANCH": "refs/heads/dev"}
     )
-    assert (ctx.pr_id, ctx.branch) == (None, "dev")
+    assert (ctx.pr_id, ctx.branch, ctx.reason) == (None, "dev", "Schedule")
 
 
 def test_manual_run_of_a_pr_merge_ref_is_planned_like_that_pr(api) -> None:
@@ -123,6 +123,20 @@ def test_manual_run_of_a_pr_merge_ref_is_planned_like_that_pr(api) -> None:
         {**ADO_ENV, "BUILD_REASON": "Manual", "BUILD_SOURCEBRANCH": "refs/pull/9/merge"}
     )
     assert (ctx.pr_id, ctx.source, ctx.target) == (9, "feat/y", "dev")
+
+
+def test_manual_run_of_a_fork_pr_merge_ref_keeps_the_fork_flag(api) -> None:
+    api.routes["pullrequests/9"] = FakeResponse(
+        {
+            "sourceRefName": "refs/heads/feat/y",
+            "targetRefName": "refs/heads/dev",
+            "forkSource": {"name": "x"},
+        }
+    )
+    ctx = ci_plan_env.context_from_env(
+        {**ADO_ENV, "BUILD_REASON": "Manual", "BUILD_SOURCEBRANCH": "refs/pull/9/merge"}
+    )
+    assert ctx.is_fork
 
 
 # --- git -------------------------------------------------------------------------------------------------------
@@ -206,20 +220,50 @@ def test_fix_check_needs_a_merge_commit(clone, monkeypatch) -> None:
         ci_plan_env.verify_fix_base({})
 
 
-def test_changed_files_of_a_merge_commit_and_of_a_plain_checkout(
+def test_changed_files_in_ci_use_the_first_parent_and_locally_origin_target(
     clone, monkeypatch
 ) -> None:
     monkeypatch.chdir(clone)
     git(clone, "checkout", "-q", "-b", "feat")
     commit(clone, "a.txt")
-    assert ci_plan_env.changed_files("main") == [
-        "a.txt"
-    ]  # plain branch: against origin/main
+    assert ci_plan_env.changed_files("main", merge_checkout=False) == ["a.txt"]
     git(clone, "checkout", "-q", "main")
     git(clone, "merge", "-q", "--no-ff", "-m", "merge", "feat")
-    assert ci_plan_env.changed_files("main") == [
-        "a.txt"
-    ]  # merge commit: against its first parent
+    assert ci_plan_env.changed_files("main", merge_checkout=True) == ["a.txt"]
+
+
+def test_local_dry_run_does_not_mistake_an_ordinary_merge_for_the_pr_merge(
+    clone, monkeypatch
+) -> None:
+    """feature changes code, then merges main (docs only): the local diff must still see the code change."""
+    monkeypatch.chdir(clone)
+    git(clone, "checkout", "-q", "-b", "feat")
+    commit(clone, "code.py")
+    git(clone, "checkout", "-q", "main")
+    commit(clone, "README.md")
+    git(clone, "push", "-q", "origin", "main")
+    git(clone, "checkout", "-q", "feat")
+    git(clone, "merge", "-q", "-m", "sync main", "main")
+    assert "code.py" in ci_plan_env.changed_files("main", merge_checkout=False)
+
+
+def test_fix_check_in_a_shallow_checkout_only_warns(
+    tmp_path, clone, monkeypatch
+) -> None:
+    shallow = tmp_path / "shallow"
+    git(
+        tmp_path,
+        "clone",
+        "-q",
+        "--depth",
+        "1",
+        f"file://{tmp_path / 'origin.git'}",
+        str(shallow),
+    )
+    monkeypatch.chdir(shallow)
+    merge_fix_into_main(shallow, "origin/main")
+    with pytest.raises(RuntimeError, match="shallow checkout"):
+        ci_plan_env.verify_fix_base({})
 
 
 # --- the command ---------------------------------------------------------------------------------------------
@@ -312,3 +356,9 @@ def test_missing_config_table_is_an_error(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     result = CliRunner().invoke(app, ["ci", "plan"])
     assert result.exit_code == 2 and "tool.bdt.ci.plan" in result.output
+
+
+def test_invalid_config_is_reported_not_raised(project) -> None:
+    (project / "pyproject.toml").write_text('[tool.bdt.ci.plan]\non_missing = "x"\n')
+    result = CliRunner().invoke(app, ["ci", "plan"])
+    assert result.exit_code == 2 and "on_missing" in result.output
