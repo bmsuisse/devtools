@@ -109,9 +109,12 @@ def test_label_for_scope_matches_case_insensitively() -> None:
 
 def test_required_label_groups_generates_test_area_group_from_ci_plan(tmp_path) -> None:
     (tmp_path / "tests/unit/orders").mkdir(parents=True)
+    (tmp_path / "tests/unit/orders/test_a.py").write_text("")
+    (tmp_path / "tests/unit/test-results").mkdir()  # an output folder without tests is not an area
     write_pyproject(tmp_path, "[tool.bdt.ci.plan]\n")
     groups = required_label_groups(tmp_path)
     assert {"test-orders", "test-full", "test-none"} <= set(groups["test_area"])
+    assert "test-test-results" not in groups["test_area"]
 
 
 def test_required_label_groups_keeps_a_hand_written_test_area_group(tmp_path) -> None:
