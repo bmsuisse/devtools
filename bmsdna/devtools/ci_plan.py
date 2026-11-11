@@ -4,7 +4,7 @@ Configured under `[tool.bdt.ci.plan]` in pyproject.toml (the table must exist, e
 
     [tool.bdt.ci.plan]
     on_missing = "infer"            # PR without a usable label: "infer" from the changed files (default) or "fail"
-    non_code = ["docs/**", "*.md"]  # files no test reads or ships; explicit per repo
+    non_code = ["docs/**", "*.md"]  # files no test reads or ships; explicit per repo (`*.md` = root only, `**/*.md` = all)
 
     [tool.bdt.ci.plan.tiers.unit]   # default tiers: unit = tests/unit, e2e = tests/e2e
     dir = "tests/unit"              # areas = sub-folders (snake_case folder <-> kebab-case label)
@@ -324,6 +324,15 @@ def _from_files(files: list[str], config: PlanConfig, warnings: list[str]) -> Pl
         return Plan(
             "none",
             f"all {len(files)} changed file(s) are non-code",
+            warnings=tuple(warnings),
+        )
+    areas &= (
+        config.all_areas()
+    )  # an area whose folder or files were all removed has nothing left to run
+    if not areas:
+        return Plan(
+            "none",
+            "the changed area tests no longer exist (removed)",
             warnings=tuple(warnings),
         )
     return Plan(

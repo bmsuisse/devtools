@@ -28,6 +28,7 @@ table, this is a no-op and behavior is unchanged.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from . import ci_plan
@@ -45,7 +46,11 @@ def required_label_groups(start: Path | None = None) -> dict[str, list[str]]:
     """
     raw = load_bdt_table("pr", start).get("required_labels", {})
     groups = {name: choices for name, choices in raw.items() if isinstance(choices, list)} if isinstance(raw, dict) else {}
-    plan = ci_plan.load_plan_config(start)
+    try:
+        plan = ci_plan.load_plan_config(start)
+    except ValueError as error:  # `bdt ci plan` fails the build on this; PR creation must not break over it
+        print(f"warning: no generated test-area label group: {error}", file=sys.stderr)
+        plan = None
     if plan is not None:
         groups.setdefault(TEST_AREA_GROUP, ci_plan.required_label_choices(plan))
     return groups

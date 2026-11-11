@@ -124,7 +124,8 @@ def changed_files(target: str, *, merge_checkout: bool) -> list[str]:
 
 
 def verify_fix_base(env: Mapping[str, str]) -> None:
-    """A fix for `main` must contain `main` and no unreleased `dev` commits (so cut it from `main`, never from `dev`).
+    """A fix for `main` must not contain unreleased `dev` commits (cut it from `main`, never from `dev`; being behind
+    `main` is fine, the PR merge handles that).
 
     Needs the PR merge commit as HEAD and fetches `origin/dev` and `origin/main`; raises RuntimeError when that is not
     possible, which the plan reports as a warning instead of failing.
@@ -155,10 +156,6 @@ def verify_fix_base(env: Mapping[str, str]) -> None:
         extra_env=auth,
     )
     _, main, fix = parents
-    if _git("merge-base", "--is-ancestor", main, fix, ok_codes=(0, 1)).returncode:
-        raise BranchFlowError(
-            "the fix branch must contain the target main commit; update it from main, never dev"
-        )
     dev_only = set(
         _git("rev-list", "refs/remotes/origin/dev", "--not", main).stdout.split()
     )
@@ -169,9 +166,14 @@ def verify_fix_base(env: Mapping[str, str]) -> None:
         )
 
 
+def _vso(text: str) -> str:
+    """Escape what could end or split a `##vso[...]` logging command (file names and git errors are untrusted)."""
+    return text.replace("%", "%AZP25").replace("\r", "%0D").replace("\n", "%0A")
+
+
 def emit(ado: bool, name: str, value: str) -> None:
     print(
-        f"##vso[task.setvariable variable={name};isOutput=true]{value}"
+        f"##vso[task.setvariable variable={name};isOutput=true]{_vso(value)}"
         if ado
         else f"{name}={value}"
     )
@@ -179,7 +181,9 @@ def emit(ado: bool, name: str, value: str) -> None:
 
 def log(ado: bool, level: str, message: str) -> None:
     print(
-        f"##vso[task.logissue type={level}]{message}" if ado else f"{level}: {message}"
+        f"##vso[task.logissue type={level}]{_vso(message)}"
+        if ado
+        else f"{level}: {message}"
     )
 
 

@@ -123,3 +123,9 @@ def test_required_label_groups_unchanged_without_ci_plan(tmp_path) -> None:
     (tmp_path / "tests/unit/orders").mkdir(parents=True)
     write_pyproject(tmp_path, "[project]\nname = 'x'\n")
     assert required_label_groups(tmp_path) == {}
+
+
+def test_required_label_groups_survive_an_invalid_ci_plan_table(tmp_path, capsys) -> None:
+    write_pyproject(tmp_path, '[tool.bdt.ci.plan]\non_missing = "x"\n[tool.bdt.pr.required_labels]\ntype = ["bug"]\n')
+    assert required_label_groups(tmp_path) == {"type": ["bug"]}
+    assert "on_missing" in capsys.readouterr().err

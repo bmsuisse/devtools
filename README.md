@@ -859,7 +859,7 @@ the `branching-strategy` skill). Add the table to pyproject.toml (an empty one s
 ```toml
 [tool.bdt.ci.plan]
 on_missing = "infer"            # PR without a usable label: infer from the changed files (default) or "fail"
-non_code = ["docs/**", "*.md"]  # files no test reads or ships; explicit per repo (full-match globs, `**` crosses folders)
+non_code = ["docs/**", "*.md"]  # files no test reads or ships; explicit per repo (full-match globs: `*.md` = root only, `**/*.md` = every folder)
 
 [tool.bdt.ci.plan.tiers.unit]   # default tiers: unit = tests/unit, e2e = tests/e2e (a tier whose folder is missing is skipped)
 dir = "tests/unit"              # areas = sub-folders; folder `route_planning` <-> label `test-route-planning`

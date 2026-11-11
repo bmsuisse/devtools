@@ -207,11 +207,10 @@ def test_fix_cut_from_dev_is_rejected(clone, monkeypatch) -> None:
         ci_plan_env.verify_fix_base({})
 
 
-def test_fix_behind_main_is_rejected(clone, monkeypatch) -> None:
+def test_fix_cut_from_main_stays_valid_when_main_moves_on(clone, monkeypatch) -> None:
     monkeypatch.chdir(clone)
     merge_fix_into_main(clone, "origin/main", main_moves=True)
-    with pytest.raises(BranchFlowError, match="contain the target main"):
-        ci_plan_env.verify_fix_base({})
+    ci_plan_env.verify_fix_base({})
 
 
 def test_fix_check_needs_a_merge_commit(clone, monkeypatch) -> None:
@@ -362,3 +361,11 @@ def test_invalid_config_is_reported_not_raised(project) -> None:
     (project / "pyproject.toml").write_text('[tool.bdt.ci.plan]\non_missing = "x"\n')
     result = CliRunner().invoke(app, ["ci", "plan"])
     assert result.exit_code == 2 and "on_missing" in result.output
+
+
+def test_vso_commands_cannot_be_split_by_untrusted_text(capsys) -> None:
+    ci_plan_env.log(True, "warning", "bad\n##vso[task.complete result=Succeeded]")
+    ci_plan_env.emit(True, "unitPaths", "a\n##vso[task.setvariable variable=x]y 100%")
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 2
+    assert "%0A" in lines[0] and "%0A" in lines[1] and "100%AZP25" in lines[1]

@@ -415,3 +415,19 @@ def test_paths_with_spaces_are_shell_quoted(tmp_path) -> None:
     assert (
         ci_plan.outputs(result, config)["unitPaths"] == "'tests/unit/customer orders'"
     )
+
+
+def test_removed_area_tests_leave_nothing_to_run(config) -> None:
+    result = plan_for(config, pr(), files=["tests/unit/legacy/test_x.py"])
+    assert result.kind == "none" and "no longer exist" in result.reason
+
+
+def test_non_code_star_is_root_only_and_double_star_is_recursive(config) -> None:
+    root_only = PlanConfig(config.root, config.tiers, "infer", ("*.md",))
+    recursive = PlanConfig(config.root, config.tiers, "infer", ("**/*.md",))
+    assert root_only.is_non_code("README.md") and not root_only.is_non_code(
+        "src/pkg/README.md"
+    )
+    assert recursive.is_non_code("README.md") and recursive.is_non_code(
+        "src/pkg/README.md"
+    )
