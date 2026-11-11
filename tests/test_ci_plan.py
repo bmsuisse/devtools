@@ -497,3 +497,102 @@ def test_pycache_in_the_checkout_path_does_not_hide_areas(tmp_path) -> None:
     assert Tier("unit", "tests/unit").areas(root) == ["orders"]
     touch(root, "tests/unit/cached/__pycache__/test_b.py")
     assert Tier("unit", "tests/unit").areas(root) == ["orders"]
+
+
+# --- areas that own paths (infra) -----------------------------------------------------------------------------
+
+
+def infra_config(tmp_path, *, infra_dir: bool = True, extra: str = "") -> PlanConfig:
+    touch(tmp_path, "tests/unit/orders/test_a.py")
+    if infra_dir:
+        touch(tmp_path, "infra/main.bicep", "infra/modules/app.bicep")
+    (tmp_path / "pyproject.toml").write_text(f"[tool.bdt.ci.plan]\n{extra}")
+    config = load_plan_config(tmp_path)
+    assert config is not None
+    return config
+
+
+def test_infra_area_is_built_in_when_an_infra_folder_exists(tmp_path) -> None:
+    config = infra_config(tmp_path)
+    assert config.paths == {"infra": ("infra/**",)}
+    assert "infra" in config.all_areas()
+    assert "test-infra" in ci_plan.required_label_choices(config)
+
+
+def test_no_infra_area_without_an_infra_folder(tmp_path) -> None:
+    config = infra_config(tmp_path, infra_dir=False)
+    assert config.paths == {} and "infra" not in config.all_areas()
+
+
+def test_paths_table_overrides_and_extends(tmp_path) -> None:
+    config = infra_config(
+        tmp_path,
+        extra='[tool.bdt.ci.plan.paths]\ninfra = ["deploy/**"]\nfrontend = ["web/**"]\n',
+    )
+    assert config.paths == {"infra": ("deploy/**",), "frontend": ("web/**",)}
+    assert plan_for(config, pr(), files=["web/app.ts"]).areas == {"frontend"}
+    assert plan_for(config, pr(), files=["deploy/main.bicep"]).areas == {"infra"}
+    assert plan_for(config, pr(), files=["web/app.ts", "deploy/main.bicep"]).areas == {
+        "frontend",
+        "infra",
+    }
+    # the default no longer applies once overridden: infra/ files are unowned again
+    assert plan_for(config, pr(), files=["infra/main.bicep"]).kind == "full"
+
+
+def test_invalid_paths_config_is_rejected(tmp_path) -> None:
+    touch(tmp_path, "tests/unit/orders/test_a.py")
+    (tmp_path / "pyproject.toml").write_text("[tool.bdt.ci.plan]\npaths = 3\n")
+    with pytest.raises(ValueError, match="paths"):
+        load_plan_config(tmp_path)
+
+
+def test_infra_only_pr_infers_the_infra_area_and_runs_no_tier(tmp_path) -> None:
+    config = infra_config(tmp_path)
+    result = plan_for(
+        config, pr(), files=["infra/main.bicep", "infra/modules/app.bicep"]
+    )
+    assert (result.kind, result.areas) == ("areas", {"infra"})
+    out = ci_plan.outputs(result, config)
+    assert (
+        out["runTests"] == "true"
+        and out["unitRun"] == "false"
+        and out["unitPaths"] == ""
+    )
+
+
+def test_infra_change_next_to_code_still_runs_everything(tmp_path) -> None:
+    config = infra_config(tmp_path)
+    assert (
+        plan_for(config, pr(), files=["infra/main.bicep", "src/app.py"]).kind == "full"
+    )
+
+
+def test_infra_label_selects_the_infra_area(tmp_path) -> None:
+    config = infra_config(tmp_path)
+    result = plan_for(config, pr(), labels=["test-infra"])
+    assert (result.kind, result.areas) == ("areas", {"infra"})
+
+
+def test_infra_label_runs_the_infra_tests_when_the_repo_has_some(tmp_path) -> None:
+    touch(tmp_path, "tests/unit/infra/test_bicep.py")
+    config = infra_config(tmp_path)
+    result = plan_for(config, pr(), labels=["test-infra"])
+    assert ci_plan.outputs(result, config)["unitPaths"] == "tests/unit/infra"
+    changed = plan_for(config, pr(), files=["infra/main.bicep"])
+    assert ci_plan.outputs(changed, config)["unitPaths"] == "tests/unit/infra"
+
+
+def test_infra_label_without_an_infra_folder_is_unknown(tmp_path) -> None:
+    config = infra_config(tmp_path, infra_dir=False)
+    result = plan_for(config, pr(), labels=["test-infra"], files=[])
+    assert result.kind == "none" and any("test-infra" in w for w in result.warnings)
+
+
+def test_path_area_named_like_a_control_label_is_rejected(tmp_path) -> None:
+    touch(tmp_path, "tests/unit/orders/test_a.py")
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.bdt.ci.plan]\n[tool.bdt.ci.plan.paths]\nnone = ["x/**"]\n'
+    )
+    with pytest.raises(ValueError, match="collide"):
+        load_plan_config(tmp_path)
