@@ -867,14 +867,25 @@ dir = "tests/unit"              # areas = sub-folders with tests (test_*.py / *_
 [tool.bdt.ci.plan.tiers.e2e]
 dir = "tests/e2e"               # flat folder: map the test_*.py files to areas instead
 areas = { chat = ["test_chat*.py"], review = ["test_review_*.py"] }  # unmatched files form the area `shared`
+
+[tool.bdt.ci.plan.paths]        # non-test files an area owns: changing them infers that area instead of everything
+infra = ["infra/**"]            # built-in default when the repo has an infra/ folder; add e.g. frontend = ["frontend/**"]
 ```
 
 Labels on the PR: `test-<area>` (one per touched area, selects it in every tier), `test-shared` (just the area
-`shared`), `test-full` (everything), `test-none` (no tests; lint and build still run). Legacy `e2e-<area>` labels count
+`shared`), `test-infra` (the area `infra`, see below), `test-full` (everything), `test-none` (no tests; lint and
+build still run). Legacy `e2e-<area>` labels count
 as `test-<area>`. With the table present, `bdt pr create` requires one of them (group `test_area`, generated from the
 same folders; a hand-written `test_area` group in `[tool.bdt.pr.required_labels]` wins). Folders without tests (output
 folders like `test-results`, helper packages) are not areas; a changed file in one of them, or directly in the tier
 folder, selects everything because any test may use it.
+
+`infra` is an ordinary area that owns `infra/**` (the Bicep folder) by default, whenever the repo has an `infra/`
+folder. An area may have no tests: an infra-only PR (labelled `test-infra`, or inferred from the changed files)
+plans `runTests=true` but no tier runs, so lint, types and the infra guards still run and nothing else does. A
+repo that does test its infra files (Bicep settings checks and the like) puts those tests in a `tests/unit/infra/`
+folder (or an `infra` glob area) and the same label selects exactly them. Do not list `infra/**` under `non_code`
+in such a repo: that would skip those tests.
 
 Order of decision, always logged with its reason:
 
@@ -887,8 +898,8 @@ Order of decision, always logged with its reason:
    warning instead of guessing. Any other PR into `test` / `main` fails the build. Area folders must not be called
    `full` or `none` (they would collide with the labels).
 3. PR labels decide. No usable label (none, or only unknown `test-*` ones, which are warned about): the changed files
-   (merge commit against its first parent) decide. Nothing changed or only `non_code` files -> nothing runs, only area
-   tests -> those areas, any other file -> everything. `on_missing = "fail"` fails the build instead.
+   (merge commit against its first parent) decide. Nothing changed or only `non_code` files -> nothing runs, only files
+   an area owns (its tests, or its `paths`) -> those areas, any other file -> everything. `on_missing = "fail"` fails the build instead.
 4. Anything unreadable (label API, change list) runs everything: a missing decision never silently skips tests.
 
 Outputs (Azure Pipelines variables with `isOutput=true`; plain `name=value` lines elsewhere): `runTests`, and per tier

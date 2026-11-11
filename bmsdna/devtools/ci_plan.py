@@ -13,6 +13,9 @@ Configured under `[tool.bdt.ci.plan]` in pyproject.toml (the table must exist, e
     dir = "tests/e2e"               # flat folder: an area table maps test files to areas instead
     areas = { chat = ["test_chat*.py"], review = ["test_review_*.py"] }  # unmatched files = area "shared"
 
+    [tool.bdt.ci.plan.paths]        # non-test files an area owns: changing them infers that area, not everything
+    infra = ["infra/**"]            # built-in default when the repo has an infra/ folder (areas may have no tests)
+
 Labels: `test-<area>`, `test-full` (everything), `test-none` (no tests; lint and build still run). The legacy
 `e2e-<area>` labels count as `test-<area>`. Order of decision (the reason is always reported):
 
@@ -21,7 +24,8 @@ Labels: `test-<area>`, `test-full` (everything), `test-none` (no tests; lint and
 2. Branch flow: promotions (dev -> test -> main -> dev) run nothing; `fix/*` and `hotfix/*` into `main` are tested
    and must be cut from `main`; any other PR into `test`/`main` is an error.
 3. PR labels decide. Without a usable label the changed files decide (`on_missing = "infer"`): nothing changed or
-   only `non_code` files -> none, only area tests -> those areas, any other file -> everything.
+   only `non_code` files -> none, only files an area owns (its tests, or `paths`) -> those areas, any other file ->
+   everything. An area without tests (such as `infra`) selects nothing to run: `runTests` stays true, every tier is off.
 4. Anything unreadable (label API, change list) selects everything.
 """
 
@@ -49,6 +53,7 @@ FIX_PREFIXES = ("fix/", "hotfix/")
 PUSH_REASONS = frozenset(
     {"IndividualCI", "BatchedCI"}
 )  # a merge landed on the branch: deploy only
+INFRA_AREA = "infra"  # owns `infra/**` by default when the repo has an infra/ folder; usually has no tests
 RESERVED_AREAS = frozenset(
     {"full", "none"}
 )  # test-full / test-none are the control labels
@@ -157,9 +162,20 @@ class PlanConfig:
     tiers: tuple[Tier, ...]
     on_missing: OnMissing = "infer"
     non_code: tuple[str, ...] = ()
+    paths: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     def all_areas(self) -> set[str]:
-        return {a for tier in self.tiers for a in tier.areas(self.root)}
+        """Areas with tests in a tier, plus areas that only own paths (such as `infra`, which may have no tests)."""
+        return {a for tier in self.tiers for a in tier.areas(self.root)} | set(
+            self.paths
+        )
+
+    def path_owners(self, path: str) -> frozenset[str]:
+        return frozenset(
+            area
+            for area, globs in self.paths.items()
+            if any(PurePosixPath(path).full_match(g) for g in globs)
+        )
 
     def is_non_code(self, path: str) -> bool:
         return any(PurePosixPath(path).full_match(g) for g in self.non_code)
@@ -203,11 +219,20 @@ def load_plan_config(start: Path | None = None) -> PlanConfig | None:
     tiers_raw = raw.get("tiers", {name: {} for name in DEFAULT_TIER_DIRS})
     if not isinstance(tiers_raw, dict):
         raise ValueError("[tool.bdt.ci.plan.tiers] must be a table")
+    paths_raw = raw.get("paths", {})
+    if not isinstance(paths_raw, dict):
+        raise ValueError("[tool.bdt.ci.plan.paths] must be a table of glob lists")
+    paths = {
+        str(area): _strings(globs, f"paths.{area}") for area, globs in paths_raw.items()
+    }
+    if (pyproject.parent / "infra").is_dir():
+        paths.setdefault(INFRA_AREA, ("infra/**",))
     config = PlanConfig(
         root=pyproject.parent,
         tiers=tuple(_tier(name, t) for name, t in tiers_raw.items()),
         on_missing=on_missing,
         non_code=_strings(raw.get("non_code", []), "non_code"),
+        paths=paths,
     )
     if clash := sorted(config.all_areas() & RESERVED_AREAS):
         raise ValueError(
@@ -337,6 +362,8 @@ def _from_files(files: list[str], config: PlanConfig, warnings: list[str]) -> Pl
             for tier in config.tiers
             if (owned := tier.area_of(config.root, path, known[tier.name]))
         ]
+        if owned_paths := config.path_owners(path):
+            owners.append(owned_paths)
         if not owners:
             return _full(
                 config,
@@ -351,7 +378,7 @@ def _from_files(files: list[str], config: PlanConfig, warnings: list[str]) -> Pl
             warnings=tuple(warnings),
         )
     areas &= frozenset().union(
-        *known.values()
+        *known.values(), config.paths
     )  # a removed area has nothing left to run
     if not areas:
         return Plan(
