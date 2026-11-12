@@ -186,25 +186,27 @@ def retry_hint() -> str:
 
 
 def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, target_branch: str | None) -> dict:
-    """The PR from `source_branch` (active first, else completed, else abandoned). `target_branch=None` doesn't filter on the target.
+    """The PR from `source_branch` (active first, else the newest completed or abandoned one). `target_branch=None` doesn't filter on the target.
 
     Several active PRs from the branch (into different targets) are ambiguous: see `choose_pr`.
     """
     url = f"{_base_url(remote)}/_apis/git/repositories/{remote.repo}/pullrequests"
-    for status in ["active", "completed", "abandoned"]:
+    for status in ["active", "all"]:
         r = session.get(
             url,
             params={
                 "searchCriteria.sourceRefName": f"refs/heads/{source_branch}",
                 **({"searchCriteria.targetRefName": f"refs/heads/{target_branch}"} if target_branch else {}),
                 "searchCriteria.status": status,
-                **({"$top": 1} if status != "active" else {}),
+                **({"$top": 10} if status != "active" else {}),
                 "api-version": "7.1",
             },
             timeout=HTTP_TIMEOUT_SECS,
         )
         r.raise_for_status()
         items = r.json().get("value", [])
+        if status != "active":  # the newest, whether it was completed or abandoned
+            items = sorted(items, key=lambda i: i["pullRequestId"], reverse=True)[:1]
         if items:
             candidates = [
                 PrCandidate(i["pullRequestId"], i.get("title", "?"), i["targetRefName"].removeprefix("refs/heads/"), pr_web_url(remote, i["pullRequestId"]))

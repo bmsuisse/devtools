@@ -67,9 +67,10 @@ def resolve_session(explicit: str | None) -> Session | None:
 
 
 def comment_body(reason: str, builds: Iterable[tuple[str, int, str]], session: Session | None = None) -> str:
-    """The comment text for `reason`; `builds` are (pipeline/workflow name, id, url)."""
+    """The comment text for `reason` (kept to one line: a blank line or a lookalike build/session line in it would
+    otherwise be read back as the metadata below); `builds` are (pipeline/workflow name, id, url)."""
     lines = "\n".join(f"- {name} #{build_id}: {url}" for name, build_id, url in builds)
-    body = f"{PREFIX} {reason.strip()}\n\n{_BUILDS_HEADER}\n{lines}"
+    body = f"{PREFIX} {one_line(reason)}\n\n{_BUILDS_HEADER}\n{lines}"
     return f"{body}\n\n{session.agent} Session: {session.id}" if session else body
 
 
@@ -80,7 +81,7 @@ def one_line(text: str) -> str:
 
 def abandon_body(reason: str, session: Session | None = None) -> str:
     """The comment text for abandoning a PR for `reason`."""
-    body = f"{ABANDON_PREFIX} {reason.strip()}"
+    body = f"{ABANDON_PREFIX} {one_line(reason)}"
     return f"{body}\n\n{session.agent} Session: {session.id}" if session else body
 
 

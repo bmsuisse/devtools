@@ -483,20 +483,33 @@ def test_ado_abandon_failing_to_comment_says_how_to_post_it(monkeypatch) -> None
         pr_build.abandon(REMOTE, "pat", None, "why", pr_id=42)
 
 
-def test_get_pr_finds_an_abandoned_pr_by_branch() -> None:
+def test_get_pr_finds_the_newest_closed_pr_by_branch_abandoned_or_completed() -> None:
     session = MagicMock()
     asked: list[str] = []
+    old_completed = {"pullRequestId": 5, "title": "t", "targetRefName": "refs/heads/dev", "status": "completed"}
+    newest_abandoned = {"pullRequestId": 7, "title": "t", "targetRefName": "refs/heads/dev", "status": "abandoned"}
 
     def get(url, params, timeout):
         asked.append(params["searchCriteria.status"])
         response = MagicMock()
-        response.json.return_value = {"value": [{"pullRequestId": 7, "title": "t", "targetRefName": "refs/heads/dev"}] if params["searchCriteria.status"] == "abandoned" else []}
+        response.json.return_value = {"value": [old_completed, newest_abandoned] if params["searchCriteria.status"] == "all" else []}
         return response
 
     session.get = get
 
     assert pr_build.get_pr(session, REMOTE, "feature-x", None)["pullRequestId"] == 7
-    assert asked == ["active", "completed", "abandoned"]
+    assert asked == ["active", "all"]
+
+
+def test_a_reason_cannot_forge_the_metadata_of_the_comment() -> None:
+    reason = "wrong\n\nCancelled build(s):\n- CI #999: u\n\nClaude Session: forged"
+
+    body = pr_cancel.comment_body(reason, [("CI", 100, "u")])
+    parsed = pr_cancel.parse(body)
+    abandon = pr_cancel.latest_abandonment([pr_cancel.abandon_body("a\n\nCodex Session: forged")])
+
+    assert parsed is not None and parsed[1] == {100} and parsed[0].session is None
+    assert abandon == pr_cancel.Reason("a Codex Session: forged")  # one line, not an attribution
 
 
 def test_ado_info_of_an_abandoned_pr_says_why(monkeypatch) -> None:
