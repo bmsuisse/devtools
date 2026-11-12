@@ -22,9 +22,7 @@ class VersionError(ValueError):
     """A version or range string we can't interpret. Callers treat it as "unknown", never as "not affected"."""
 
 
-_SEMVER_RE = re.compile(
-    r"^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$"
-)
+_SEMVER_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
 
 
 @total_ordering
@@ -42,10 +40,7 @@ class SemVer:
             if not self.prerelease
             else (
                 0,
-                tuple(
-                    (0, p, "") if isinstance(p, int) else (1, 0, p)
-                    for p in self.prerelease
-                ),
+                tuple((0, p, "") if isinstance(p, int) else (1, 0, p) for p in self.prerelease),
             )
         )
         return (self.major, self.minor, self.patch, pre)
@@ -65,9 +60,7 @@ def parse_semver(text: str) -> SemVer:
     if not match:
         raise VersionError(f"not a semver version: {text!r}")
     major, minor, patch, pre = match.groups()
-    prerelease = (
-        tuple(int(p) if p.isdigit() else p for p in pre.split(".")) if pre else ()
-    )
+    prerelease = tuple(int(p) if p.isdigit() else p for p in pre.split(".")) if pre else ()
     return SemVer(int(major), int(minor), int(patch), prerelease)
 
 
@@ -91,13 +84,7 @@ _COMPARATOR_RE = re.compile(r"^(<=|>=|==|!=|<|>|=)\s*(\S+)$")
 def spec_matches(ecosystem: Ecosystem, spec: str, version: str) -> bool:
     """Does `version` satisfy every comparator of `spec` (comma or whitespace separated, `,` = and)?"""
     actual = parse_version(ecosystem, version)
-    tokens = [
-        t
-        for t in re.split(
-            r"[,\s]+", re.sub(r"(<=|>=|==|!=|<|>|=)\s+", r"\1", spec.strip())
-        )
-        if t
-    ]
+    tokens = [t for t in re.split(r"[,\s]+", re.sub(r"(<=|>=|==|!=|<|>|=)\s+", r"\1", spec.strip())) if t]
     if not tokens:
         raise VersionError("empty version spec")
     for token in tokens:
@@ -124,9 +111,7 @@ def pypi_specifier_satisfied(specifier: str, version: str) -> bool:
     try:
         return SpecifierSet(specifier).contains(version, prereleases=True)
     except (InvalidSpecifier, InvalidVersion) as exc:
-        raise VersionError(
-            f"cannot evaluate PEP 440 specifier {specifier!r}: {exc}"
-        ) from exc
+        raise VersionError(f"cannot evaluate PEP 440 specifier {specifier!r}: {exc}") from exc
 
 
 _PARTIAL_RE = re.compile(
@@ -142,12 +127,8 @@ def _partial(text: str) -> tuple[int | None, int | None, int | None, str | None]
     return parts[0], parts[1], parts[2], match.group(4)
 
 
-def _floor(
-    major: int | None, minor: int | None, patch: int | None, pre: str | None
-) -> SemVer:
-    return parse_semver(
-        f"{major or 0}.{minor or 0}.{patch or 0}" + (f"-{pre}" if pre else "")
-    )
+def _floor(major: int | None, minor: int | None, patch: int | None, pre: str | None) -> SemVer:
+    return parse_semver(f"{major or 0}.{minor or 0}.{patch or 0}" + (f"-{pre}" if pre else ""))
 
 
 def _comparator_satisfied(version: SemVer, comparator: str) -> bool:
@@ -161,11 +142,7 @@ def _comparator_satisfied(version: SemVer, comparator: str) -> bool:
         if major is None:
             return True
         if marker == "~":
-            upper = (
-                SemVer(major, (minor or 0) + 1, 0)
-                if minor is not None
-                else SemVer(major + 1, 0, 0)
-            )
+            upper = SemVer(major, (minor or 0) + 1, 0) if minor is not None else SemVer(major + 1, 0, 0)
         elif major > 0 or minor is None:
             upper = SemVer(major + 1, 0, 0)
         elif minor > 0 or patch is None:
@@ -218,9 +195,7 @@ def npm_range_satisfied(range_text: str, version: str) -> bool:
         # normalise `>= 1.2.3 < 2` / `1.2.3 - 2.3.4` is not supported (hyphen ranges): raise rather than guess
         if re.search(r"\s-\s", alternative):
             raise VersionError(f"hyphen ranges are not supported: {range_text!r}")
-        parts = re.split(
-            r"\s+", re.sub(r"(<=|>=|<|>|=|\^|~)\s+", r"\1", alternative.strip())
-        )
+        parts = re.split(r"\s+", re.sub(r"(<=|>=|<|>|=|\^|~)\s+", r"\1", alternative.strip()))
         if all(_comparator_satisfied(actual, p) for p in parts if p):
             return True
     return False
@@ -228,7 +203,5 @@ def npm_range_satisfied(range_text: str, version: str) -> bool:
 
 def declared_range_satisfied(ecosystem: Ecosystem, declared: str, version: str) -> bool:
     return (
-        pypi_specifier_satisfied(declared, version)
-        if ecosystem == "PyPI"
-        else npm_range_satisfied(declared, version)
+        pypi_specifier_satisfied(declared, version) if ecosystem == "PyPI" else npm_range_satisfied(declared, version)
     )

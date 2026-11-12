@@ -13,13 +13,12 @@ import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, cast
 
 from .versions import Ecosystem, normalize_name
 
 LOCKFILE_NAMES = {"uv.lock": "PyPI", "bun.lock": "npm"}
-_SKIP_DIRS = frozenset(
-    {"node_modules", ".venv", "venv", ".git", ".worktrees", "__pycache__", ".tox"}
-)
+_SKIP_DIRS = frozenset({"node_modules", ".venv", "venv", ".git", ".worktrees", "__pycache__", ".tox"})
 
 
 class LockfileError(ValueError):
@@ -33,9 +32,7 @@ class LockedPackage:
     version: str
     direct: bool
     lockfile: Path
-    declared: str | None = (
-        None  # the range/specifier the project itself declares (direct dependencies only)
-    )
+    declared: str | None = None  # the range/specifier the project itself declares (direct dependencies only)
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,11 +60,7 @@ def find_lockfiles(roots: Iterable[Path]) -> list[Path]:
             continue
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS)
-            found.extend(
-                Path(dirpath) / name
-                for name in sorted(filenames)
-                if name in LOCKFILE_NAMES
-            )
+            found.extend(Path(dirpath) / name for name in sorted(filenames) if name in LOCKFILE_NAMES)
     return sorted(dict.fromkeys(p.resolve() for p in found))
 
 
@@ -127,11 +120,7 @@ def read_uv_lock(path: Path) -> LockfileContent:
             )
             continue
         norm = normalize_name("PyPI", name)
-        content.packages.append(
-            LockedPackage(
-                "PyPI", norm, pkg["version"], norm in direct, path, direct.get(norm)
-            )
-        )
+        content.packages.append(LockedPackage("PyPI", norm, pkg["version"], norm in direct, path, direct.get(norm)))
     return content
 
 
@@ -165,10 +154,13 @@ def loads_jsonc(text: str) -> object:
 
 def read_bun_lock(path: Path) -> LockfileContent:
     data = loads_jsonc(path.read_text(encoding="utf-8"))
-    assert isinstance(data, dict)
+    if not isinstance(data, dict):
+        raise ValueError("top level is not an object")
     content = LockfileContent(path, "npm")
+    workspaces = cast("dict[str, dict[str, Any]]", data.get("workspaces") or {})
+    packages = cast("dict[str, list[Any]]", data.get("packages") or {})
     declared: dict[str, str] = {}
-    for workspace in (data.get("workspaces") or {}).values():
+    for workspace in workspaces.values():
         for key in (
             "dependencies",
             "devDependencies",
@@ -178,15 +170,10 @@ def read_bun_lock(path: Path) -> LockfileContent:
             for name, spec in (workspace.get(key) or {}).items():
                 declared.setdefault(name, spec)
     seen: set[tuple[str, str]] = set()
-    for key, entry in (data.get("packages") or {}).items():
+    for key, entry in packages.items():
         ref = entry[0]
         name, _, version = ref.rpartition("@")
-        if (
-            not name
-            or "@" in name.lstrip("@")
-            or ":" in version
-            or not re.match(r"^\d", version)
-        ):
+        if not name or "@" in name.lstrip("@") or ":" in version or not re.match(r"^\d", version):
             content.unsupported.append(
                 Unsupported(
                     path,
@@ -198,9 +185,7 @@ def read_bun_lock(path: Path) -> LockfileContent:
         if (name, version) in seen:
             continue
         seen.add((name, version))
-        is_direct = (
-            name in declared and key == name
-        )  # a nested `a/b` entry is a transitive copy
+        is_direct = name in declared and key == name  # a nested `a/b` entry is a transitive copy
         content.packages.append(
             LockedPackage(
                 "npm",
