@@ -178,9 +178,16 @@ def _ado_merge(session: requests.Session, remote: AdoRemote, pr: dict) -> tuple[
     that is only as current as the PR's last push, so also whether the target has moved on since (`pr_drift`)."""
     if pr.get("status") != "active":
         return MERGE_NONE, [], None
-    if pr_build.merge_conflict_message(pr):
+    if pr.get("mergeStatus") == "conflicts":
         return MERGE_CONFLICTS, [], None
-    drift = pr_build.target_drift(session, remote, pr)
+    if pr_build.merge_conflict_message(pr):  # the merge failed or was rejected by policy: not a conflict, but not mergeable either
+        return MERGE_UNKNOWN, [], None
+    try:
+        drift = pr_build.target_drift(session, remote, pr)
+    except AdoAuthError:
+        raise
+    except requests.RequestException:
+        return MERGE_UNKNOWN, [], None
     if drift is None:
         return MERGE_CLEAN, [], None
     if drift.conflicting:

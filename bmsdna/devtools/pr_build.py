@@ -165,12 +165,15 @@ def target_tip(session: requests.Session, remote: AdoRemote, target: str) -> str
 
 def target_drift(session: requests.Session, remote: AdoRemote, pr: dict) -> pr_drift.Drift | None:
     """`pr_drift.check` for `pr`: has its target branch moved since Azure DevOps computed `mergeStatus`, and does it still merge?
-    Best effort like `has_build_policy`: None when the target's tip can't be looked up, an extra check mustn't fail a status."""
+    Raises `requests.RequestException` when the target's tip can't be looked up: callers decide what "unknown" means for them."""
     moved = pr_drift.moved_target(pr)
-    if not moved:
-        return None
+    return pr_drift.check(remote, pr, target_tip(session, remote, moved[0])) if moved else None
+
+
+def target_drift_or_none(session: requests.Session, remote: AdoRemote, pr: dict) -> pr_drift.Drift | None:
+    """`target_drift`, best effort like `has_build_policy`: an extra check mustn't fail a status, so None when it can't be made."""
     try:
-        return pr_drift.check(remote, pr, target_tip(session, remote, moved[0]))
+        return target_drift(session, remote, pr)
     except requests.RequestException:
         return None
 
@@ -1268,7 +1271,7 @@ def run(
         pr_title = pr.get("title", "?")
         pr_status = pr.get("status", "?")
         # every poll, so a target that moves mid-wait is noticed too; one cheap request, the merge itself only when something changed
-        drift = target_drift(session, remote, pr)
+        drift = target_drift_or_none(session, remote, pr)
         if drift and drift.conflicting:
             sys.exit(pr_drift.conflict_message(pr, drift))
         if drift and (drift_msg := pr_drift.notice(drift)) != drift_notice_shown:

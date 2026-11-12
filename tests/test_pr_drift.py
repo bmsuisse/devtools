@@ -7,12 +7,13 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 from typer.testing import CliRunner
 
 from bmsdna.devtools import pr_drift, pr_info
 from bmsdna.devtools.cli import app
 from bmsdna.devtools.gitrepo import AdoRemote, GitHubRemote
-from bmsdna.devtools.pr_build import run, target_drift, target_tip
+from bmsdna.devtools.pr_build import run, target_drift, target_drift_or_none, target_tip
 
 REMOTE = AdoRemote(org="myorg", project="MyProj", repo="myrepo")
 runner = CliRunner()
@@ -187,13 +188,13 @@ def test_target_tip_picks_the_exact_branch() -> None:
     assert target_tip(session_with_tip(None), REMOTE, "dev") is None
 
 
-def test_target_drift_fails_open_when_azure_devops_cannot_be_asked(repo: Repo) -> None:
-    import requests
-
+def test_target_drift_cannot_tell_when_azure_devops_cannot_be_asked(repo: Repo) -> None:
     session = MagicMock()
     session.get.side_effect = requests.ConnectionError("down")
 
-    assert target_drift(session, REMOTE, repo.pr()) is None
+    with pytest.raises(requests.ConnectionError):
+        target_drift(session, REMOTE, repo.pr())
+    assert target_drift_or_none(session, REMOTE, repo.pr()) is None
 
 
 def _poll_once(monkeypatch, pr: dict) -> None:
@@ -276,6 +277,24 @@ def test_ado_info_merge_state_follows_the_drift(monkeypatch, drift, expected) ->
 
     assert (info.merge, info.conflicts, info.target_behind) == expected
     assert info.target == "dev"
+
+
+def test_ado_info_merge_is_unknown_when_the_target_cannot_be_looked_up(monkeypatch) -> None:
+    _no_builds(monkeypatch)
+
+    def down(*a):
+        raise requests.ConnectionError("down")
+
+    monkeypatch.setattr("bmsdna.devtools.pr_info.pr_build.target_drift", down)
+
+    assert pr_info.ado_info(None, ADO_PR, REMOTE).merge == pr_info.MERGE_UNKNOWN  # ty: ignore[invalid-argument-type]
+
+
+@pytest.mark.parametrize("merge_status", ["failure", "rejectedByPolicy"])
+def test_ado_info_merge_is_unknown_not_conflicts_when_the_merge_failed_for_another_reason(monkeypatch, merge_status: str) -> None:
+    _no_builds(monkeypatch)
+
+    assert pr_info.ado_info(None, {**ADO_PR, "mergeStatus": merge_status}, REMOTE).merge == pr_info.MERGE_UNKNOWN  # ty: ignore[invalid-argument-type]
 
 
 def test_ado_info_reports_the_conflicts_azure_devops_itself_found(monkeypatch) -> None:
