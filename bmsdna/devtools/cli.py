@@ -41,6 +41,7 @@ from .bdt_config import find_pyproject, load_bdt_table
 from .cli_tools import CLI_TIMEOUT_SECS, EXIT_WAIT_TIMEOUT, detect_agent_session, require_gh
 from .github_api import GitHubClient
 from .pr_create_args import PrCreateArgsError, extract_labels, parse_pr_create_args, resolve_body, unsupported_notes
+from .deps.cli import deps_app
 from .usage.cli import usage_app
 from .gitrepo import (
     AdoRemote,
@@ -133,6 +134,7 @@ logs_app = typer.Typer(name="logs", help="Application Insights / Log Analytics q
 app.add_typer(logs_app, name="logs")
 
 app.add_typer(usage_app, name="usage")
+app.add_typer(deps_app, name="deps")
 
 ci_app = typer.Typer(name="ci", help="CI helpers (Azure Pipelines)")
 app.add_typer(ci_app, name="ci")

@@ -1192,6 +1192,48 @@ catch-all, service-to-service endpoints and an external API folder.
 then on only *new* unused routes fail -- and a baseline line whose route has since been deleted, excluded or
 used is reported as `api-route-baseline-stale`, so the list can only shrink.
 
+## `bdt deps affected` / `bdt deps advisories`
+
+Security incidents and supply chain attacks (bmsuisse/devtools#113): which locked dependencies are touched? Both
+commands only read: they never edit a file, a lock or an environment. They cover `uv.lock` (PyPI) and `bun.lock` (npm)
+below each `--path` (default: the current directory; `node_modules`, virtualenvs, `.git` and `.worktrees` are skipped).
+Git, path, alias and workspace sources can't be matched against an advisory: they are listed as `unsupported`, never skipped.
+
+```bash
+bdt deps affected lodash --version-spec "<4.17.21" --path ~/projects/CCMT2 --path ~/projects/OneSales
+bdt deps advisories --path .          # OSV lookup of every locked version, one status per affected package
+bdt deps advisories --json            # machine-readable
+```
+
+`affected PACKAGE` lists the locked versions of one package (PyPI names are normalised, npm names exact; `--ecosystem`
+narrows) and marks those matching `--version-spec` (comparators such as `<4.17.21` or `>=1.0,<2`, comma = and). Exit 0
+none matches, 1 a locked version matches, 2 setup error (no lockfile, unreadable lockfile, bad spec), 3 incomplete (a
+git/path/alias source of that name could not be matched).
+
+`advisories` queries [OSV](https://osv.dev) (GHSA, PYSEC and the OpenSSF `MAL-` malicious-package advisories) and the
+CISA KEV feed, groups aliases (GHSA = PYSEC = CVE) and reports per locked package one status. The maintenance skill's
+cooldown exception flow (`references/audit.md`) acts on it:
+
+| Status | Meaning |
+|---|---|
+| `malicious` | a `MAL-` advisory covers the locked version: an incident, not a bump |
+| `needs-triage` | affected range, fix, or (when the fix is inside the cooldown) severity is missing, conflicting or unparseable |
+| `no-fix` | an affected advisory has no fixed version |
+| `blocked` | the fixed version is outside the range the project declares for a direct dependency |
+| `exempt-eligible` | high/critical (CVSS v3 score >= 7 and/or GHSA label; sources that disagree go to triage) or in CISA KEV, and the fixed version is younger than the cooldown (or its age is unknown) |
+| `bump` | the fixed version is older than the cooldown: a normal bump takes it |
+| `informational` | affected, lower severity, fix still inside the cooldown |
+
+The target version is the lowest one the advisory data shows to be outside every affected range of the urgent
+advisories (all of them when none is urgent), never "latest". Lower-severity advisories that need a newer version stay open until a normal bump, and the finding names them. `next:` lines give the per-invocation commands. Unsupported sources are listed but don't change the exit code. The fix's age
+comes from the registry (PyPI: youngest file; npm: `time[version]`); `--cooldown-days` (default 5) is the project's
+cooldown. Compatibility with the parents' ranges of a *transitive* dependency isn't known here: re-run after the bump.
+
+It fails closed: OSV, KEV or an advisory record that can't be read is reported as `incomplete` with exit 3, never as
+"no advisory". Exit 0 no affected locked version, 1 affected, 2 setup error, 3 incomplete. `uv audit` / `bun audit`
+remain the per-repo CI checks; this command adds what they don't give uniformly (fixed version and severity for both
+ecosystems, KEV, `MAL-` advisories, the fix's age against the cooldown) and scans many repos in one run.
+
 ## `bdt find-injection`
 
 Scans backend and frontend code for injection risks, and warns when a web project has no
