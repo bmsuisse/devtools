@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlparse
 import requests
 
 from .azure_auth import get_azure_token
+from .pr_cancel import one_line
 from .gitrepo import AdoRemote, current_remote
 
 # Well-known Azure DevOps resource ID; `<id>/.default` is its AAD scope.
@@ -84,7 +85,7 @@ def _ado_message(response: requests.Response) -> str | None:
         message = response.json().get("message")
     except (ValueError, AttributeError):
         return None
-    return message if isinstance(message, str) and message.strip() else None
+    return one_line(message) if isinstance(message, str) and message.strip() else None
 
 
 def _is_sign_in_url(url: str) -> bool:

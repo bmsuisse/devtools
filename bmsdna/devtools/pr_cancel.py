@@ -20,7 +20,7 @@ from collections.abc import Iterable
 
 PREFIX = "CANCELLED BUILD:"
 _BUILDS_HEADER = "Cancelled build(s):"
-_ID_RE = re.compile(r"#(\d+)")
+_BUILD_LINE_RE = re.compile(r"^- .* #(\d+): \S+$", re.MULTILINE)
 
 
 def comment_body(reason: str, builds: Iterable[tuple[str, int, str]]) -> str:
@@ -29,7 +29,7 @@ def comment_body(reason: str, builds: Iterable[tuple[str, int, str]]) -> str:
     return f"{PREFIX} {reason.strip()}\n\n{_BUILDS_HEADER}\n{lines}"
 
 
-def _one_line(text: str) -> str:
+def one_line(text: str) -> str:
     """`text` as one printable line: it is attacker-controlled when the PR is someone else's, and goes to a terminal."""
     return " ".join("".join(c for c in text if unicodedata.category(c)[0] != "C" or c.isspace()).split())
 
@@ -42,8 +42,9 @@ def parse(comment: str) -> tuple[str, set[int]] | None:
     reason_part, _, rest = text[len(PREFIX) :].partition("\n\n")
     ids = set()
     if rest.lstrip().startswith(_BUILDS_HEADER):
-        ids = {int(i) for i in _ID_RE.findall(rest.partition(_BUILDS_HEADER)[2].split("\n\n")[0])}
-    return _one_line(reason_part), ids
+        # only the lines `comment_body` writes count: a stray "#123" in a note is no build id
+        ids = {int(i) for i in _BUILD_LINE_RE.findall(rest.partition(_BUILDS_HEADER)[2].split("\n\n")[0])}
+    return one_line(reason_part), ids
 
 
 def latest_reason(comments_oldest_first: Iterable[str], cancelled_ids: set[int]) -> str | None:

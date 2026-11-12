@@ -330,3 +330,32 @@ def test_cli_cancel_build_and_requeue_build_dispatch_on_azure_devops(monkeypatch
 
     assert seen[0] == ("cancel", (REMOTE, "p", None, "wrong branch"), {"pr_id": 5})
     assert seen[1][0] == "requeue" and seen[1][1][3] is True
+
+
+def test_a_stray_issue_number_in_a_note_is_not_a_build_id() -> None:
+    body = pr_cancel.comment_body("deploy raced", [("CI", 100, "https://x/100")]) + "\n\nsee also #103 for the cause"
+
+    assert pr_cancel.parse(body) == ("deploy raced", {100})
+    assert pr_cancel.latest_reason([body], {103}) is None
+
+
+def test_names_from_the_api_are_cleaned_before_they_are_printed(monkeypatch, capsys) -> None:
+    evil = {**RUNNING, "definition": {"id": 3, "name": "Dep\x1b[2Jloy"}}
+    _plumbing(monkeypatch, [evil])
+    comments: list[str] = []
+    monkeypatch.setattr("bmsdna.devtools.pr_build.cancel_running_build", lambda *a: None)
+    monkeypatch.setattr("bmsdna.devtools.pr_build.add_comment", lambda s, r, pr_id, content: comments.append(content))
+
+    pr_build.cancel(REMOTE, "pat", None, "why", source_branch="feature-x")
+
+    assert "\x1b" not in capsys.readouterr().out + comments[0]
+
+
+def test_github_cancel_failing_to_comment_tells_how_to_post_it(monkeypatch) -> None:
+    from bmsdna.devtools import gh_pr
+
+    _gh_pr(monkeypatch, [RUNNING_CHECK])
+    gh = GH({("POST", "repos/owner/repo/actions/runs/7/cancel"): None, ("POST", COMMENTS): SystemExit("HTTP 403")})
+
+    with pytest.raises(SystemExit, match="bdt pr comment"):
+        gh_pr.cancel(gh, "why")  # type: ignore[arg-type]

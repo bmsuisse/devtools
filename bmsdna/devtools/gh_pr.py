@@ -319,7 +319,7 @@ def check_runs(checks: list[dict], buckets: set[str]) -> list[tuple[int, str]]:
         run_id = int(match.group(1))
         if run_id not in seen:
             seen.add(run_id)
-            runs.append((run_id, check_label(check)))
+            runs.append((run_id, pr_cancel.one_line(check_label(check))))
     return runs
 
 
@@ -396,7 +396,10 @@ def cancel(gh: GitHubClient, reason: str, pr_id: int | None = None) -> None:
         try:
             gh.post(f"{gh.repo_path}/issues/{pr['number']}/comments", {"body": ensure_agent_session_note(body) or body})
         except SystemExit as e:
-            errors.append(f"the runs are cancelled, but the '{pr_cancel.PREFIX}' comment could not be posted: {e.code or 'failed'}")
+            errors.append(
+                f"the runs are cancelled, but the '{pr_cancel.PREFIX}' comment could not be posted: {e.code or 'failed'} -- "
+                f"post it yourself (`bdt pr comment --message \"{pr_cancel.PREFIX} <reason>\"`), or `pr info`/`pr status` won't show the cancellation"
+            )
         else:
             print(f"Added a '{pr_cancel.PREFIX}' comment to PR #{pr['number']}")
     if errors:

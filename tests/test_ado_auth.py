@@ -221,3 +221,13 @@ def test_rejected_pat_redirected_to_the_sign_in_page_is_reported_for_the_request
     message = str(exc_info.value)
     assert "HTTP 401" in message and BUILD_URL in message and "_signin" not in message
     assert "Build (Read & execute)" in message and "'bmeurope'" in message
+
+
+def test_ado_error_text_is_cleaned_of_terminal_escapes() -> None:
+    from bmsdna.devtools.ado_auth import AdoAuthError, _check_auth_hook
+
+    response = _check_auth_hook(True)(_response(401, BUILD_URL, b'{"message": "bad\\u001b[2J token"}'))
+
+    with pytest.raises(AdoAuthError) as exc_info:
+        response.raise_for_status()
+    assert "\x1b" not in str(exc_info.value) and "bad[2J token" in str(exc_info.value)

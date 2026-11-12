@@ -898,7 +898,7 @@ def retry(
     # the failure summary at the end still surfaces it.
     errors: list[str] = []
     for b in failed:
-        name = b.get("definition", {}).get("name", "?")
+        name = pr_cancel.one_line(b.get("definition", {}).get("name", "?"))
         try:
             retry_failed_build(session, remote, b["id"])
         except AdoAuthError:
@@ -947,7 +947,7 @@ def cancel(
     cancelled: list[dict] = []
     errors: list[str] = []
     for b in running:
-        name = b.get("definition", {}).get("name", "?")
+        name = pr_cancel.one_line(b.get("definition", {}).get("name", "?"))
         try:
             cancel_running_build(session, remote, b["id"])
         except AdoAuthError:
@@ -960,7 +960,7 @@ def cancel(
 
     if cancelled:
         body = pr_cancel.comment_body(
-            reason, ((b.get("definition", {}).get("name", "?"), b["id"], build_web_url(remote, b["id"])) for b in cancelled)
+            reason, ((pr_cancel.one_line(b.get("definition", {}).get("name", "?")), b["id"], build_web_url(remote, b["id"])) for b in cancelled)
         )
         try:
             add_comment(session, remote, pr_number, ensure_agent_session_note(body) or body)
@@ -1018,7 +1018,7 @@ def requeue(
 
     errors: list[str] = []
     for b in todo:
-        name = b.get("definition", {}).get("name", "?")
+        name = pr_cancel.one_line(b.get("definition", {}).get("name", "?"))
         try:
             new = queue_build(session, remote, b)
         except AdoAuthError:
