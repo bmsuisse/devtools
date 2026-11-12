@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -118,3 +119,25 @@ def test_find_lockfiles_skips_vendored_and_worktree_dirs(tmp_path: Path) -> None
     found = {p.relative_to(tmp_path.resolve()).as_posix() for p in find_lockfiles([tmp_path])}
 
     assert found == {"uv.lock", "frontend/bun.lock", "tests_e2e/uv.lock"}
+
+
+@pytest.mark.parametrize(
+    ("name", "text"), [("uv.lock", "version = 1\n"), ("bun.lock", '{"lockfileVersion": 1}'), ("bun.lock", "[]")]
+)
+def test_a_file_without_the_expected_sections_is_not_an_empty_project(tmp_path: Path, name: str, text: str) -> None:
+    lock = tmp_path / name
+    lock.write_text(text, encoding="utf-8")
+    with pytest.raises(LockfileError):
+        read_lockfile(lock)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read every directory")
+def test_an_unreadable_directory_fails_the_scan_instead_of_hiding_lockfiles(tmp_path: Path) -> None:
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0)
+    try:
+        with pytest.raises(LockfileError):
+            find_lockfiles([tmp_path])
+    finally:
+        locked.chmod(0o700)

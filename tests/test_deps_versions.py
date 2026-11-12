@@ -73,3 +73,17 @@ def test_pypi_specifier() -> None:
     assert not pypi_specifier_satisfied(">=24.1.0,<25", "25.0.0")
     with pytest.raises(VersionError):
         pypi_specifier_satisfied("not a specifier", "1.0")
+
+
+@pytest.mark.parametrize(
+    ("declared", "version", "expected"),
+    [
+        ("^1.2.3", "1.5.0-rc.1", False),  # node-semver: a prerelease needs a comparator naming one of the same x.y.z
+        ("^1.5.0-rc.0", "1.5.0-rc.1", True),
+        (">=1.5.0-rc.0 <2", "1.6.0-rc.1", False),
+    ],
+)
+def test_npm_prereleases_only_satisfy_ranges_that_name_a_prerelease_of_the_same_version(
+    declared: str, version: str, expected: bool
+) -> None:
+    assert npm_range_satisfied(declared, version) is expected

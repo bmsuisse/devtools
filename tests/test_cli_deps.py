@@ -110,3 +110,15 @@ def test_advisories_fails_closed_when_osv_is_down(project: Path, monkeypatch: py
 
     assert result.exit_code == 3
     assert "no advisory" not in result.output
+
+
+def test_unsupported_sources_are_listed_but_do_not_change_the_exit_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "uv.lock").write_text(UV_LOCK.replace("lodash-py", "other"), encoding="utf-8")
+    monkeypatch.setattr(deps_cli, "OsvClient", FakeClient)
+
+    result = runner.invoke(app, ["deps", "advisories", "--path", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "[unsupported] from-git" in result.output

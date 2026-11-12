@@ -195,10 +195,22 @@ def npm_range_satisfied(range_text: str, version: str) -> bool:
         # normalise `>= 1.2.3 < 2` / `1.2.3 - 2.3.4` is not supported (hyphen ranges): raise rather than guess
         if re.search(r"\s-\s", alternative):
             raise VersionError(f"hyphen ranges are not supported: {range_text!r}")
-        parts = re.split(r"\s+", re.sub(r"(<=|>=|<|>|=|\^|~)\s+", r"\1", alternative.strip()))
-        if all(_comparator_satisfied(actual, p) for p in parts if p):
-            return True
+        parts = [p for p in re.split(r"\s+", re.sub(r"(<=|>=|<|>|=|\^|~)\s+", r"\1", alternative.strip())) if p]
+        if not all(_comparator_satisfied(actual, p) for p in parts):
+            continue
+        # node-semver: a prerelease only satisfies a comparator set that itself names a prerelease of the same x.y.z
+        if actual.prerelease and not any(_names_prerelease_of(p, actual) for p in parts):
+            continue
+        return True
     return False
+
+
+def _names_prerelease_of(comparator: str, version: SemVer) -> bool:
+    try:
+        major, minor, patch, pre = _partial(re.sub(r"^(<=|>=|<|>|=|\^|~)", "", comparator))
+    except VersionError:
+        return False
+    return pre is not None and (major, minor, patch) == (version.major, version.minor, version.patch)
 
 
 def declared_range_satisfied(ecosystem: Ecosystem, declared: str, version: str) -> bool:

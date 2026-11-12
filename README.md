@@ -1220,12 +1220,12 @@ cooldown exception flow (`references/audit.md`) acts on it:
 | `needs-triage` | affected range, fix, or (when the fix is inside the cooldown) severity is missing, conflicting or unparseable |
 | `no-fix` | an affected advisory has no fixed version |
 | `blocked` | the fixed version is outside the range the project declares for a direct dependency |
-| `exempt-eligible` | high/critical (GHSA label) or in CISA KEV, and the fixed version is younger than the cooldown (or its age is unknown) |
+| `exempt-eligible` | high/critical (CVSS v3 score >= 7 and/or GHSA label; sources that disagree go to triage) or in CISA KEV, and the fixed version is younger than the cooldown (or its age is unknown) |
 | `bump` | the fixed version is older than the cooldown: a normal bump takes it |
 | `informational` | affected, lower severity, fix still inside the cooldown |
 
 The target version is the lowest one the advisory data shows to be outside every affected range of the urgent
-advisories (all of them when none is urgent), never "latest"; `next:` lines give the per-invocation commands. The fix's age
+advisories (all of them when none is urgent), never "latest". Lower-severity advisories that need a newer version stay open until a normal bump, and the finding names them. `next:` lines give the per-invocation commands. Unsupported sources are listed but don't change the exit code. The fix's age
 comes from the registry (PyPI: youngest file; npm: `time[version]`); `--cooldown-days` (default 5) is the project's
 cooldown. Compatibility with the parents' ranges of a *transitive* dependency isn't known here: re-run after the bump.
 

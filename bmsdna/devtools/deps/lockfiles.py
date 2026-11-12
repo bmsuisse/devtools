@@ -54,13 +54,18 @@ def find_lockfiles(roots: Iterable[Path]) -> list[Path]:
     """Every `uv.lock` / `bun.lock` below the roots; `node_modules`, virtualenvs, `.git` and `.worktrees` are not entered
     (a root that itself lives inside one is still scanned)."""
     found: list[Path] = []
+    errors: list[str] = []
     for root in roots:
         if root.is_file() and root.name in LOCKFILE_NAMES:
             found.append(root)
             continue
-        for dirpath, dirnames, filenames in os.walk(root):
+        for dirpath, dirnames, filenames in os.walk(
+            root, onerror=lambda exc: errors.append(f"{exc.filename}: {exc.strerror}")
+        ):
             dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS)
             found.extend(Path(dirpath) / name for name in sorted(filenames) if name in LOCKFILE_NAMES)
+    if errors:  # an unreadable directory may hide a lockfile: the scan is incomplete, not clean
+        raise LockfileError(f"cannot read directory ({'; '.join(errors)})")
     return sorted(dict.fromkeys(p.resolve() for p in found))
 
 
@@ -83,6 +88,8 @@ def read_lockfile(path: Path) -> LockfileContent:
 
 def read_uv_lock(path: Path) -> LockfileContent:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data.get("package"), list) or not data["package"]:
+        raise ValueError("no [[package]] entries: not a uv lockfile")
     content = LockfileContent(path, "PyPI")
     direct: dict[str, str | None] = {}
     for pkg in data.get("package", []):
@@ -154,8 +161,12 @@ def loads_jsonc(text: str) -> object:
 
 def read_bun_lock(path: Path) -> LockfileContent:
     data = loads_jsonc(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise ValueError("top level is not an object")
+    if (
+        not isinstance(data, dict)
+        or not isinstance(data.get("packages"), dict)
+        or not isinstance(data.get("workspaces"), dict)
+    ):
+        raise ValueError('"workspaces" and "packages" objects are missing: not a bun lockfile')
     content = LockfileContent(path, "npm")
     workspaces = cast("dict[str, dict[str, Any]]", data.get("workspaces") or {})
     packages = cast("dict[str, list[Any]]", data.get("packages") or {})

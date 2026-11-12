@@ -44,6 +44,7 @@ Status = Literal[
     "informational",
 ]
 URGENT_LABELS = frozenset({"HIGH", "CRITICAL"})
+_SEVERITY_RANK = {"LOW": 0, "MODERATE": 1, "HIGH": 2, "CRITICAL": 3}
 DEFAULT_COOLDOWN_DAYS = 5
 
 
@@ -62,6 +63,7 @@ class Vuln:
     summary: str
     severity: str | None  # GHSA label: LOW / MODERATE / HIGH / CRITICAL
     affected: tuple[AffectedEntry, ...]
+    cvss: tuple[float, ...] = ()  # CVSS v3 base scores computed from OSV `severity[]` vectors
 
 
 def parse_vuln(raw: dict[str, Any]) -> Vuln:
@@ -75,13 +77,58 @@ def parse_vuln(raw: dict[str, Any]) -> Vuln:
         name = normalize_name("PyPI", package.get("name", "")) if eco == "PyPI" else package.get("name", "")
         ranges = tuple((r.get("type", ""), tuple(r.get("events", []))) for r in aff.get("ranges", []))
         entries.append(AffectedEntry(eco, name, ranges, frozenset(aff.get("versions", []))))
+    scores = tuple(
+        score
+        for score in (
+            cvss3_score(e.get("score", ""))
+            for e in raw.get("severity", [])
+            if e.get("type") in ("CVSS_V3", "CVSS_V3_1")
+        )
+        if score is not None
+    )
     return Vuln(
         raw["id"],
         frozenset(raw.get("aliases", [])),
         raw.get("summary") or raw.get("details", "")[:120],
         label,
         tuple(entries),
+        scores,
     )
+
+
+_CVSS_AV = {"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.2}
+_CVSS_AC = {"L": 0.77, "H": 0.44}
+_CVSS_UI = {"N": 0.85, "R": 0.62}
+_CVSS_CIA = {"H": 0.56, "L": 0.22, "N": 0.0}
+
+
+def _roundup(value: float) -> float:
+    scaled = round(value * 100000)
+    return scaled / 100000.0 if scaled % 10000 == 0 else (scaled // 10000 + 1) / 10.0
+
+
+def cvss3_score(vector: str) -> float | None:
+    """Base score of a CVSS 3.0/3.1 vector (FIRST specification); None for anything else (v2, v4, malformed)."""
+    if not vector.startswith(("CVSS:3.0/", "CVSS:3.1/")):
+        return None
+    try:
+        m = dict(part.split(":", 1) for part in vector.split("/")[1:])
+        if m["S"] not in ("U", "C"):
+            return None
+        changed = m["S"] == "C"
+        pr = {"N": 0.85, "L": 0.68 if changed else 0.62, "H": 0.5 if changed else 0.27}[m["PR"]]
+        iss = 1 - (1 - _CVSS_CIA[m["C"]]) * (1 - _CVSS_CIA[m["I"]]) * (1 - _CVSS_CIA[m["A"]])
+        impact = 7.52 * (iss - 0.029) - 3.25 * (iss - 0.02) ** 15 if changed else 6.42 * iss
+        exploitability = 8.22 * _CVSS_AV[m["AV"]] * _CVSS_AC[m["AC"]] * pr * _CVSS_UI[m["UI"]]
+    except KeyError, ValueError:
+        return None
+    if impact <= 0:
+        return 0.0
+    return _roundup(min((1.08 if changed else 1.0) * (impact + exploitability), 10))
+
+
+def _band(score: float) -> str:
+    return "CRITICAL" if score >= 9 else "HIGH" if score >= 7 else "MODERATE" if score >= 4 else "LOW"
 
 
 # ── fixed version of one advisory ────────────────────────────────────────────────────────────────────────────────
@@ -173,7 +220,8 @@ class VulnGroup:
 
     @property
     def severity_labels(self) -> set[str]:
-        return {v.severity for v in self.vulns if v.severity}
+        """The GHSA labels and the bands of the CVSS v3 scores of every member record."""
+        return {v.severity for v in self.vulns if v.severity} | {_band(sc) for v in self.vulns for sc in v.cvss}
 
     @property
     def summary(self) -> str:
@@ -275,7 +323,12 @@ def evaluate_package(
     for group in groups:
         in_kev = bool(kev and group.cves & kev)
         labels = group.severity_labels
-        severity = "conflicting" if len(labels) > 1 else (next(iter(labels)) if labels else "unknown")
+        if not labels:
+            severity = "unknown"
+        elif len({label in URGENT_LABELS for label in labels}) > 1:
+            severity = "conflicting"  # one source says high/critical, another doesn't: a human decides
+        else:
+            severity = max(labels, key=_SEVERITY_RANK.__getitem__)
         urgent = in_kev or (severity in URGENT_LABELS)
         states = [fix_for(v, pkg.ecosystem, pkg.name, pkg.version) for v in group.vulns]
         group_fixed = [s for s in states if s[0] == "fixed"]
@@ -331,6 +384,14 @@ def evaluate_package(
     chosen = urgent_fixes or fixes
     target = max(chosen, key=lambda f: f[0])[1]
     finding.target = target
+    target_version = parse_version(pkg.ecosystem, target)
+    still_open = [g for g in infos if g.fixed and parse_version(pkg.ecosystem, g.fixed) > target_version]
+    open_note = (
+        f"; lower-severity advisories stay open at {target} until a normal bump: "
+        + ", ".join(f"{g.ids[0]} (fixed in {g.fixed})" for g in still_open)
+        if urgent_fixes and still_open
+        else ""
+    )
 
     if pkg.declared:
         try:
@@ -352,13 +413,13 @@ def evaluate_package(
     if old_enough:
         finding.status, finding.reason = (
             "bump",
-            f"{target} is {finding.fix_age_days} days old, past the {cooldown_days:g}-day cooldown",
+            f"{target} is {finding.fix_age_days} days old, past the {cooldown_days:g}-day cooldown{open_note}",
         )
     elif urgent_fixes:
         age = "age unknown" if finding.fix_age_days is None else f"{finding.fix_age_days} days old"
         finding.status, finding.reason = (
             "exempt-eligible",
-            f"high/critical or exploited; {target} is {age}, inside the cooldown",
+            f"high/critical or exploited; {target} is {age}, inside the cooldown{open_note}",
         )
     elif urgent_unknown:
         finding.status, finding.reason = (

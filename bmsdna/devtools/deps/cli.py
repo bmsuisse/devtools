@@ -36,11 +36,11 @@ def _read_all(paths: list[Path] | None) -> list[LockfileContent]:
     if missing:
         typer.echo(f"bdt deps: path not found: {', '.join(missing)}", err=True)
         raise typer.Exit(EXIT_SETUP)
-    lockfiles = find_lockfiles(roots)
-    if not lockfiles:
-        typer.echo("bdt deps: no uv.lock or bun.lock found", err=True)
-        raise typer.Exit(EXIT_SETUP)
     try:
+        lockfiles = find_lockfiles(roots)
+        if not lockfiles:
+            typer.echo("bdt deps: no uv.lock or bun.lock found", err=True)
+            raise typer.Exit(EXIT_SETUP)
         return [read_lockfile(p) for p in lockfiles]
     except LockfileError as exc:
         typer.echo(f"bdt deps: {exc}", err=True)

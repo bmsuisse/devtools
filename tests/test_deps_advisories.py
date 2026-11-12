@@ -200,3 +200,39 @@ def test_multiple_intervals_pick_the_interval_that_contains_the_locked_version()
     parsed = parse_vuln(vuln("GHSA-1", events=events))
     assert fix_for(parsed, "PyPI", "pkg", "1.1.0")[1] == "1.2.0"
     assert fix_for(parsed, "PyPI", "pkg", "2.0.5")[1] == "2.1.0"
+
+
+def test_cvss3_scores_match_the_published_values() -> None:
+    from bmsdna.devtools.deps.advisories import cvss3_score
+
+    assert cvss3_score("CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H") == 7.2  # the lodash value bun audit reports
+    assert cvss3_score("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H") == 10.0
+    assert cvss3_score("CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:N/A:N") == 6.1
+    assert cvss3_score("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:N") == 0.0
+    assert (
+        cvss3_score("CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N") is None
+    )  # v4 is not interpreted
+    assert cvss3_score("garbage") is None
+
+
+def test_cvss_score_alone_makes_an_advisory_urgent_and_a_disagreeing_label_goes_to_triage() -> None:
+    high = {"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H"}  # 7.2
+    fresh = {("pkg", "2.0.0"): NOW - timedelta(days=1)}
+
+    no_label = {**vuln("PYSEC-1", events=FIX_2, severity=None), "severity": [high]}
+    assert run(lock(), [no_label], released=fresh).findings[0].status == "exempt-eligible"
+
+    disagree = {**vuln("GHSA-1", events=FIX_2, severity="LOW"), "severity": [high]}
+    (finding,) = run(lock(), [disagree], released=fresh).findings
+    assert finding.status == "needs-triage" and finding.groups[0].severity == "conflicting"
+
+
+def test_lower_severity_advisories_stay_open_at_the_urgent_target_and_the_finding_says_so() -> None:
+    records = [
+        vuln("GHSA-1", events=FIX_2, severity="CRITICAL"),
+        vuln("GHSA-2", events=[{"introduced": "0"}, {"fixed": "3.0.0"}], severity="LOW"),
+    ]
+    (finding,) = run(lock(), records, released={("pkg", "2.0.0"): NOW - timedelta(days=1)}).findings
+
+    assert (finding.status, finding.target) == ("exempt-eligible", "2.0.0")
+    assert "GHSA-2 (fixed in 3.0.0)" in finding.reason
