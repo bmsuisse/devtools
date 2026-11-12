@@ -369,3 +369,44 @@ def test_vso_commands_cannot_be_split_by_untrusted_text(capsys) -> None:
     lines = capsys.readouterr().out.splitlines()
     assert len(lines) == 2
     assert "%0A" in lines[0] and "%0A" in lines[1] and "100%AZP25" in lines[1]
+
+
+def test_changed_files_lists_a_moved_file_under_its_old_path_too(
+    clone, monkeypatch
+) -> None:
+    """Rename detection would show only docs/app.py: code moved into a non_code folder must not look like a docs change."""
+    monkeypatch.chdir(clone)
+    git(
+        clone, "config", "diff.renames", "true"
+    )  # the detection --no-renames must override, whatever the user has set
+    (clone / "src").mkdir()
+    (clone / "docs").mkdir()
+    (clone / "src/app.py").write_text("def f():\n    return 1\n")
+    git(clone, "add", "-A")
+    git(clone, "commit", "-q", "-m", "app")
+    git(clone, "push", "-q", "origin", "main")
+    git(clone, "checkout", "-q", "-b", "move")
+    git(clone, "mv", "src/app.py", "docs/app.py")
+    git(clone, "commit", "-q", "-m", "move")
+    assert sorted(ci_plan_env.changed_files("main", merge_checkout=False)) == [
+        "docs/app.py",
+        "src/app.py",
+    ]
+    git(clone, "checkout", "-q", "main")
+    git(clone, "merge", "-q", "--no-ff", "-m", "merge", "move")
+    assert sorted(ci_plan_env.changed_files("main", merge_checkout=True)) == [
+        "docs/app.py",
+        "src/app.py",
+    ]
+
+
+def test_changed_files_keeps_non_ascii_names_unquoted(clone, monkeypatch) -> None:
+    monkeypatch.chdir(clone)
+    git(clone, "checkout", "-q", "-b", "umlaut")
+    (clone / "tests").mkdir()
+    (clone / "tests/test_über.py").write_text("")
+    git(clone, "add", "-A")
+    git(clone, "commit", "-q", "-m", "umlaut")
+    assert ci_plan_env.changed_files("main", merge_checkout=False) == [
+        "tests/test_über.py"
+    ]

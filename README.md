@@ -916,8 +916,12 @@ Order of decision, always logged with its reason:
 4. Anything unreadable (label API, change list) runs everything: a missing decision never silently skips tests.
 
 Outputs (Azure Pipelines variables with `isOutput=true`; plain `name=value` lines elsewhere): `runTests`, and per tier
-(`unit`, `e2e`, ...) `<tier>Run`, `<tier>Areas` and `<tier>Paths`, a shell-quoted argument list for the runner. A
-tier you do not configure and split by area (e.g. flat unit tests) is simply gated on `runTests`.
+(`unit`, `e2e`, ...) `<tier>Run`, `<tier>Areas` and `<tier>Paths`, a shell-quoted argument list for the runner (repo-
+relative). A tier you do not configure and split by area (e.g. flat unit tests) is simply gated on `runTests`. For
+custom sharding or a runner that does not take paths, use `<tier>Areas` (a space-separated list: keep area names free
+of whitespace if you split it): in folder mode the `<tier>Paths` of a full run
+is the bare tier folder, which may also hold things that are not tests (`.venv`, `test-results`); in glob mode it is the
+list of test files either way. A moved file counts as changed under both its old and its new path.
 
 ```yaml
 - stage: Plan
@@ -1242,6 +1246,10 @@ writes `report.html` (charts plus a table view, light/dark) with CSV / Parquet e
 (`~/.cache/bdt/usage/`, or `--db` / `--out`). The report is self-contained and contains your session titles and agent
 descriptions, so look at it before sharing it.
 
+- **Before vs. after:** the turns of a session before it loaded `dev-workflow` (or ran its first workflow command such as
+  `bdt worktree`) are their own step, "Before dev-workflow was loaded", for the main thread and for the subagents spawned
+  then. Everything from that point on is split into the steps below. The summary has `cost_before_workflow` /
+  `cost_after_workflow`. Sessions that never load it are not counted, unless `--scope all`.
 - **Steps:** setup, plan, plan review, implement, test, screenshots, design review, quick review, full review, publish / CI.
   Every model turn is assigned to one by markers in its tool calls: skill calls (`bms-code-review --quick|--full`,
   `design-review`, `bms-plan-review`; for codex, reading the skill's `SKILL.md`), `bdt` commands, edits (`apply_patch` for

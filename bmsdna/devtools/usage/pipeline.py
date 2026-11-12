@@ -16,6 +16,10 @@ if TYPE_CHECKING:
     import duckdb
 
 REVIEW_PHASES = {"review_quick", "review_full"}
+# Turns of a workflow-following thread before it loaded dev-workflow are counted (as `pre_workflow`), turns of threads
+# that never follow it are not (`outside`). Neither reacts to markers.
+PRE_WORKFLOW = "pre_workflow"
+INACTIVE_PHASES = {"outside", PRE_WORKFLOW}
 KIND_RANK = {"start": 0, "skill": 1, "review_agent": 2, "cmd": 3, "edit": 4, "soft": 5, "once": 6}
 
 # Bump when the rec_* tables or their parsing change: caches with another version are rebuilt.
@@ -56,7 +60,8 @@ def assign_phases(con: duckdb.DuckDBPyConnection, scope: str) -> None:
 
     A thread that follows the workflow (invoked dev-workflow, or scope='all') starts in 'setup' and
     switches phase on the next marker; the phase stays "sticky" until the next one (test runs are the
-    exception: they only count for the turn that runs them). Other spawned threads inherit the phase of
+    exception: they only count for the turn that runs them). What such a thread did before it loaded
+    dev-workflow is 'pre_workflow' (also for the subagents spawned then). Other spawned threads inherit the phase of
     the message that spawned them and only react to strong markers (review/design/plan skills).
     """
     msgs_by_thread: dict[str, list[tuple[str, datetime]]] = defaultdict(list)
@@ -101,7 +106,7 @@ def assign_phases(con: duckdb.DuckDBPyConnection, scope: str) -> None:
     if scope == "all":
         for tid, items in msgs_by_thread.items():
             if tid not in meta:
-                start_ts[tid] = items[0][1]
+                start_ts.setdefault(tid, items[0][1])
 
     phase_of: dict[str, str] = {}
     sticky_of: dict[str, str] = {}  # the phase a spawned thread inherits
@@ -109,17 +114,20 @@ def assign_phases(con: duckdb.DuckDBPyConnection, scope: str) -> None:
 
     def run_thread(tid: str, inherited: str) -> None:
         agent_type = meta.get(tid, (None, ""))[1]
-        if "bms-review-" in agent_type and inherited not in REVIEW_PHASES and inherited != "outside":
+        if "bms-review-" in agent_type and inherited not in REVIEW_PHASES and inherited not in INACTIVE_PHASES:
             inherited = "review_full"
-        phase, started, begin = inherited, False, start_ts.get(tid)
+        begin = start_ts.get(tid)
+        if begin is not None and inherited == "outside":
+            inherited = PRE_WORKFLOW
+        phase, started = inherited, False
         for mid, ts in msgs_by_thread[tid]:
             if begin is not None and not started and ts >= begin:
                 phase, started = "setup", True
             once = None
             for ph, kind in sorted(markers.get(mid, []), key=lambda m: KIND_RANK[m[1]]):
-                if kind == "skill" and phase != "outside":
+                if kind == "skill" and phase not in INACTIVE_PHASES:
                     phase = ph
-                elif kind == "review_agent" and phase != "outside" and phase not in REVIEW_PHASES:
+                elif kind == "review_agent" and phase not in INACTIVE_PHASES and phase not in REVIEW_PHASES:
                     phase = ph
                 elif kind in ("cmd", "edit") and started:
                     phase = ph
