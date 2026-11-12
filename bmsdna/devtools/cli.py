@@ -595,9 +595,14 @@ def pr_status(
 
 
 def _info_text(info: pr_info_mod.PrInfo, with_repo: bool = False) -> str:
-    flags = ", ".join([info.state, *(["draft"] if info.draft else []), f"build: {info.build}"])
+    merge = [f"merge: {info.merge}"] if info.merge not in (pr_info_mod.MERGE_CLEAN, pr_info_mod.MERGE_NONE) else []
+    flags = ", ".join([info.state, *(["draft"] if info.draft else []), f"build: {info.build}", *merge])
     name = f"PR {info.repo}#{info.number}" if with_repo and info.repo else f"PR #{info.number}"
     lines = [f"{name}: {info.title} ({flags})", info.url]
+    if info.merge == pr_info_mod.MERGE_CONFLICTS:
+        lines.append(f"Conflicts with '{info.target}'" + (f": {', '.join(info.conflicts)}" if info.conflicts else ""))
+    elif info.merge in (pr_info_mod.MERGE_BEHIND, pr_info_mod.MERGE_UNKNOWN) and info.target_behind:
+        lines.append(f"'{info.target}' moved on by {info.target_behind} commit{'s' * (info.target_behind != 1)} since the PR's last merge check")
     if info.abandon_reason:
         lines.append(pr_cancel.abandoned_notice(pr_cancel.Reason(info.abandon_reason, info.abandon_session)))
     if info.build == pr_info_mod.BUILD_CANCELLED:

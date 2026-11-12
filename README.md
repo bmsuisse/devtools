@@ -63,6 +63,18 @@ for builds/checks that will never run — e.g. on Azure DevOps:
 on GitHub: `PR #42 ('feat: widgets') has merge conflicts with 'main' (mergeable=CONFLICTING)`.
 Exit code 1 either way.
 
+On Azure DevOps that status is only as current as the PR's last push: it is never recomputed when the **target
+branch** moves on, so a PR can say `succeeded` while the target has since changed the same lines (and its builds ran
+on the old merge). `pr status` therefore also compares the target's tip with the commit the merge status was
+computed against; if they differ it fetches both by commit id and merges them locally with `git merge-tree` (no
+working-tree change, no branch or tag created; the answer is cached in `.git/bdt-merge-check.json` per commit). A
+conflict is reported like the server's, exit 1: `PR #42 ('feat: widgets') has merge conflicts with 'dev' (mergeStatus=succeeded
+is stale: 'dev' has moved on by 3 commits since it was computed). Conflicting: a.txt. Merge or rebase 'dev' into the branch and push.`
+A target that moved without conflicts is a one-line `Note:`. This runs at the start and on every poll of `--wait` (one
+cheap request each, the merge itself only when the target moved again), so a conflict that appears while CI runs
+stops the wait. It needs a checkout of the repo (without one the note says the target moved but not whether it
+conflicts) and is skipped quietly if Azure DevOps or git can't answer. GitHub recomputes `mergeable` itself.
+
 With `--wait`, a build/check that's paused on a manual approval (an Azure
 Pipelines stage's Checkpoint.Approval, or a GitHub Actions deployment
 protection rule) ends the wait instead of polling forever — it prints which
@@ -118,7 +130,7 @@ from the latest build of each pipeline (any failed result fails it; unfinished b
 `--all` lists every open PR from the current branch (e.g. one into `dev` and one into `main`, which plain
 `bdt pr info` refuses to pick between): with `--json` an array of the same objects, `[]` (exit 0) when there is
 none; `--target-branch` narrows it, `--pr-id` can't be combined with it. Only open PRs are listed, and a PR with
-merge conflicts is listed like any other (plain `pr info` on Azure DevOps errors on it).
+merge conflicts is listed like any other, with `merge: conflicts` (plain `pr info` on Azure DevOps errors on one the server already reports).
 
 `--pr-id` takes several PRs, also of other repos: repeat it and/or comma-separate (`--pr-id 12,34 --pr-id owner/repo#5`).
 Each entry is a bare number (a PR of the current repo), `owner/repo#N` (GitHub), `project/repo#N` or
@@ -132,6 +144,12 @@ be combined with `--all`; `--target-branch` is ignored for it, as before. Azure 
 every org, and a PR with merge conflicts is an error entry there.
 
 Every JSON object has a `repo` (`owner/repo` on GitHub, `org/project/repo` on Azure DevOps).
+
+It also says whether the PR still merges into its `target` branch: `merge` is `clean`, `conflicts` (with the
+`conflicts` paths when known), `behind` (the target moved on, but it still merges; `target_behind` = by how many
+commits), `unknown` (it moved on and couldn't be checked, see `bdt pr status`) or `none` (not an open PR). On
+Azure DevOps this is the drift check of `bdt pr status`, which is why `merge` can say `conflicts` while the server
+still reports `succeeded`; on GitHub it is `mergeable`.
 
 Azure DevOps limits: the PR is found by the current branch (into `--target-branch` if given, else any target),
 a PR with merge conflicts is reported as an error (exit 1) like `pr status` does, and the closed

@@ -46,6 +46,12 @@ error message for `mergeStatus=conflicts` (ADO) or `mergeable=CONFLICTING`
 (GitHub) and tell the user to resolve conflicts rather than assuming CI is
 just slow.
 
+On Azure DevOps the server's `mergeStatus` goes stale when the **target** branch moves on (it is only recomputed by
+a push to your branch), so `pr status` (also at the start of and during `--wait`) fetches the target's tip and merges it
+locally: a conflict stops with `has merge conflicts with '<target>' (mergeStatus=... is stale ...)` and the conflicting
+paths -- merge or rebase the target into your branch and push, then run it again. `Note: '<target>' has moved on ...` is
+only informational.
+
 Where your shell tool has a time limit shorter than CI (it kills the command and drops its output), run
 `bdt pr status --wait --timeout 540` (seconds, below the limit): after that long it prints the current state and
 exits 4 — just run the same command again to keep waiting. Exit 3 = a stage needs a human's approval.
@@ -174,7 +180,8 @@ PR link, state, aggregate build state and the issue(s) it closes, in one call --
 with several PRs, e.g. into `dev` and `main`, where plain `pr info` has to ask which one.
 `--pr-id` (repeatable, comma-separated) names PRs directly, also of other repos: a number, `owner/repo#N` (GitHub),
 `project/repo#N` (Azure DevOps) or the PR's URL; two or more give a list, and a failing entry is an `error:` line on
-stderr with exit 1 while the others are still printed. Every JSON object carries its `repo`.
+stderr with exit 1 while the others are still printed. Every JSON object carries its `repo`, and `merge`
+(`clean`/`behind`/`conflicts`/`unknown`/`none`) with `target`, `conflicts` and `target_behind`: whether it still merges into its target.
 (`bdt pr status --wait` is still what to use to wait for CI.)
 
 ## Creating a worktree
