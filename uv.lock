@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.14"
 
 [[package]]
@@ -51,7 +51,7 @@ wheels = [
 
 [[package]]
 name = "bmsdna-devtools"
-version = "0.54.0"
+version = "0.55.0"
 source = { editable = "." }
 dependencies = [
     { name = "azure-identity" },

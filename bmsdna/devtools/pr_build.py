@@ -15,7 +15,7 @@ from .ado_auth import AdoAuthError, ado_session
 from .cli_tools import EXIT_NEEDS_APPROVAL, HTTP_TIMEOUT_SECS, PollHeartbeat, WaitDeadline, detect_agent_session, ensure_agent_session_note, exit_wait_timeout, is_claude_code, status_rerun_cmd
 from .gitrepo import AdoRemote, current_branch, head_commit_subject
 from .pr_create_args import PrCreateOptions
-from . import pr_cancel
+from . import pr_cancel, pr_drift
 from .pr_choice import PrCandidate, choose_pr
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
@@ -150,6 +150,29 @@ def merge_conflict_message(pr: dict) -> str | None:
     title = pr.get("title", "?")
     detail = pr.get("mergeFailureMessage") or BAD_MERGE_STATUSES[merge_status]
     return f"PR #{pr_id} ({title!r}) {detail} (mergeStatus={merge_status})"
+
+
+def target_tip(session: requests.Session, remote: AdoRemote, target: str) -> str | None:
+    """The commit branch `target` points at now; None if there is no such branch."""
+    r = session.get(
+        f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}/refs",
+        params={"filter": f"heads/{target}", "api-version": "7.1"},
+        timeout=HTTP_TIMEOUT_SECS,
+    )
+    r.raise_for_status()
+    return next((ref["objectId"] for ref in r.json().get("value", []) if ref.get("name") == f"refs/heads/{target}"), None)
+
+
+def target_drift(session: requests.Session, remote: AdoRemote, pr: dict) -> pr_drift.Drift | None:
+    """`pr_drift.check` for `pr`: has its target branch moved since Azure DevOps computed `mergeStatus`, and does it still merge?
+    Best effort like `has_build_policy`: None when the target's tip can't be looked up, an extra check mustn't fail a status."""
+    moved = pr_drift.moved_target(pr)
+    if not moved:
+        return None
+    try:
+        return pr_drift.check(remote, pr, target_tip(session, remote, moved[0]))
+    except requests.RequestException:
+        return None
 
 
 def draft_notice(pr: dict) -> str | None:
@@ -1225,6 +1248,7 @@ def run(
             baseline_completed_ids[def_id] = max(baseline_completed_ids.get(def_id, 0), b["id"])
 
     draft_notice_shown = False
+    drift_notice_shown: str | None = None
     policy_checked = False
     heartbeat = PollHeartbeat()
     deadline = WaitDeadline(timeout)
@@ -1243,6 +1267,13 @@ def run(
         pr_number = pr["pullRequestId"]
         pr_title = pr.get("title", "?")
         pr_status = pr.get("status", "?")
+        # every poll, so a target that moves mid-wait is noticed too; one cheap request, the merge itself only when something changed
+        drift = target_drift(session, remote, pr)
+        if drift and drift.conflicting:
+            sys.exit(pr_drift.conflict_message(pr, drift))
+        if drift and (drift_msg := pr_drift.notice(drift)) != drift_notice_shown:
+            print(("\n" if wait else "") + drift_msg)
+            drift_notice_shown = drift_msg
         if pr_status == "abandoned":
             # nothing will ever build for it: say so (and why) instead of polling on with --wait
             print(f"PR #{pr_number}: {pr_title} ({pr_status})")

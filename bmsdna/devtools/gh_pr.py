@@ -48,7 +48,7 @@ from .pr_markdown import build_attachments_section, build_comment_content, build
 # (needed for the draft mutations), `body` the PR description.
 PR_VIEW_FIELDS = "number,title,baseRefName,headRefName,mergeable,statusCheckRollup,isDraft,state"
 # What `bdt pr info` needs on top of the check rollup: where to link to, and the issues GitHub says it closes.
-PR_INFO_FIELDS = "number,title,url,state,isDraft,closingIssuesReferences,statusCheckRollup"
+PR_INFO_FIELDS = "number,title,url,state,isDraft,mergeable,baseRefName,closingIssuesReferences,statusCheckRollup"
 
 # GitHub has no API for uploading images to a PR description (only the web
 # UI's drag-and-drop, which needs a browser session). The standard

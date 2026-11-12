@@ -28,6 +28,15 @@ BUILD_WAITING = "waiting"  # paused on a manual approval; nothing resolves it wi
 BUILD_NONE = "none"
 BUILD_UNKNOWN = "unknown"
 
+# `merge` values: can the PR be merged into its target as it is now. "behind" = the target moved on since the PR's
+# merge status was computed (Azure DevOps never recomputes it) but it still merges; "unknown" = it moved and
+# whether that conflicts couldn't be found out (no checkout of the repo, commits not fetchable); "none" = not an open PR.
+MERGE_CLEAN = "clean"
+MERGE_BEHIND = "behind"
+MERGE_CONFLICTS = "conflicts"
+MERGE_UNKNOWN = "unknown"
+MERGE_NONE = "none"
+
 
 @dataclass(frozen=True)
 class IssueRef:
@@ -44,6 +53,10 @@ class PrInfo:
     draft: bool
     build: str
     issues: list[IssueRef] = field(default_factory=list)
+    merge: str = MERGE_NONE  # `MERGE_*`: does it merge into `target` as it is now
+    target: str = ""  # the branch it merges into
+    conflicts: list[str] = field(default_factory=list)  # the conflicting paths, when `merge` is "conflicts" and they are known
+    target_behind: int | None = None  # commits `target` gained since the PR's merge status was computed (Azure DevOps), when known
     cancel_reason: str | None = None  # why the build was cancelled, when `build` is "cancelled" and a `CANCELLED BUILD:` comment says
     cancel_session: Session | None = None  # the agent session that cancelled it, when that comment says
     abandon_reason: str | None = None  # why the PR was abandoned, when `state` is "closed" and an `ABANDONED PR:` comment says
@@ -112,6 +125,9 @@ def github_info(pr: dict, remote: GitHubRemote, gh: GitHubClient | None = None) 
         draft=bool(pr.get("isDraft")),
         build=build_state(checks, cancelled=cancelled is not None),
         issues=issues,
+        # GitHub recomputes `mergeable` whenever the base moves, so it needs no drift check of its own
+        merge=MERGE_NONE if state != "open" else MERGE_CONFLICTS if pr.get("mergeable") == gh_pr.CONFLICTING else MERGE_CLEAN,
+        target=pr.get("baseRefName") or "",
         cancel_reason=cancelled.reason if cancelled else None,
         cancel_session=cancelled.session if cancelled else None,
         abandon_reason=abandoned.reason if abandoned else None,
@@ -157,6 +173,21 @@ def _ado_build(session: requests.Session, remote: AdoRemote, pr: dict) -> tuple[
     return state, cancelled
 
 
+def _ado_merge(session: requests.Session, remote: AdoRemote, pr: dict) -> tuple[str, list[str], int | None]:
+    """(`MERGE_*` state, conflicting paths, commits the target gained) of an Azure DevOps PR: its `mergeStatus`, but
+    that is only as current as the PR's last push, so also whether the target has moved on since (`pr_drift`)."""
+    if pr.get("status") != "active":
+        return MERGE_NONE, [], None
+    if pr_build.merge_conflict_message(pr):
+        return MERGE_CONFLICTS, [], None
+    drift = pr_build.target_drift(session, remote, pr)
+    if drift is None:
+        return MERGE_CLEAN, [], None
+    if drift.conflicting:
+        return MERGE_CONFLICTS, list(drift.conflicts or ()), drift.behind
+    return (MERGE_BEHIND if drift.conflicts == () else MERGE_UNKNOWN), [], drift.behind
+
+
 def ado_info(session: requests.Session, pr: dict, remote: AdoRemote) -> PrInfo:
     """`pr` is an Azure DevOps pull request REST object (see `pr_build.get_pr`)."""
     issues = [
@@ -165,6 +196,7 @@ def ado_info(session: requests.Session, pr: dict, remote: AdoRemote) -> PrInfo:
     ]
     pr_id = pr["pullRequestId"]
     build, cancelled = _ado_build(session, remote, pr)
+    merge, conflicts, behind = _ado_merge(session, remote, pr)
     abandoned = pr_build.abandonment(session, remote, pr_id) if pr.get("status") == "abandoned" else None
     return PrInfo(
         number=pr_id,
@@ -174,6 +206,10 @@ def ado_info(session: requests.Session, pr: dict, remote: AdoRemote) -> PrInfo:
         draft=bool(pr.get("isDraft")),
         build=build,
         issues=issues,
+        merge=merge,
+        target=(pr.get("targetRefName") or "").removeprefix("refs/heads/"),
+        conflicts=conflicts,
+        target_behind=behind,
         cancel_reason=cancelled.reason if cancelled else None,
         cancel_session=cancelled.session if cancelled else None,
         abandon_reason=abandoned.reason if abandoned else None,
