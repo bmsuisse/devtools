@@ -596,8 +596,10 @@ def _info_text(info: pr_info_mod.PrInfo, with_repo: bool = False) -> str:
     flags = ", ".join([info.state, *(["draft"] if info.draft else []), f"build: {info.build}"])
     name = f"PR {info.repo}#{info.number}" if with_repo and info.repo else f"PR #{info.number}"
     lines = [f"{name}: {info.title} ({flags})", info.url]
+    if info.abandon_reason:
+        lines.append(pr_cancel.abandoned_notice(pr_cancel.Reason(info.abandon_reason, info.abandon_session)))
     if info.build == pr_info_mod.BUILD_CANCELLED:
-        lines.append(pr_cancel.cancelled_notice(info.cancel_reason))
+        lines.append(pr_cancel.cancelled_notice(pr_cancel.Reason(info.cancel_reason, info.cancel_session) if info.cancel_reason else None))
     return "\n".join([*lines, *(f"Issue #{i.number}: {i.url}" for i in info.issues)])
 
 
@@ -706,6 +708,12 @@ def pr_cancel_build(
         "--reason",
         help=f"Why the build is cancelled. Posted on the PR as a '{pr_cancel.PREFIX} <reason>' comment, which `bdt pr info` / `bdt pr status` show",
     ),
+    session: str | None = typer.Option(
+        None,
+        "--session",
+        help="Id or URL of the agent session (Claude, Codex, ...) that cancels, recorded in the comment and shown by `bdt pr info` / "
+        "`bdt pr status`. Default: the session bdt is running under, if it detects one",
+    ),
     target_branch: str | None = typer.Option(None, "--target-branch", help=_LOOKUP_TARGET_HELP),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(
@@ -719,12 +727,55 @@ def pr_cancel_build(
     (Azure DevOps or GitHub, auto-detected), and record --reason on the PR. Queue it again with
     `bdt pr requeue-build`.
     """
+    if session is not None:
+        try:
+            pr_cancel.resolve_session(session)
+        except ValueError as e:
+            raise typer.BadParameter(str(e), param_hint="--session") from None
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
-        gh_pr.cancel(gh, reason, pr_id=gh_pr.resolve_pr_id(gh, pr_id, target_branch))
+        gh_pr.cancel(gh, reason, pr_id=gh_pr.resolve_pr_id(gh, pr_id, target_branch), session_id=session)
         return
-    pr_build.cancel(remote, pat, target_branch, reason, pr_id=pr_id)
+    pr_build.cancel(remote, pat, target_branch, reason, pr_id=pr_id, session_id=session)
+
+
+@pr_app.command("abandon")
+def pr_abandon(
+    reason: str = typer.Option(
+        ...,
+        "--reason",
+        help=f"Why the PR is abandoned. Posted on the PR as an '{pr_cancel.ABANDON_PREFIX} <reason>' comment, which `bdt pr info` / `bdt pr status` show",
+    ),
+    session: str | None = typer.Option(
+        None,
+        "--session",
+        help="Id or URL of the agent session (Claude, Codex, ...) that abandons, recorded in the comment and shown by `bdt pr info` / "
+        "`bdt pr status`. Default: the session bdt is running under, if it detects one",
+    ),
+    target_branch: str | None = typer.Option(None, "--target-branch", help=_LOOKUP_TARGET_HELP),
+    pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
+    ),
+) -> None:
+    """Abandon (Azure DevOps) / close (GitHub) the PR opened from the current branch, or --pr-id directly, and
+    record --reason on it. `bdt pr status --wait` stops on an abandoned PR instead of waiting for CI.
+    """
+    if session is not None:
+        try:
+            pr_cancel.resolve_session(session)
+        except ValueError as e:
+            raise typer.BadParameter(str(e), param_hint="--session") from None
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh = require_gh()
+        gh_pr.abandon(gh, reason, pr_id=gh_pr.resolve_pr_id(gh, pr_id, target_branch), session_id=session)
+        return
+    pr_build.abandon(remote, pat, target_branch, reason, pr_id=pr_id, session_id=session)
 
 
 @pr_app.command("requeue-build")

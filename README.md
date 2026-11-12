@@ -39,15 +39,6 @@ Or as a project dependency: `uv add bmsdna-devtools`.
 
 Optional extras: `bmsdna-devtools[lint]` (`bdt lint` SQL rules), `bmsdna-devtools[usage]` (`bdt usage`, below).
 
-## Azure DevOps credentials
-
-Azure DevOps commands use `--pat` / `AZURE_DEVOPS_EXT_PAT` / `AZURE_DEVOPS_PAT`, else a token from `az login`
-(azure-identity). When that fails bdt says what to do instead of printing an HTTP error: with no credentials at all it
-names both ways out (a PAT, with the link to create one and the scopes bdt needs -- Code (Read & write), Build
-(Read & execute), Work Items (Read & write) -- or `az login`); when Azure DevOps rejects the credentials (401/403) it
-names the failing call, the PAT scope that call needs, and the usual causes (expired, created for another organization,
-missing scope, or -- for a 403 -- your account itself lacking the permission).
-
 ## `bdt pr status`
 
 Find the PR opened from the current branch and report build/check status
@@ -58,7 +49,7 @@ GitHub — whichever `origin` points at.
 bdt pr status [--target-branch BRANCH] [--pr-id N] [--wait [--timeout SECONDS]]
 ```
 
-Every command that acts on an existing PR (`pr status/info/retry/cancel-build/requeue-build/publish/update/comment`, `issue take` without
+Every command that acts on an existing PR (`pr status/info/retry/publish/update/comment`, `issue take` without
 a number, and the draft conversion of `commit`) finds the PR opened from the current branch **into any target**:
 `--target` / `--target-branch` is only an optional filter. If the branch has **several open PRs** (say one into
 `dev` and one into `main`) it asks which one on a terminal, and fails listing them (id, target, title) when not
@@ -121,14 +112,8 @@ build state (`passing`, `failing`, `cancelled`, `pending`, `waiting` for a manua
 issue(s)/work item(s) it closes, with links. Exits 1 when the branch has no PR. `--json` is what
 a status integration reads (e.g. the Claude Code mod planned in bmsuisse/skills#61). Build state is judged the way `bdt pr status` does: on GitHub from
 the check rollup (only a failed check fails it; skipped/cancelled ones don't count), on Azure DevOps
-from the latest build of each pipeline (any failed result fails it; a cancelled one makes it `cancelled`; unfinished builds are pending, or
+from the latest build of each pipeline (any failed result fails it; unfinished builds are pending, or
 `waiting` when a stage needs approval). `unknown` if Azure DevOps can't be asked.
-
-A `cancelled` build shows why: the text output gets a `Build cancelled: <reason>` line and the JSON a `cancel_reason`,
-both taken from the PR's newest `CANCELLED BUILD:` comment (see `bdt pr cancel-build`) about the cancelled build
-(`null` / "no comment says why" for one cancelled in the web UI). On GitHub only a run that such a comment names counts
-as cancelled; any other cancelled check (e.g. a run superseded by a newer one) stays harmless as above.
-`bdt pr status` prints the same line and exits 1 for a cancelled build, with a hint to `bdt pr requeue-build`.
 
 `--all` lists every open PR from the current branch (e.g. one into `dev` and one into `main`, which plain
 `bdt pr info` refuses to pick between): with `--json` an array of the same objects, `[]` (exit 0) when there is
@@ -182,23 +167,16 @@ by a GitHub Actions run (e.g. a legacy commit status from an external CI)
 can't be retried this way and are skipped; if none of the failing checks are
 retryable, the command exits with an error.
 
-## `bdt pr cancel-build` / `bdt pr requeue-build`
+## `bdt pr cancel-build` / `requeue-build` / `abandon`
 
 ```bash
-bdt pr cancel-build --reason "wrong branch deployed" [--target-branch BRANCH] [--pr-id N]
-bdt pr requeue-build [--all] [--target-branch BRANCH] [--pr-id N]
+bdt pr cancel-build --reason "..." [--session ID_OR_URL] [--pr-id N]   # comment "CANCELLED BUILD: ..."
+bdt pr requeue-build [--all] [--pr-id N]                               # new build; `retry` only reruns failed stages
+bdt pr abandon --reason "..." [--session ID_OR_URL] [--pr-id N]        # comment "ABANDONED PR: ..."
 ```
 
-`cancel-build` cancels the **running** build(s) of the PR (the latest one per pipeline/workflow; Azure DevOps
-`PATCH .../builds/{id}` with `status: cancelling`, GitHub `POST actions/runs/{id}/cancel`) and then posts the required
-`--reason` on the PR as a comment starting with `CANCELLED BUILD:`, naming the builds it cancelled. `bdt pr info` and
-`bdt pr status` show that reason for as long as the build stays cancelled. It exits with an error (and posts nothing)
-when nothing is running.
-
-`requeue-build` queues a **whole new** build for each pipeline/workflow whose latest build was cancelled or failed
-(`--all`: also succeeded ones; running ones are never touched): Azure DevOps `POST .../builds` for the same pipeline,
-ref (`refs/pull/<id>/merge`) and parameters, GitHub `POST actions/runs/{id}/rerun`. Not the same as `bdt pr retry`,
-which re-runs only the failed stage(s)/job(s) of a failed build in place and can't do anything with a cancelled one.
+`bdt pr info` / `bdt pr status` show the reason (and agent session) of a cancelled build or abandoned PR; run
+`--help` for details.
 
 ## `bdt pr watch-deploy`
 

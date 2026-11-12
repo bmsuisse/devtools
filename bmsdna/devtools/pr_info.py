@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field
 import requests
 
 from .ado_auth import AdoAuthError
+from .pr_cancel import Reason, Session
 from . import ado_issue, gh_pr, pr_build, pr_issue_link
 from .github_api import GitHubClient
 from .gitrepo import AdoRemote, GitHubRemote
@@ -44,6 +45,9 @@ class PrInfo:
     build: str
     issues: list[IssueRef] = field(default_factory=list)
     cancel_reason: str | None = None  # why the build was cancelled, when `build` is "cancelled" and a `CANCELLED BUILD:` comment says
+    cancel_session: Session | None = None  # the agent session that cancelled it, when that comment says
+    abandon_reason: str | None = None  # why the PR was abandoned, when `state` is "closed" and an `ABANDONED PR:` comment says
+    abandon_session: Session | None = None  # the agent session that abandoned it, when that comment says
     repo: str = ""  # "owner/repo" (GitHub) or "org/project/repo" (Azure DevOps): which repo the PR is in
 
     def to_json_dict(self) -> dict:
@@ -61,7 +65,7 @@ def build_state(checks: list[dict], cancelled: bool = False) -> str:
     (failing > cancelled > waiting > pending > passing; none if nothing ran). Mirrors `gh_pr.run` (`bdt pr status`): only a "fail"
     bucket is failing, so skipped and cancelled checks (e.g. a run superseded by a newer push)
     don't count against the PR -- the two commands must never disagree about the same PR. A cancelled check
-    is only a cancelled build when `cancelled` says so, i.e. a `CANCELLED BUILD:` comment (`gh_pr.cancel_reason`) confirms it.
+    is only a cancelled build when `cancelled` says so, i.e. a `CANCELLED BUILD:` comment (`gh_pr.cancellation`) confirms it.
     """
     buckets = {gh_pr.check_bucket(c) for c in checks}
     if buckets <= {"skipping"}:
@@ -97,16 +101,21 @@ def github_info(pr: dict, remote: GitHubRemote, gh: GitHubClient | None = None) 
         if _is_this_repo(i.get("repository") or {}, remote)
     ]
     checks = pr.get("statusCheckRollup") or []
-    reason = gh_pr.cancel_reason(gh, pr["number"], checks) if gh is not None else None
+    cancelled = gh_pr.cancellation(gh, pr["number"], checks) if gh is not None else None
+    state = str(pr.get("state", "OPEN")).lower()
+    abandoned = gh_pr.abandonment(gh, pr["number"]) if gh is not None and state == "closed" else None
     return PrInfo(
         number=pr["number"],
         title=clean_text(pr.get("title", "")),
         url=pr["url"],
-        state=str(pr.get("state", "OPEN")).lower(),
+        state=state,
         draft=bool(pr.get("isDraft")),
-        build=build_state(checks, cancelled=reason is not None),
+        build=build_state(checks, cancelled=cancelled is not None),
         issues=issues,
-        cancel_reason=reason,
+        cancel_reason=cancelled.reason if cancelled else None,
+        cancel_session=cancelled.session if cancelled else None,
+        abandon_reason=abandoned.reason if abandoned else None,
+        abandon_session=abandoned.session if abandoned else None,
         repo=f"{remote.owner}/{remote.repo}",
     )
 
@@ -130,8 +139,8 @@ def ado_build_state(builds: list[dict], has_pending_approval: bool) -> str:
     return BUILD_PASSING
 
 
-def _ado_build(session: requests.Session, remote: AdoRemote, pr: dict) -> tuple[str, str | None]:
-    """(`BUILD_*` state, why it was cancelled if it was and a `CANCELLED BUILD:` comment says)."""
+def _ado_build(session: requests.Session, remote: AdoRemote, pr: dict) -> tuple[str, Reason | None]:
+    """(`BUILD_*` state, why and by whom it was cancelled if it was and a `CANCELLED BUILD:` comment says)."""
     pr_id = pr["pullRequestId"]
     source_branch = pr["sourceRefName"].removeprefix("refs/heads/")
     try:
@@ -140,12 +149,12 @@ def _ado_build(session: requests.Session, remote: AdoRemote, pr: dict) -> tuple[
         failed = any(b.get("result") == "failed" for b in builds)
         approval = not failed and any(b.get("status") != "completed" for b in builds) and bool(pr_build.find_pending_approvals(session, remote, builds))
         state = ado_build_state(builds, approval)
-        reason = pr_build.cancel_reason(session, remote, pr_id, builds) if state == BUILD_CANCELLED else None
+        cancelled = pr_build.cancellation(session, remote, pr_id, builds) if state == BUILD_CANCELLED else None
     except AdoAuthError:
         raise  # a PAT without the Build scope is not "unknown": say so
     except requests.RequestException:
         return BUILD_UNKNOWN, None
-    return state, reason
+    return state, cancelled
 
 
 def ado_info(session: requests.Session, pr: dict, remote: AdoRemote) -> PrInfo:
@@ -155,7 +164,8 @@ def ado_info(session: requests.Session, pr: dict, remote: AdoRemote) -> PrInfo:
         for n in pr_issue_link.find_issue_refs_in_body(pr.get("description"), remote)
     ]
     pr_id = pr["pullRequestId"]
-    build, reason = _ado_build(session, remote, pr)
+    build, cancelled = _ado_build(session, remote, pr)
+    abandoned = pr_build.abandonment(session, remote, pr_id) if pr.get("status") == "abandoned" else None
     return PrInfo(
         number=pr_id,
         title=clean_text(pr.get("title", "")),
@@ -164,6 +174,9 @@ def ado_info(session: requests.Session, pr: dict, remote: AdoRemote) -> PrInfo:
         draft=bool(pr.get("isDraft")),
         build=build,
         issues=issues,
-        cancel_reason=reason,
+        cancel_reason=cancelled.reason if cancelled else None,
+        cancel_session=cancelled.session if cancelled else None,
+        abandon_reason=abandoned.reason if abandoned else None,
+        abandon_session=abandoned.session if abandoned else None,
         repo=f"{remote.org}/{remote.project}/{remote.repo}",
     )

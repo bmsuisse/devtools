@@ -176,19 +176,19 @@ def retry_hint() -> str:
 
 
 def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, target_branch: str | None) -> dict:
-    """The PR from `source_branch` (active first, else completed). `target_branch=None` doesn't filter on the target.
+    """The PR from `source_branch` (active first, else completed, else abandoned). `target_branch=None` doesn't filter on the target.
 
     Several active PRs from the branch (into different targets) are ambiguous: see `choose_pr`.
     """
     url = f"{_base_url(remote)}/_apis/git/repositories/{remote.repo}/pullrequests"
-    for status in ["active", "completed"]:
+    for status in ["active", "completed", "abandoned"]:
         r = session.get(
             url,
             params={
                 "searchCriteria.sourceRefName": f"refs/heads/{source_branch}",
                 **({"searchCriteria.targetRefName": f"refs/heads/{target_branch}"} if target_branch else {}),
                 "searchCriteria.status": status,
-                **({"$top": 1} if status == "completed" else {}),
+                **({"$top": 1} if status != "active" else {}),
                 "api-version": "7.1",
             },
             timeout=HTTP_TIMEOUT_SECS,
@@ -671,18 +671,63 @@ def list_comment_texts(session: requests.Session, remote: AdoRemote, pr_id: int)
     return [c.get("content") or "" for c in comments]
 
 
-def cancel_reason(session: requests.Session, remote: AdoRemote, pr_id: int, builds: list) -> str | None:
-    """Why the cancelled build(s) among `builds` were cancelled, from the PR's newest `CANCELLED BUILD:` comment
-    about them; None if there is none (cancelled in the web UI, say) or the comments can't be read."""
+def cancellation(session: requests.Session, remote: AdoRemote, pr_id: int, builds: list) -> pr_cancel.Reason | None:
+    """Why (and by which agent session) the cancelled build(s) among `builds` were cancelled, from the PR's newest
+    `CANCELLED BUILD:` comment about them; None if there is none (cancelled in the web UI, say) or the comments can't be read."""
     cancelled = {b["id"] for b in builds if b.get("result") == "canceled"}
     if not cancelled:
         return None
     try:
-        return pr_cancel.latest_reason(list_comment_texts(session, remote, pr_id), cancelled)
+        return pr_cancel.latest(list_comment_texts(session, remote, pr_id), cancelled)
     except AdoAuthError:
         raise
     except requests.RequestException:
         return None  # the reason is a nicety on top of the build state
+
+
+def abandonment(session: requests.Session, remote: AdoRemote, pr_id: int) -> pr_cancel.Reason | None:
+    """Why (and by which agent session) the PR was abandoned, from its newest `ABANDONED PR:` comment; None if there is
+    none (abandoned in the web UI, say) or the comments can't be read."""
+    try:
+        return pr_cancel.latest_abandonment(list_comment_texts(session, remote, pr_id))
+    except AdoAuthError:
+        raise
+    except requests.RequestException:
+        return None  # the reason is a nicety on top of the PR state
+
+
+def abandon(
+    remote: AdoRemote,
+    pat: str | None,
+    target_branch: str | None,
+    reason: str,
+    pr_id: int | None = None,
+    session_id: str | None = None,
+) -> None:
+    """Abandon the PR opened from the current branch (or `pr_id`), then leave `reason` (and the agent session,
+    `session_id` or else the detected one) on it as an `ABANDONED PR:` comment, which `pr info` / `pr status` show."""
+    if not reason.strip():
+        sys.exit("A reason is required: say why the PR is abandoned (--reason).")
+    agent_session = pr_cancel.resolve_session(session_id)
+    session = ado_session(pat)
+    pr = get_pr_by_id(session, remote, pr_id) if pr_id is not None else get_pr(session, remote, current_branch(), target_branch)
+    pr_number = pr["pullRequestId"]
+    if pr.get("status") != "active":
+        sys.exit(f"PR #{pr_number} is already {pr.get('status', 'closed')} -- nothing to abandon.")
+
+    _patch_pr(session, remote, pr_number, {"status": "abandoned"})
+    print(f"Abandoned PR #{pr_number}")
+    body = pr_cancel.abandon_body(reason, agent_session)
+    try:
+        add_comment(session, remote, pr_number, ensure_agent_session_note(body) or body)
+    except AdoAuthError:
+        raise
+    except requests.RequestException as e:
+        sys.exit(
+            f"The PR is abandoned, but the '{pr_cancel.ABANDON_PREFIX}' comment could not be posted: {e} -- post it yourself "
+            f"(`bdt pr comment --message \"{pr_cancel.ABANDON_PREFIX} <reason>\"`), or `pr info`/`pr status` won't show why"
+        )
+    print(f"Added an '{pr_cancel.ABANDON_PREFIX}' comment to PR #{pr_number}")
 
 
 def comment_with_screenshots(
@@ -930,12 +975,20 @@ def cancel_running_build(session: requests.Session, remote: AdoRemote, build_id:
 
 
 def cancel(
-    remote: AdoRemote, pat: str | None, target_branch: str | None, reason: str, source_branch: str | None = None, pr_id: int | None = None
+    remote: AdoRemote,
+    pat: str | None,
+    target_branch: str | None,
+    reason: str,
+    source_branch: str | None = None,
+    pr_id: int | None = None,
+    session_id: str | None = None,
 ) -> None:
     """Cancel the running build(s) of the PR opened from the current branch (or `pr_id`) -- one per pipeline, only
-    the latest -- then leave `reason` on the PR as a `CANCELLED BUILD:` comment, which `pr info` / `pr status` show."""
+    the latest -- then leave `reason` (and the agent session, `session_id` or else the detected one) on the PR as a
+    `CANCELLED BUILD:` comment, which `pr info` / `pr status` show."""
     if not reason.strip():
         sys.exit("A reason is required: say why the build is cancelled (--reason).")
+    agent_session = pr_cancel.resolve_session(session_id)
     session = ado_session(pat)
     pr, source_branch = _resolve_pr_and_branch(session, remote, target_branch, source_branch, pr_id)
     pr_number = pr["pullRequestId"]
@@ -960,7 +1013,8 @@ def cancel(
 
     if cancelled:
         body = pr_cancel.comment_body(
-            reason, ((pr_cancel.one_line(b.get("definition", {}).get("name", "?")), b["id"], build_web_url(remote, b["id"])) for b in cancelled)
+            reason, ((pr_cancel.one_line(b.get("definition", {}).get("name", "?")), b["id"], build_web_url(remote, b["id"])) for b in cancelled),
+            agent_session,
         )
         try:
             add_comment(session, remote, pr_number, ensure_agent_session_note(body) or body)
@@ -1031,6 +1085,16 @@ def requeue(
         sys.exit("Failed to requeue: " + "; ".join(errors))
 
     print("\nRun `bdt pr status --wait` to watch it.")
+
+
+def cancelled_for_current_push(build: dict, pr: dict) -> bool:
+    """A cancelled build of the PR's current merge commit: the answer to `--wait`, not a stale leftover of an earlier push
+    to wait past (nobody is about to replace it -- that takes `bdt pr requeue-build`). A cancelled build of an older
+    merge commit still is stale: the build of the new push is about to appear."""
+    if build.get("result") != "canceled":
+        return False
+    current = (pr.get("lastMergeCommit") or {}).get("commitId")
+    return current is None or build.get("sourceVersion") == current
 
 
 def print_build(session: requests.Session, remote: AdoRemote, build: dict) -> None:
@@ -1165,6 +1229,11 @@ def run(
         pr_number = pr["pullRequestId"]
         pr_title = pr.get("title", "?")
         pr_status = pr.get("status", "?")
+        if pr_status == "abandoned":
+            # nothing will ever build for it: say so (and why) instead of polling on with --wait
+            print(f"PR #{pr_number}: {pr_title} ({pr_status})")
+            print(f"\n{pr_cancel.abandoned_notice(abandonment(session, remote, pr_number))}")
+            sys.exit(1)
 
         msg = f"\rPR #{pr_number}: {pr_title} ({pr_status})"
 
@@ -1172,7 +1241,11 @@ def run(
         if builds:
             pipeline_builds = latest_per_pipeline(builds)
             if wait:
-                stale = [b for b in pipeline_builds if b["id"] <= baseline_completed_ids.get(b.get("definition", {}).get("id"), 0)]
+                stale = [
+                    b
+                    for b in pipeline_builds
+                    if b["id"] <= baseline_completed_ids.get(b.get("definition", {}).get("id"), 0) and not cancelled_for_current_push(b, pr)
+                ]
                 if stale:
                     msg += " | waiting for new build(s) to start: " + ", ".join(
                         b.get("definition", {}).get("name", "?") for b in stale
@@ -1201,7 +1274,7 @@ def run(
 
                 cancelled = any(b.get("result") == "canceled" for b in pipeline_builds)
                 if cancelled:
-                    print(f"\n{pr_cancel.cancelled_notice(cancel_reason(session, remote, pr_number, pipeline_builds))}")
+                    print(f"\n{pr_cancel.cancelled_notice(cancellation(session, remote, pr_number, pipeline_builds))}")
                 if any(b.get("result") == "failed" for b in pipeline_builds):
                     print(f"\n{retry_hint()}")
                     sys.exit(1)
