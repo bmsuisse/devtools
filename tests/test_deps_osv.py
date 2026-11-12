@@ -82,3 +82,11 @@ def test_release_time_uses_the_youngest_pypi_file_and_npm_time_map_and_none_for_
     npm = FakeResponse({"time": {"1.0.0": "2026-11-05T01:00:00.000Z"}})
     assert OsvClient(FakeSession([npm])).release_time("npm", "@s/p", "1.0.0").day == 5  # type: ignore[arg-type, union-attr]
     assert OsvClient(FakeSession([FakeResponse(status=404)])).release_time("PyPI", "internal-only", "1.0") is None  # type: ignore[arg-type]
+
+
+def test_a_repeating_page_token_is_an_error_not_an_endless_loop() -> None:
+    page = {"results": [{"vulns": [{"id": "A"}], "next_page_token": "same"}]}
+    session = FakeSession([FakeResponse(page), FakeResponse(page), FakeResponse(page)])
+
+    with pytest.raises(DataError, match="does not terminate"):
+        OsvClient(session).query_batch([("PyPI", "x", "1.0")])  # type: ignore[arg-type]

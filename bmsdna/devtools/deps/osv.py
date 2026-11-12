@@ -20,6 +20,7 @@ KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulner
 PYPI_URL = "https://pypi.org/pypi"
 NPM_URL = "https://registry.npmjs.org"
 BATCH_SIZE = 500
+MAX_PAGES = 100  # backstop: OSV pages hold up to 1000 advisories, no package has anywhere near that many
 RETRY_ATTEMPTS = 3
 RETRY_BACKOFF_SECS = 1.0
 
@@ -85,6 +86,7 @@ class OsvClient:
             for i, (eco, name, version) in enumerate(unique)
         }
         found: dict[int, list[str]] = {i: [] for i in base}
+        seen_tokens: dict[int, set[str]] = {i: set() for i in base}
         pending = dict(base)
         while pending:
             next_pending: dict[int, dict[str, Any]] = {}
@@ -96,11 +98,12 @@ class OsvClient:
                     raise DataError("OSV querybatch returned a different number of results than queries")
                 for i, result in zip(chunk, results, strict=True):
                     found[i].extend(v["id"] for v in result.get("vulns", []))
-                    if result.get("next_page_token"):
-                        next_pending[i] = {
-                            **base[i],
-                            "page_token": result["next_page_token"],
-                        }
+                    token = result.get("next_page_token")
+                    if token:
+                        if token in seen_tokens[i] or len(seen_tokens[i]) >= MAX_PAGES:
+                            raise DataError(f"OSV pagination for {unique[i][1]} {unique[i][2]} does not terminate")
+                        seen_tokens[i].add(token)
+                        next_pending[i] = {**base[i], "page_token": token}
             pending = next_pending
         return {unique[i]: sorted(dict.fromkeys(ids)) for i, ids in found.items()}
 
