@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import base64
 import re
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import requests
 
@@ -87,18 +87,35 @@ def _ado_message(response: requests.Response) -> str | None:
     return message if isinstance(message, str) and message.strip() else None
 
 
+def _is_sign_in_url(url: str) -> bool:
+    return urlparse(url).path.rstrip("/").endswith("/_signin")
+
+
+def _requested_url(response: requests.Response) -> str:
+    """The URL that was asked for. A rejected PAT is redirected to a sign-in page, which is what `response.url` is then
+    (and `response.history` is only filled in once the whole redirect chain is done, after the hook ran); the page
+    carries the original URL as `reply_to`."""
+    if response.history:
+        return response.history[0].url
+    if _is_sign_in_url(response.url):
+        reply_to = parse_qs(urlparse(response.url).query).get("reply_to")
+        if reply_to:
+            return reply_to[0]
+    return response.url
+
+
 def auth_failure_message(response: requests.Response, pat_used: bool) -> str:
     """Why `response` (a 401/403 from Azure DevOps) happened and how to fix it, for the credentials in use."""
-    parsed = urlparse(response.url)
+    parsed = urlparse(_requested_url(response))
     org_match = _ORG_RE.match(parsed.path) if parsed.netloc == "dev.azure.com" else None
     org = org_match.group(1) if org_match else _remote_org()
-    method = response.request.method if response.request is not None else "request"
     scope = next((s for api, s in _SCOPE_BY_API if api in parsed.path), None)
+    where = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
     lines = []
     if response.status_code == 403:
-        lines.append(f"Azure DevOps refused the call (HTTP 403) -- {method} {parsed.scheme}://{parsed.netloc}{parsed.path}")
+        lines.append(f"Azure DevOps refused the call (HTTP 403) -- {where}")
     else:
-        lines.append(f"Azure DevOps did not accept the credentials (HTTP 401) -- {method} {parsed.scheme}://{parsed.netloc}{parsed.path}")
+        lines.append(f"Azure DevOps did not accept the credentials (HTTP 401) -- {where}")
     says = _ado_message(response)
     if says:
         lines.append(f"Azure DevOps says: {says}")
@@ -115,17 +132,18 @@ def auth_failure_message(response: requests.Response, pat_used: bool) -> str:
         lines.append("Credentials: your `az login` token (no PAT given).")
         lines.append(
             "Run `az login` as a user with access to " + (f"organization '{org}'" if org else "the organization")
-            + (f" (and permission for {scope})" if scope else "")
             + f", or use a PAT instead: create one at {pat_settings_url(org)} (scopes: {BDT_PAT_SCOPES}) and set AZURE_DEVOPS_EXT_PAT / pass --pat."
         )
     return "\n".join(lines)
 
 
 def _is_sign_in_page(response: requests.Response) -> bool:
-    """Azure DevOps answers 203, or 200 with an HTML sign-in page, to credentials it does not recognise -- for
-    its REST API, which otherwise only ever speaks JSON/text."""
-    if "/_apis/" not in response.url:
+    """Azure DevOps answers credentials it does not recognise by redirecting to a sign-in page (so 203, or 200 with
+    HTML) -- for its REST API, which otherwise only ever speaks JSON/text."""
+    if "/_apis/" not in _requested_url(response):
         return False
+    if _is_sign_in_url(response.url):
+        return True
     if response.status_code == 203:
         return True
     return response.status_code == 200 and "text/html" in response.headers.get("Content-Type", "")

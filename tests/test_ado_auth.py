@@ -1,4 +1,5 @@
 import base64
+from urllib.parse import quote
 
 import pytest
 
@@ -71,10 +72,11 @@ def test_credential_is_built_once_with_the_cli_process_timeout(monkeypatch) -> N
     assert built == [{"process_timeout": CLI_TIMEOUT_SECS}]
 
 
-def _response(status: int, url: str, body: bytes = b"", content_type: str = "application/json", method: str = "POST"):
+def _response(status: int, url: str, body: bytes = b"", content_type: str = "application/json", method: str = "POST", history: list | None = None):
     import requests
 
     response = requests.Response()
+    response.history = history or []
     response.status_code = status
     response.url = url
     response._content = body
@@ -94,7 +96,7 @@ def test_rejected_pat_error_names_scope_pat_sources_and_where_to_fix_it() -> Non
     with pytest.raises(AdoAuthError) as exc_info:
         response.raise_for_status()
     message = str(exc_info.value)
-    assert "HTTP 401" in message and "POST" in message
+    assert "HTTP 401" in message and BUILD_URL in message
     assert "TF400813: not authorized" in message
     assert "AZURE_DEVOPS_EXT_PAT" in message and "--pat" in message
     assert "Build (Read & execute)" in message
@@ -190,3 +192,32 @@ def test_missing_credentials_message_explains_both_ways_out(monkeypatch) -> None
     assert "https://dev.azure.com/bmeurope/_usersSettings/tokens" in message
     assert "Build (Read & execute)" in message and "`az login`" in message
     assert "AzureCliCredential" not in message  # only the first line of azure-identity's per-credential dump
+
+
+def test_a_sign_in_page_is_recognised_even_when_the_status_is_a_plain_200() -> None:
+    from bmsdna.devtools.ado_auth import _check_auth_hook
+
+    page = "https://spsprodweu2.vssps.visualstudio.com/_signin?reply_to=" + quote(BUILD_URL, safe="")
+
+    assert _check_auth_hook(True)(_response(200, page, b"<html>", "text/html", "GET")).status_code == 401
+
+
+def test_rejected_pat_redirected_to_the_sign_in_page_is_reported_for_the_requested_url() -> None:
+    """What Azure DevOps really does with a bogus PAT: 302 to the vssps sign-in page, which answers 203."""
+    from bmsdna.devtools.ado_auth import AdoAuthError, _check_auth_hook
+
+    sign_in = _response(
+        203,
+        "https://spsprodweu2.vssps.visualstudio.com/_signin?realm=dev.azure.com&reply_to=" + quote(BUILD_URL, safe=""),
+        b"<html>",
+        "text/html",
+        "GET",
+    )  # no `history` yet: requests fills it in only after the response hooks ran
+
+    response = _check_auth_hook(True)(sign_in)
+
+    with pytest.raises(AdoAuthError) as exc_info:
+        response.raise_for_status()
+    message = str(exc_info.value)
+    assert "HTTP 401" in message and BUILD_URL in message and "_signin" not in message
+    assert "Build (Read & execute)" in message and "'bmeurope'" in message
