@@ -20,6 +20,7 @@ dependencies = [
     "tomli-w>=1.0.0",
     "typer>=0.26.7",
     "rich>=13.0.0",
+    "packaging>=24.0",
     # [db] extra: pgdevkit.testdb unconditionally imports pgdevkit.db.complex_types
     # (schema-apply machinery), which needs psycopg-pool/pydantic -- plain
     # `pgdevkit` alone fails to import pgdevkit.testdb. Possibly worth reporting
