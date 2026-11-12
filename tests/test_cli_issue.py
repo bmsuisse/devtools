@@ -86,7 +86,7 @@ def test_issue_search_org_wide_falls_back_to_github_org_when_no_repo(monkeypatch
 
 def test_issue_search_org_wide_falls_back_to_org_when_no_repo(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", _not_a_repo)
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     captured: dict = {}
 
     def fake_search(session, remote, keywords, since=None, board=None, top=10, state="open", org_wide=False, tags=None):
@@ -222,7 +222,7 @@ def test_issue_search_merges_tag_and_label_for_github(monkeypatch) -> None:
 def test_issue_search_merges_tag_and_label_for_ado(monkeypatch) -> None:
     remote = AdoRemote("myorg", "MyProj", "myrepo")
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     captured: dict = {}
 
     def fake_search(session, remote, keywords, since=None, board=None, top=10, state="open", org_wide=False, tags=None):
@@ -258,7 +258,7 @@ def test_issue_create_merges_tag_and_label_for_github(monkeypatch) -> None:
 def test_issue_create_merges_tag_and_label_for_ado(monkeypatch) -> None:
     remote = AdoRemote("myorg", "MyProj", "myrepo")
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     captured: dict = {}
 
     def fake_create(session, remote, work_item_type, title, description, board, tags, screenshot_paths, file_paths, iteration=None, parent=None, blocked_by=None):
@@ -297,7 +297,7 @@ def test_issue_update_merges_tag_label_and_remove_tag_remove_label_for_github(mo
 def test_issue_update_merges_tag_label_and_remove_tag_remove_label_for_ado(monkeypatch) -> None:
     remote = AdoRemote("myorg", "MyProj", "myrepo")
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     captured: dict = {}
 
     def fake_update(session, remote, number, title, description, board, tags, remove_tags, state, iteration=None, parent=None, blocked_by=None):
@@ -321,7 +321,7 @@ def test_issue_update_omitting_tag_and_label_leaves_ado_tags_untouched(monkeypat
     (which Azure DevOps' `update()` would take as "replace with no tags")."""
     remote = AdoRemote("myorg", "MyProj", "myrepo")
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     captured: dict = {}
 
     def fake_update(session, remote, number, title, description, board, tags, remove_tags, state, iteration=None, parent=None, blocked_by=None):
@@ -341,7 +341,7 @@ def _ado_remote_with_config(monkeypatch, tmp_path, config: str) -> None:
     (tmp_path / "pyproject.toml").write_text(config)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: AdoRemote("myorg", "MyProj", "myrepo"))
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
 
 
 def test_issue_create_ado_fails_without_board_when_required(monkeypatch, tmp_path) -> None:
@@ -414,7 +414,7 @@ def test_issue_show_ado(monkeypatch) -> None:
     from bmsdna.devtools.issue_show import IssueDetails
 
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: AdoRemote("myorg", "MyProj", "myrepo"))
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     captured: dict = {}
 
     def fake_get_details(session, remote, number, business_users=None):
@@ -432,7 +432,7 @@ def test_issue_show_ado(monkeypatch) -> None:
 
 def test_issue_create_ado_passes_iteration_parent_and_blockers(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: AdoRemote("myorg", "MyProj", "myrepo"))
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     captured: dict = {}
 
     def fake_create(session, remote, work_item_type, title, description, board, tags, screenshot_paths, file_paths, iteration=None, parent=None, blocked_by=None):
@@ -526,7 +526,7 @@ def test_issue_create_and_update_github_reject_iteration(monkeypatch) -> None:
 
 def _ado_search_setup(monkeypatch, remote: AdoRemote | GitHubRemote) -> dict:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     captured: dict = {}
 
     def fake_search(session, remote, keywords, **kwargs):

@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass, field
 
 import requests
 
+from .ado_auth import AdoAuthError
 from . import ado_issue, gh_pr, pr_build, pr_issue_link
 from .gitrepo import AdoRemote, GitHubRemote
 
@@ -125,6 +126,8 @@ def _ado_build(session: requests.Session, remote: AdoRemote, pr: dict) -> str:
         # a timeline lookup per running build -- only worth it when nothing has failed yet
         failed = any(b.get("result") == "failed" for b in builds)
         approval = not failed and any(b.get("status") != "completed" for b in builds) and bool(pr_build.find_pending_approvals(session, remote, builds))
+    except AdoAuthError:
+        raise  # a PAT without the Build scope is not "unknown": say so
     except requests.RequestException:
         return BUILD_UNKNOWN
     return ado_build_state(builds, approval)

@@ -258,7 +258,7 @@ def test_pr_info_all_rejects_pr_id(monkeypatch) -> None:
 
 def test_pr_info_all_on_azure_devops_lists_active_prs(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feat/widgets")
     asked: list = []
     monkeypatch.setattr(
@@ -495,7 +495,7 @@ def test_pr_id_unreadable_entry_is_a_usage_error_before_any_lookup(monkeypatch) 
 
 def test_pr_id_on_azure_devops_resolves_each_repo(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     asked: list = []
     monkeypatch.setattr(
         "bmsdna.devtools.cli.pr_build.get_pr_by_id",
@@ -743,7 +743,7 @@ def test_issue_take_comments_when_the_last_comment_is_something_else(monkeypatch
 
 def test_issue_take_on_azure_devops_reads_the_html_comment(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.cli._current_user", lambda remote: "me")
     monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.last_comment", lambda session, remote, n: "<div>Taken by <b>someone</b></div>")
     posted = []

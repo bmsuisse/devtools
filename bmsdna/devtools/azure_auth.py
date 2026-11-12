@@ -18,8 +18,9 @@ def _credential():
     return DefaultAzureCredential(process_timeout=CLI_TIMEOUT_SECS)
 
 
-def get_azure_token(scope: str) -> str:
-    """A bearer token for `scope` (e.g. `https://management.azure.com/.default`)."""
+def get_azure_token(scope: str, hint: str | None = None) -> str:
+    """A bearer token for `scope` (e.g. `https://management.azure.com/.default`). `hint` replaces the generic
+    "try `az login`" advice when the failing caller knows better (see `ado_auth`)."""
     try:
         from azure.core.exceptions import ClientAuthenticationError
     except ImportError:  # pragma: no cover -- a declared dependency
@@ -27,4 +28,7 @@ def get_azure_token(scope: str) -> str:
     try:
         return _credential().get_token(scope).token
     except ClientAuthenticationError as e:
+        if hint:
+            # the credential chain's report lists every credential tried, one block each: the first line says it all
+            sys.exit(f"{hint}\n\n(azure-identity: {str(e).strip().splitlines()[0]})")
         sys.exit(f"Azure authentication failed (try `az login`, or set AZURE_DEVOPS_EXT_PAT for Azure DevOps):\n{e}")

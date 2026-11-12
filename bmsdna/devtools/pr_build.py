@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 import requests
 
-from .ado_auth import auth_header
+from .ado_auth import AdoAuthError, ado_session
 from .cli_tools import EXIT_NEEDS_APPROVAL, HTTP_TIMEOUT_SECS, PollHeartbeat, WaitDeadline, detect_agent_session, ensure_agent_session_note, exit_wait_timeout, is_claude_code, status_rerun_cmd
 from .gitrepo import AdoRemote, current_branch, head_commit_subject
 from .pr_create_args import PrCreateOptions
@@ -57,6 +57,8 @@ def _poll_or_exit(fn, *args, **kwargs):
     """
     try:
         return fn(*args, **kwargs)
+    except AdoAuthError:
+        raise
     except requests.exceptions.RequestException as e:
         sys.exit(f"Azure DevOps request failed or timed out: {e}")
 
@@ -440,6 +442,8 @@ def create_pr(
         )
     except requests.RequestException as e:
         sys.exit(f"Azure DevOps request failed or timed out: {e}; the PR may have been created -- check with `bdt pr info` before retrying")
+    if r.status_code in (401, 403):
+        r.raise_for_status()  # an AdoAuthError saying which PAT scope / login is missing
     if r.status_code >= 400:
         try:
             message = r.json().get("message")
@@ -848,8 +852,7 @@ def retry(
     from the current branch, or for `pr_id` directly if given -- one retry call per
     pipeline that failed, without queuing any brand new builds.
     """
-    session = requests.Session()
-    session.headers.update(auth_header(pat))
+    session = ado_session(pat)
 
     pr, source_branch = _resolve_pr_and_branch(session, remote, target_branch, source_branch, pr_id)
     builds = get_builds_for_pr(session, remote, source_branch, pr["pullRequestId"])
@@ -868,6 +871,8 @@ def retry(
         name = b.get("definition", {}).get("name", "?")
         try:
             retry_failed_build(session, remote, b["id"])
+        except AdoAuthError:
+            raise
         except requests.RequestException as e:
             errors.append(f"build #{b['id']} ({name}): {e}")
             continue
@@ -959,8 +964,7 @@ def run(
 ) -> None:
     """`timeout` (seconds, only with `wait`): stop polling after that long and exit `EXIT_WAIT_TIMEOUT`
     with the current state; 0 = wait until every pipeline is done."""
-    session = requests.Session()
-    session.headers.update(auth_header(pat))
+    session = ado_session(pat)
 
     def fetch_pr() -> dict:
         """The PR to watch, via `_resolve_pr_and_branch` -- also keeps `source_branch` in
@@ -1103,8 +1107,7 @@ def run_watch_deploy(remote: AdoRemote, pat: str | None, target_branch: str, wai
     helpers), but looks at builds tied to the branch itself via `get_builds_for_branch`
     rather than a specific PR's merge/source refs.
     """
-    session = requests.Session()
-    session.headers.update(auth_header(pat))
+    session = ado_session(pat)
 
     heartbeat = PollHeartbeat()
     while True:

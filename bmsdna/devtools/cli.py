@@ -36,7 +36,7 @@ from . import lint as lint_mod
 from . import logs as logs_mod
 from . import translate as translate_mod
 from . import pr_build, pr_info as pr_info_mod, pr_issue_link, pr_merge_defaults, pr_ref, pr_labels, pull as pull_mod, worktree as worktree_mod
-from .ado_auth import auth_header
+from .ado_auth import AdoAuthError, ado_session, auth_header
 from .bdt_config import find_pyproject, load_bdt_table
 from .cli_tools import CLI_TIMEOUT_SECS, EXIT_WAIT_TIMEOUT, detect_agent_session, require_gh
 from .github_api import GitHubClient
@@ -71,7 +71,18 @@ DEFAULT_TARGET_BRANCH = "dev"
 # `issue watch` on Azure DevOps without a PAT: re-fetch the short-lived Bearer token this often.
 ADO_TOKEN_REFRESH_SECS = 1800.0
 
-app = typer.Typer(
+class _BdtTyper(typer.Typer):
+    """Shows an `AdoAuthError` (which says by itself what to fix) as plain text, not a traceback."""
+
+    def __call__(self, *args, **kwargs):
+        try:
+            return super().__call__(*args, **kwargs)
+        except AdoAuthError as e:
+            print(e, file=sys.stderr)
+            sys.exit(1)
+
+
+app = _BdtTyper(
     name="bdt",
     help=f"Shared BMS developer tooling: PRs/builds (Azure DevOps or GitHub), worktrees, commits, logs (v{__version__})",
 )
@@ -161,8 +172,7 @@ def _resolve_ado_pr(pat: str | None, remote: AdoRemote, target: str | None, pr_i
     so this works even without that PR's branch checked out locally), else by searching for
     the current branch's PR into `target`, as before.
     """
-    session = requests.Session()
-    session.headers.update(auth_header(pat))
+    session = ado_session(pat)
     if pr_id is not None:
         pr = pr_build.get_pr_by_id(session, remote, pr_id)
     else:
@@ -188,8 +198,7 @@ def _open_prs_info(target_branch: str | None, pat: str | None) -> list[pr_info_m
             pr_info_mod.github_info(gh_pr.get_pr(gh, number, fields=gh_pr.PR_INFO_FIELDS), remote)
             for number in gh_pr.open_pr_numbers(gh, target_branch)
         ]
-    session = requests.Session()
-    session.headers.update(auth_header(pat))
+    session = ado_session(pat)
     return [pr_info_mod.ado_info(session, pr, remote) for pr in pr_build.get_active_prs(session, remote, current_branch(), target_branch)]
 
 
@@ -218,8 +227,7 @@ def _ref_pr_info(ref: pr_ref.PrRef, pat: str | None, clients: dict) -> pr_info_m
         gh = base if ref.remote is None else base.for_repo(remote.owner, remote.repo)
         return pr_info_mod.github_info(gh_pr.get_pr(gh, ref.pr_id, fields=gh_pr.PR_INFO_FIELDS), remote)
     if "session" not in clients:
-        clients["session"] = requests.Session()
-        clients["session"].headers.update(auth_header(pat))
+        clients["session"] = ado_session(pat)
     session = clients["session"]
     return pr_info_mod.ado_info(session, pr_build.get_pr_by_id(session, remote, ref.pr_id), remote)
 
@@ -474,8 +482,7 @@ def pr_create(
             remote,
             **{k: v for k, v in (("org", options.organization), ("project", options.ado_project), ("repo", options.repository)) if v},
         )
-        session = requests.Session()
-        session.headers.update(auth_header(pat))
+        session = ado_session(pat)
         if options.dry_run:
             body = pr_build.build_create_body(
                 session, ado, source_branch, target, draft=draft, labels=label, title=title, description=description,
@@ -874,8 +881,7 @@ def issue_create(
             parent=parent, blocked_by=blocked_by,
         )
     else:
-        session = requests.Session()
-        session.headers.update(auth_header(pat))
+        session = ado_session(pat)
         resolved_board = ado_issue.check_board(ado_issue.resolve_board(board), creating=True)
         ado_issue.create(
             session, remote, type_, title, description, resolved_board, tags_or_labels, screenshot, file,
@@ -1054,8 +1060,7 @@ def issue_search(
             )
             found = (_github_item_remote(items[0]) if org_wide else remote, items[0]["number"]) if items else None
         else:
-            session = requests.Session()
-            session.headers.update(auth_header(pat))
+            session = ado_session(pat)
             resolved_board = ado_issue.resolve_board(board)
             if business_user:
                 detector = detector or business_user_mod.BusinessUserDetector(session, remote, commit_depth)
@@ -1184,8 +1189,7 @@ def issue_do(
     if isinstance(remote, GitHubRemote):
         title, body = issue_do_mod.fetch_github(require_gh(), number)
     else:
-        session = requests.Session()
-        session.headers.update(auth_header(pat))
+        session = ado_session(pat)
         title, body = issue_do_mod.fetch_ado(session, remote, number)
     extra = list(ctx.args)
     # claude can be given the session id up front, so the "Taken by" comment can link the session that will exist
@@ -1256,8 +1260,7 @@ def _take(
 def _last_comment(remote: AdoRemote | GitHubRemote, number: int, pat: str | None) -> str | None:
     if isinstance(remote, GitHubRemote):
         return gh_issue.last_comment(require_gh(), remote.owner, remote.repo, number)
-    session = requests.Session()
-    session.headers.update(auth_header(pat))
+    session = ado_session(pat)
     return ado_issue.last_comment(session, remote, number)
 
 
@@ -1265,8 +1268,7 @@ def _comment_on_issue(remote: AdoRemote | GitHubRemote, number: int, message: st
     if isinstance(remote, GitHubRemote):
         gh_issue.comment(require_gh(), remote.owner, remote.repo, number, message, [], agent_note=agent_note)
     else:
-        session = requests.Session()
-        session.headers.update(auth_header(pat))
+        session = ado_session(pat)
         ado_issue.comment_with_screenshots(session, remote, number, message, [], [], agent_note=agent_note)
 
 
@@ -1348,17 +1350,16 @@ def issue_watch(
         def fetch() -> list[issue_watch_mod.Comment]:
             return issue_watch_mod.to_comments(gh_issue.list_comments(gh, remote.owner, remote.repo, number))
     else:
-        ado_session = requests.Session()
-        ado_session.headers.update(auth_header(pat))
+        watch_session = ado_session(pat)
         header_age = time.monotonic()
 
         def fetch() -> list[issue_watch_mod.Comment]:
             nonlocal header_age
             # A `az login` token lives about an hour, a `--follow` runs for longer; a PAT never expires mid-run
             if not pat and time.monotonic() - header_age > ADO_TOKEN_REFRESH_SECS:
-                ado_session.headers.update(auth_header(pat))
+                watch_session.headers.update(auth_header(pat))
                 header_age = time.monotonic()
-            return issue_watch_mod.to_comments(ado_issue.list_comments(ado_session, remote, number), is_html=True)
+            return issue_watch_mod.to_comments(ado_issue.list_comments(watch_session, remote, number), is_html=True)
 
     own_session = detect_agent_session() if skip_own else None
     accept = issue_watch_mod.build_accept(
@@ -1416,8 +1417,7 @@ def issue_show(
     if isinstance(remote, GitHubRemote):
         details = gh_issue.get_details(require_gh(), remote.owner, remote.repo, number)
     else:
-        session = requests.Session()
-        session.headers.update(auth_header(pat))
+        session = ado_session(pat)
         details = ado_issue.get_details(session, remote, number, business_user_mod.BusinessUserDetector(session, remote))
     typer.echo(issue_show_mod.format_details(details, as_json=as_json))
 
@@ -1490,8 +1490,7 @@ def issue_update(
         _reject_ado_only_options(iteration=iteration)
         gh_issue.update(require_gh(), number, title, description, tags_or_labels, removals, state, parent, blocked_by)
     else:
-        session = requests.Session()
-        session.headers.update(auth_header(pat))
+        session = ado_session(pat)
         ado_issue.update(
             session, remote, number, title, description, ado_issue.check_board(board), tags_or_labels, removals, state,
             iteration=iteration, parent=parent, blocked_by=blocked_by,
@@ -1521,8 +1520,7 @@ def issue_delete(
     if isinstance(remote, GitHubRemote):
         gh_issue.delete(require_gh(), number)
     else:
-        session = requests.Session()
-        session.headers.update(auth_header(pat))
+        session = ado_session(pat)
         ado_issue.delete(session, remote, number)
 
 
@@ -1557,8 +1555,7 @@ def issue_comment_add(
     if isinstance(remote, GitHubRemote):
         gh_issue.comment(require_gh(), remote.owner, remote.repo, number, message, screenshot, file)
     else:
-        session = requests.Session()
-        session.headers.update(auth_header(pat))
+        session = ado_session(pat)
         ado_issue.comment_with_screenshots(session, remote, number, message, screenshot, file)
 
 
@@ -1579,8 +1576,7 @@ def issue_comment_update(
     if isinstance(remote, GitHubRemote):
         gh_issue.update_comment(require_gh(), remote.owner, remote.repo, str(comment_id), message)
     else:
-        session = requests.Session()
-        session.headers.update(auth_header(pat))
+        session = ado_session(pat)
         ado_issue.update_comment(session, remote, number, comment_id, message)
 
 
@@ -1604,8 +1600,7 @@ def issue_comment_delete(
     if isinstance(remote, GitHubRemote):
         gh_issue.delete_comment(require_gh(), remote.owner, remote.repo, str(comment_id))
     else:
-        session = requests.Session()
-        session.headers.update(auth_header(pat))
+        session = ado_session(pat)
         ado_issue.delete_comment(session, remote, number, comment_id)
 
 
@@ -1973,8 +1968,7 @@ def _draft_feat_pr(target: str | None, pat: str | None) -> None:
         if isinstance(remote, GitHubRemote):
             converted = gh_pr.set_draft(require_gh(), target=target)
         else:
-            session = requests.Session()
-            session.headers.update(auth_header(pat))
+            session = ado_session(pat)
             pr = pr_build.get_pr(session, remote, current_branch(), target)
             converted = pr_build.set_draft(session, remote, pr)
     except (Exception, SystemExit):

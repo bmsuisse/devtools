@@ -68,6 +68,7 @@ class AdoSession:
         self.by_status = {"active": active, "completed": completed or []}
         self.params: list[dict] = []
         self.headers: dict = {}
+        self.hooks: dict = {"response": []}
 
     def get(self, url, params, timeout):
         self.params.append(params)
@@ -280,7 +281,7 @@ def test_cli_pr_publish_on_azure_devops_with_several_prs_non_interactive_fails(m
     session = AdoSession([ADO_INTO_MAIN, ADO_INTO_DEV])
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feat")
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.cli.requests.Session", lambda: session)
     monkeypatch.setattr(pr_choice, "_interactive", lambda: False)
     monkeypatch.setattr("bmsdna.devtools.cli.pr_build.publish", lambda *a, **k: pytest.fail("must not pick a PR on its own"))
@@ -295,7 +296,7 @@ def test_cli_pr_publish_on_azure_devops_with_target_picks_that_pr(monkeypatch, n
     session = AdoSession([ADO_INTO_DEV])
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feat")
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.cli.requests.Session", lambda: session)
     published = []
     monkeypatch.setattr("bmsdna.devtools.cli.pr_build.publish", lambda s, remote, pr: published.append(pr["pullRequestId"]))
