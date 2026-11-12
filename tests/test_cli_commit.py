@@ -76,7 +76,7 @@ def test_commit_converts_ado_pr_to_draft_on_feat_commit(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.commit_mod.commit_and_push", lambda *a, **k: feat_result())
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote)
     monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feature-x")
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
 
     pr = {"pullRequestId": 42, "isDraft": False}
     monkeypatch.setattr("bmsdna.devtools.cli.pr_build.get_pr", lambda session, remote, source, target: pr)

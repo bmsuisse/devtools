@@ -48,7 +48,7 @@ def test_patch_pr_refuses_description_over_ado_limit() -> None:
 def _ado_cli(monkeypatch, *, stub_create: bool = True) -> list[dict]:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feature-x")
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.pr_build.has_build_policy", lambda session, remote, target: False)
     monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda session, remote, source_branch, target: {"pullRequestId": 9, "title": "t", "description": ""})
     created: list[dict] = []

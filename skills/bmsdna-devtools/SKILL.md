@@ -63,6 +63,9 @@ credential (env vars, managed identity, a cached `az login`, ...); otherwise pas
 `--pat`/`AZURE_DEVOPS_EXT_PAT`/`AZURE_DEVOPS_PAT`. GitHub needs `GH_TOKEN`/`GITHUB_TOKEN` (falls back
 to `gh auth token` if `gh` is installed); scopes `repo`, plus `project` for boards and `workflow` for reruns.
 
+`bdt pr cancel-build --reason`, `requeue-build` and `abandon --reason` (the reason is required and recorded on the PR,
+with the agent session; `pr info`/`pr status` show it) -- see `--help`.
+
 ## Creating a PR
 
 ```bash
