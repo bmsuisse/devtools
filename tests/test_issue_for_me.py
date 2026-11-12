@@ -286,7 +286,7 @@ def test_issue_search_for_me_on_azure_devops(monkeypatch) -> None:
     _clean_agent_env(monkeypatch)
     monkeypatch.setenv("CLAUDECODE", "1")
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: REMOTE)
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     captured: dict = {}
 
     def fake_search(session, remote, keywords, since=None, board=None, top=10, state="open", org_wide=False, tags=None, comment_filter=None):
@@ -306,7 +306,7 @@ def _patch_take(monkeypatch, items: list[dict], remote=None, taken: list | None 
     monkeypatch.setenv("CLAUDECODE", "1")
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote or GitHubRemote("o", "r"))
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
 
     def fake_search(*args, **kwargs):
         if search_limits is not None:
@@ -820,6 +820,7 @@ def test_issue_watch_ado_refreshes_a_stale_bearer_token_but_not_a_pat(monkeypatc
         headers.append("x")
         return {}
 
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", fake_auth_header)
     monkeypatch.setattr("bmsdna.devtools.cli.auth_header", fake_auth_header)
     captured = _patch_watch(monkeypatch, None, remote=ado)
     monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.list_comments", lambda *a, **k: [])
@@ -900,7 +901,7 @@ def test_issue_watch_github_fetch_lists_the_issues_comments(monkeypatch) -> None
 
 
 def test_issue_watch_ado_fetch_converts_html_bodies(monkeypatch) -> None:
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     captured = _patch_watch(monkeypatch, [_comment(5)], remote=REMOTE)
     monkeypatch.setattr(
         "bmsdna.devtools.cli.ado_issue.list_comments",

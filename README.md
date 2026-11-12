@@ -108,7 +108,7 @@ bdt pr info [--json] [--pr-id PR]... [--target-branch BRANCH] [--all]
 ```
 
 One-shot summary of the current branch's PR: link, state (open/merged/closed, draft), aggregate
-build state (`passing`, `failing`, `pending`, `waiting` for a manual approval, `none`) and the
+build state (`passing`, `failing`, `cancelled`, `pending`, `waiting` for a manual approval, `none`) and the
 issue(s)/work item(s) it closes, with links. Exits 1 when the branch has no PR. `--json` is what
 a status integration reads (e.g. the Claude Code mod planned in bmsuisse/skills#61). Build state is judged the way `bdt pr status` does: on GitHub from
 the check rollup (only a failed check fails it; skipped/cancelled ones don't count), on Azure DevOps
@@ -166,6 +166,17 @@ found automatically from the PR's failing checks. Checks that aren't backed
 by a GitHub Actions run (e.g. a legacy commit status from an external CI)
 can't be retried this way and are skipped; if none of the failing checks are
 retryable, the command exits with an error.
+
+## `bdt pr cancel-build` / `requeue-build` / `abandon`
+
+```bash
+bdt pr cancel-build --reason "..." [--session ID_OR_URL] [--pr-id N]   # comment "CANCELLED BUILD: ..."
+bdt pr requeue-build [--all] [--pr-id N]                               # new build; `retry` only reruns failed stages
+bdt pr abandon --reason "..." [--session ID_OR_URL] [--pr-id N]        # comment "ABANDONED PR: ..."
+```
+
+`bdt pr info` / `bdt pr status` show the reason (and agent session) of a cancelled build or abandoned PR; run
+`--help` for details.
 
 ## `bdt pr watch-deploy`
 

@@ -117,7 +117,7 @@ def test_gh_wait_returns_normally_when_checks_finish_before_the_deadline(monkeyp
 
 def _ado_env(monkeypatch, builds: list[dict]) -> None:
     monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock())
-    monkeypatch.setattr("bmsdna.devtools.pr_build.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda *a, **k: {"pullRequestId": 42, "title": "feat: widgets", "status": "active", "isDraft": False})
     monkeypatch.setattr("bmsdna.devtools.pr_build.get_builds_for_pr", lambda *a, **k: builds)
     monkeypatch.setattr("bmsdna.devtools.pr_build.find_pending_approvals", lambda *a, **k: [])

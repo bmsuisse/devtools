@@ -171,7 +171,7 @@ def test_pr_retry_with_pr_id_skips_branch_resolution_for_ado(monkeypatch) -> Non
 def test_pr_publish_with_pr_id_resolves_by_id_and_skips_branch_for_ado(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.current_branch", _fail_current_branch)
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr(
         "bmsdna.devtools.cli.pr_build.get_pr_by_id", lambda session, remote, pr_id: {"pullRequestId": pr_id}
     )
@@ -191,7 +191,7 @@ def test_pr_publish_with_pr_id_resolves_by_id_and_skips_branch_for_ado(monkeypat
 def test_pr_update_with_pr_id_resolves_by_id_and_skips_branch_for_ado(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.current_branch", _fail_current_branch)
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr(
         "bmsdna.devtools.cli.pr_build.get_pr_by_id", lambda session, remote, pr_id: {"pullRequestId": pr_id}
     )
@@ -214,7 +214,7 @@ def test_pr_update_with_pr_id_resolves_by_id_and_skips_branch_for_ado(monkeypatc
 def test_pr_comment_with_pr_id_resolves_by_id_and_skips_branch_for_ado(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.current_branch", _fail_current_branch)
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr(
         "bmsdna.devtools.cli.pr_build.get_pr_by_id", lambda session, remote, pr_id: {"pullRequestId": pr_id}
     )

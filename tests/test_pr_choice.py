@@ -65,9 +65,10 @@ class AdoSession:
     """Answers the pull request search by `searchCriteria.status`; records the params of each call."""
 
     def __init__(self, active: list[dict], completed: list[dict] | None = None) -> None:
-        self.by_status = {"active": active, "completed": completed or []}
+        self.by_status = {"active": active, "all": completed or []}
         self.params: list[dict] = []
         self.headers: dict = {}
+        self.hooks: dict = {"response": []}
 
     def get(self, url, params, timeout):
         self.params.append(params)
@@ -142,12 +143,12 @@ def test_ado_explicit_target_filters_and_never_asks(never_asks) -> None:
 
 
 def test_ado_completed_prs_are_not_candidates(never_asks) -> None:
-    """No active PR: falls back to the latest completed one, which is never a choice between several."""
+    """No active PR: falls back to the newest closed (completed or abandoned) one, which is never a choice between several."""
     session = AdoSession([], completed=[{**ADO_INTO_MAIN, "status": "completed"}])
 
     assert pr_build.get_pr(session, ADO_REMOTE, "feat", None)["pullRequestId"] == 10  # ty: ignore[invalid-argument-type]
-    assert [p["searchCriteria.status"] for p in session.params] == ["active", "completed"]
-    assert session.params[1]["$top"] == 1
+    assert [p["searchCriteria.status"] for p in session.params] == ["active", "all"]
+    assert session.params[1]["$top"] == 10
 
 
 # -- GitHub ---------------------------------------------------------------------
@@ -280,7 +281,7 @@ def test_cli_pr_publish_on_azure_devops_with_several_prs_non_interactive_fails(m
     session = AdoSession([ADO_INTO_MAIN, ADO_INTO_DEV])
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feat")
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.cli.requests.Session", lambda: session)
     monkeypatch.setattr(pr_choice, "_interactive", lambda: False)
     monkeypatch.setattr("bmsdna.devtools.cli.pr_build.publish", lambda *a, **k: pytest.fail("must not pick a PR on its own"))
@@ -295,7 +296,7 @@ def test_cli_pr_publish_on_azure_devops_with_target_picks_that_pr(monkeypatch, n
     session = AdoSession([ADO_INTO_DEV])
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feat")
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.cli.requests.Session", lambda: session)
     published = []
     monkeypatch.setattr("bmsdna.devtools.cli.pr_build.publish", lambda s, remote, pr: published.append(pr["pullRequestId"]))

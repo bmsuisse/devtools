@@ -64,6 +64,10 @@ def test_github_info_links_pr_and_closed_issue() -> None:
         "draft": True,
         "build": "pending",
         "issues": [{"number": 68, "url": "https://github.com/owner/repo/issues/68"}],
+        "cancel_reason": None,
+        "cancel_session": None,
+        "abandon_reason": None,
+        "abandon_session": None,
         "repo": "owner/repo",
     }
 
@@ -107,7 +111,7 @@ def _build(status: str, result: str | None = None, pipeline: int = 1) -> dict:
     "builds,approval,expected",
     [
         ([], False, pr_info.BUILD_NONE),
-        ([_build("completed", "succeeded"), _build("completed", "canceled", 2)], False, pr_info.BUILD_PASSING),
+        ([_build("completed", "succeeded"), _build("completed", "canceled", 2)], False, pr_info.BUILD_CANCELLED),
         ([_build("completed", "succeeded"), _build("inProgress", None, 2)], False, pr_info.BUILD_PENDING),
         ([_build("notStarted")], False, pr_info.BUILD_PENDING),
         ([_build("inProgress")], True, pr_info.BUILD_WAITING),
@@ -258,7 +262,7 @@ def test_pr_info_all_rejects_pr_id(monkeypatch) -> None:
 
 def test_pr_info_all_on_azure_devops_lists_active_prs(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feat/widgets")
     asked: list = []
     monkeypatch.setattr(
@@ -495,7 +499,7 @@ def test_pr_id_unreadable_entry_is_a_usage_error_before_any_lookup(monkeypatch) 
 
 def test_pr_id_on_azure_devops_resolves_each_repo(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     asked: list = []
     monkeypatch.setattr(
         "bmsdna.devtools.cli.pr_build.get_pr_by_id",
@@ -619,10 +623,10 @@ def test_target_options_default_to_dev_except_lookups_which_do_not_filter() -> N
 
     found = dict(_target_options(typer.main.get_command(app)))
 
-    assert {"pr create", "pr status", "pr info", "pr retry", "pr publish", "pr update", "pr comment", "pr watch-deploy", "issue take"} <= set(found)
+    assert {"pr create", "pr status", "pr info", "pr retry", "pr cancel-build", "pr requeue-build", "pr abandon", "pr publish", "pr update", "pr comment", "pr watch-deploy", "issue take"} <= set(found)
     # these only look an existing PR up (by the current branch): no target given means no filter on it, so a
     # PR into `main` is found without `--target main`. Only commands that create a PR or watch a branch need a target.
-    lookups = {"pr status", "pr info", "pr retry", "pr publish", "pr update", "pr comment", "issue take", "commit"}
+    lookups = {"pr status", "pr info", "pr retry", "pr cancel-build", "pr requeue-build", "pr abandon", "pr publish", "pr update", "pr comment", "issue take", "commit"}
     assert {k for k, v in found.items() if v is None} == lookups
     assert {k: v for k, v in found.items() if v is not None} == {"pr create": "dev", "pr watch-deploy": "dev"}
 
@@ -743,7 +747,7 @@ def test_issue_take_comments_when_the_last_comment_is_something_else(monkeypatch
 
 def test_issue_take_on_azure_devops_reads_the_html_comment(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.cli._current_user", lambda remote: "me")
     monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.last_comment", lambda session, remote, n: "<div>Taken by <b>someone</b></div>")
     posted = []

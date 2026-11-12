@@ -32,7 +32,7 @@ def _ado(monkeypatch, *, description: str = "") -> list[dict]:
     """Stub Azure DevOps PR creation; returns the recorded `pr_build.create_pr` kwargs."""
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO)
     monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feature-x")
-    monkeypatch.setattr("bmsdna.devtools.cli.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.pr_build.has_build_policy", lambda session, remote, target: False)
     monkeypatch.setattr(
         "bmsdna.devtools.pr_build.get_pr", lambda session, remote, source_branch, target: {"pullRequestId": 456, "description": description}

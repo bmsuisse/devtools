@@ -203,7 +203,7 @@ IN_PROGRESS_BUILD = {"id": 102, "status": "inProgress", "result": None, "definit
 
 def _patch_retry_plumbing(monkeypatch, builds: list[dict], retried: list[int]) -> None:
     monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock())
-    monkeypatch.setattr("bmsdna.devtools.pr_build.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda session, remote, source, target: PR)
     monkeypatch.setattr("bmsdna.devtools.pr_build.get_builds_for_pr", lambda session, remote, source, pr_id: builds)
     monkeypatch.setattr(
@@ -254,7 +254,7 @@ def test_retry_with_pr_id_resolves_by_id_instead_of_branch(monkeypatch, capsys) 
     pr_by_id = {**PR, "sourceRefName": "refs/heads/feature-x"}
 
     monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock())
-    monkeypatch.setattr("bmsdna.devtools.pr_build.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr(
         "bmsdna.devtools.pr_build.get_pr", lambda *a, **k: pytest.fail("must not resolve by branch when --pr-id is given")
     )
@@ -285,7 +285,7 @@ def test_retry_still_attempts_remaining_builds_after_one_fails(monkeypatch, caps
             raise requests.HTTPError("HTTP 409")
 
     monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock())
-    monkeypatch.setattr("bmsdna.devtools.pr_build.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda session, remote, source, target: PR)
     monkeypatch.setattr(
         "bmsdna.devtools.pr_build.get_builds_for_pr",

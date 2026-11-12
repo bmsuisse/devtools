@@ -295,7 +295,7 @@ def test_run_wait_detects_approval_when_build_was_already_in_progress_at_invocat
     blocked_build = {"id": 200, "status": "inProgress", "result": None, "definition": {"id": 2, "name": "deploy"}}
 
     monkeypatch.setattr("bmsdna.devtools.pr_build.current_branch", lambda: "feature-x")
-    monkeypatch.setattr("bmsdna.devtools.pr_build.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda *a, **k: pr)
     # Same build, same id, on every call -- baseline capture and every poll iteration alike.
     monkeypatch.setattr("bmsdna.devtools.pr_build.get_builds_for_pr", lambda *a, **k: [blocked_build])
@@ -323,7 +323,7 @@ def test_run_wait_exits_1_not_2_when_a_pipeline_already_failed_and_another_needs
     blocked_build = {"id": 200, "status": "inProgress", "result": None, "definition": {"id": 2, "name": "deploy"}}
 
     monkeypatch.setattr("bmsdna.devtools.pr_build.current_branch", lambda: "feature-x")
-    monkeypatch.setattr("bmsdna.devtools.pr_build.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda *a, **k: pr)
     monkeypatch.setattr(
         "bmsdna.devtools.pr_build.get_builds_for_pr",
@@ -373,7 +373,7 @@ def test_run_exits_cleanly_when_get_pr_request_times_out(monkeypatch) -> None:
         raise requests.exceptions.ConnectTimeout("Connection timed out.")
 
     monkeypatch.setattr("bmsdna.devtools.pr_build.current_branch", lambda: "feature-x")
-    monkeypatch.setattr("bmsdna.devtools.pr_build.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", timed_out_get_pr)
 
     with pytest.raises(SystemExit) as exc_info:
