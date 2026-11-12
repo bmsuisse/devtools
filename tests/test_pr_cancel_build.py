@@ -659,3 +659,47 @@ def test_cli_abandon_dispatches_on_azure_devops(monkeypatch) -> None:
     assert runner.invoke(app, ["pr", "abandon", "--reason", "superseded", "--pr-id", "5", "--pat", "p"]).exit_code == 0
 
     assert seen == [((REMOTE, "p", None, "superseded"), {"pr_id": 5, "session_id": None})]
+
+
+# -- target branch without a build policy -----------------------------------------
+
+PR_INTO_MAIN = {**PR, "targetRefName": "refs/heads/main"}
+
+
+@pytest.mark.parametrize("command", ["cancel", "requeue", "retry"])
+def test_no_builds_into_a_branch_without_policy_says_so(monkeypatch, command) -> None:
+    _plumbing(monkeypatch, [])
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda *a, **k: PR_INTO_MAIN)
+    monkeypatch.setattr("bmsdna.devtools.pr_build.lacks_build_policy", lambda s, r, branch: branch == "main")
+    call = {
+        "cancel": lambda: pr_build.cancel(REMOTE, "pat", None, "why", source_branch="feature-x"),
+        "requeue": lambda: pr_build.requeue(REMOTE, "pat", None, source_branch="feature-x"),
+        "retry": lambda: pr_build.retry(REMOTE, "pat", None, source_branch="feature-x"),
+    }[command]
+
+    with pytest.raises(SystemExit, match="target branch 'main' has no build policy"):
+        call()
+
+
+def test_no_builds_with_a_policy_does_not_blame_the_policy(monkeypatch) -> None:
+    _plumbing(monkeypatch, [])
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda *a, **k: PR_INTO_MAIN)
+    monkeypatch.setattr("bmsdna.devtools.pr_build.lacks_build_policy", lambda *a: False)
+
+    with pytest.raises(SystemExit) as exc_info:
+        pr_build.requeue(REMOTE, "pat", None, source_branch="feature-x")
+
+    assert str(exc_info.value) == "No builds found for PR #42 -- nothing to requeue."
+
+
+def test_wait_without_a_build_policy_gives_up_instead_of_polling_and_info_says_none(monkeypatch) -> None:
+    _plumbing(monkeypatch, [])
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda *a, **k: PR_INTO_MAIN)
+    monkeypatch.setattr("bmsdna.devtools.pr_build.lacks_build_policy", lambda *a: True)
+    _no_sleep(monkeypatch)
+
+    with pytest.raises(SystemExit, match="No build policy is configured on target branch 'main'"):
+        pr_build.run(REMOTE, "pat", None, wait=True, source_branch="feature-x")
+
+    monkeypatch.setattr("bmsdna.devtools.pr_info.pr_build.get_builds_for_pr", lambda *a: [])
+    assert pr_info.ado_info(MagicMock(), PR_INTO_MAIN, REMOTE).build == pr_info.BUILD_NONE

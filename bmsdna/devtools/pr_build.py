@@ -166,6 +166,16 @@ def draft_notice(pr: dict) -> str | None:
     return f"{pr_ref} To publish, use command: `bdt pr publish` (but do an automatic code review first)"
 
 
+def no_builds_message(session: requests.Session, remote: AdoRemote, pr: dict, nothing_to: str) -> str:
+    """"No builds found for PR #N -- nothing to <nothing_to>.", plus the likely reason when the PR's target branch has no
+    build policy: then no PR build was ever queued (and `lacks_build_policy` fails open, so this never claims it wrongly)."""
+    target = (pr.get("targetRefName") or "").removeprefix("refs/heads/")
+    message = f"No builds found for PR #{pr['pullRequestId']} -- nothing to {nothing_to}."
+    if target and lacks_build_policy(session, remote, target):
+        message += f" The target branch '{target}' has no build policy, so no build is ever queued for a PR into it."
+    return message
+
+
 def retry_hint() -> str:
     """The command to tell someone to run after a failed build, to retry just its failed
     stage(s)/job(s) instead of queuing a whole new build.
@@ -932,7 +942,7 @@ def retry(
     pr, source_branch = _resolve_pr_and_branch(session, remote, target_branch, source_branch, pr_id)
     builds = get_builds_for_pr(session, remote, source_branch, pr["pullRequestId"])
     if not builds:
-        sys.exit(f"No builds found for PR #{pr['pullRequestId']} -- nothing to retry.")
+        sys.exit(no_builds_message(session, remote, pr, "retry"))
 
     failed = [b for b in latest_per_pipeline(builds) if b.get("status") == "completed" and b.get("result") == "failed"]
     if not failed:
@@ -994,6 +1004,8 @@ def cancel(
     pr_number = pr["pullRequestId"]
     builds = get_builds_for_pr(session, remote, source_branch, pr_number)
     running = [b for b in latest_per_pipeline(builds) if b.get("status") in BUILD_RUNNING_STATUSES]
+    if not builds:
+        sys.exit(no_builds_message(session, remote, pr, "cancel"))
     if not running:
         sys.exit(f"No running build to cancel for PR #{pr_number}.")
 
@@ -1058,7 +1070,7 @@ def requeue(
     pr_number = pr["pullRequestId"]
     builds = get_builds_for_pr(session, remote, source_branch, pr_number)
     if not builds:
-        sys.exit(f"No builds found for PR #{pr_number} -- nothing to requeue.")
+        sys.exit(no_builds_message(session, remote, pr, "requeue"))
 
     latest = latest_per_pipeline(builds)
     todo = [b for b in latest if b.get("status") == "completed" and (include_succeeded or b.get("result") != "succeeded")]
