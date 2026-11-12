@@ -5,17 +5,18 @@ INSERT INTO pricing VALUES __PRICE_ROWS__;
 CREATE OR REPLACE TABLE phases (phase VARCHAR, ord INTEGER, label VARCHAR);
 INSERT INTO phases VALUES
     ('outside',       0,  'Outside workflow'),
-    ('setup',         1,  'Setup & investigation (until draft PR)'),
-    ('plan',          2,  'Plan'),
-    ('plan_review',   3,  'Plan review'),
-    ('implement',     4,  'Implement'),
-    ('test',          5,  'Test / lint'),
-    ('screenshots',   6,  'Screenshots'),
-    ('design_review', 7,  'Design review'),
-    ('review_quick',  8,  'Review (quick, mid-work)'),
-    ('review_full',   9,  'Review (full, pre-publish)'),
-    ('publish_ci',    10, 'Publish, CI & follow-ups'),
-    ('cleanup',       11, 'Cleanup');
+    ('pre_workflow',  1,  'Before dev-workflow was loaded'),
+    ('setup',         2,  'Setup & investigation (until draft PR)'),
+    ('plan',          3,  'Plan'),
+    ('plan_review',   4,  'Plan review'),
+    ('implement',     5,  'Implement'),
+    ('test',          6,  'Test / lint'),
+    ('screenshots',   7,  'Screenshots'),
+    ('design_review', 8,  'Design review'),
+    ('review_quick',  9,  'Review (quick, mid-work)'),
+    ('review_full',   10, 'Review (full, pre-publish)'),
+    ('publish_ci',    11, 'Publish, CI & follow-ups'),
+    ('cleanup',       12, 'Cleanup');
 
 -- Estimated image tokens sitting in each thread's context when a message is sent.
 CREATE OR REPLACE TABLE ctx_img AS

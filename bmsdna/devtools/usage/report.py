@@ -183,6 +183,8 @@ def findings(con) -> list[str]:
         f"Screenshots as a step take <b>{pct('screenshots'):.0f}%</b>, but the {img_stats['n']} images themselves (≈{img_stats['tok']:,} tokens in total) "
         f"only cause an estimated <b>{100 * (img['c'] or 0) / (img['t'] or 1):.1f}%</b> of cost by being re-read from context; the step is expensive because of the browser loop around them, not the pixels.",
         f"Subagents account for <b>{s['pct_cost_subagents']:.0f}%</b> of the workflow cost.",
+        f"<b>{s['pct_cost_before_workflow']:.0f}%</b> (${s['cost_before_workflow']:,.0f}) was spent before dev-workflow was loaded, "
+        f"<b>${s['cost_after_workflow']:,.0f}</b> after.",
     ]
     ctx = max(steps, key=lambda r: r["avg_context_tok"])
     out.append(f"Every turn re-reads the whole context (average {ctx['avg_context_tok'] / 1000:.0f}K tokens in the heaviest step), so a step's cost is mostly its <i>number of turns</i> times that context.")
@@ -271,7 +273,7 @@ __UNPRICED__
 <div class="scroll">__TABLE__</div>
 
 <h2>How to read this</h2>
-<p class="note">Each assistant message is assigned to a workflow step by markers in the tool calls (Skill calls such as bms-code-review or design-review, <code>bdt</code> commands, edits, pytest, screenshot tooling, image reads). A step is sticky until the next marker, except test runs, which only count for the turn that runs them. Subagents inherit the step of the message that spawned them, unless they run the whole workflow themselves. Rules live in <code>sql/03_markers.sql</code> and <code>pipeline.py</code>. Attribution of turns that sit between two markers is a judgement call, treat differences of a few percent as noise. "Publish, CI &amp; follow-ups" includes everything after the PR goes up (git, <code>az repos</code>, merges, fixes that are not edits).</p>
+<p class="note">Each assistant message is assigned to a workflow step by markers in the tool calls (Skill calls such as bms-code-review or design-review, <code>bdt</code> commands, edits, pytest, screenshot tooling, image reads). A step is sticky until the next marker, except test runs, which only count for the turn that runs them. Turns of a session before it loaded dev-workflow (or ran its first workflow command) are their own step, "Before dev-workflow was loaded", so the part of a session that never went through the workflow is not mixed into its steps. Subagents inherit the step of the message that spawned them, unless they run the whole workflow themselves. Rules live in <code>sql/03_markers.sql</code> and <code>pipeline.py</code>. Attribution of turns that sit between two markers is a judgement call, treat differences of a few percent as noise. "Publish, CI &amp; follow-ups" includes everything after the PR goes up (git, <code>az repos</code>, merges, fixes that are not edits).</p>
 </main>
 <script>
 const SERIES = __SERIES__, INK = __INK__;
@@ -311,6 +313,7 @@ def write_report(con: duckdb.DuckDBPyConnection, out_dir: Path) -> Path:
         (f"{s['tokens'] / 1e9:.2f} B", "tokens processed"),
         (f"{s['fresh_tokens'] / 1e6:.0f} M", "fresh tokens (no cache reads)"),
         (f"{s['pct_cost_subagents']:.0f}%", "of cost in subagents"),
+        (f"{s['pct_cost_before_workflow']:.0f}%", "of cost before dev-workflow was loaded"),
         *((f"{r['pct_tokens']:.1f}%", f"of tokens in {r['provider']}") for r in providers if r["provider"] != "claude"),
     ]
     figs = {
