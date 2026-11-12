@@ -35,7 +35,7 @@ from . import find_injection as find_injection_mod
 from . import lint as lint_mod
 from . import logs as logs_mod
 from . import translate as translate_mod
-from . import pr_build, pr_info as pr_info_mod, pr_issue_link, pr_merge_defaults, pr_ref, pr_labels, pull as pull_mod, worktree as worktree_mod
+from . import pr_build, pr_cancel, pr_info as pr_info_mod, pr_issue_link, pr_merge_defaults, pr_ref, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import AdoAuthError, ado_session, auth_header
 from .bdt_config import find_pyproject, load_bdt_table
 from .cli_tools import CLI_TIMEOUT_SECS, EXIT_WAIT_TIMEOUT, detect_agent_session, require_gh
@@ -184,7 +184,7 @@ def _current_pr_info(pr_id: int | None, target_branch: str | None, pat: str | No
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
-        return pr_info_mod.github_info(gh_pr.get_pr(gh, gh_pr.resolve_pr_id(gh, pr_id, target_branch), fields=gh_pr.PR_INFO_FIELDS), remote)
+        return pr_info_mod.github_info(gh_pr.get_pr(gh, gh_pr.resolve_pr_id(gh, pr_id, target_branch), fields=gh_pr.PR_INFO_FIELDS), remote, gh)
     session, pr = _resolve_ado_pr(pat, remote, target_branch, pr_id=pr_id)
     return pr_info_mod.ado_info(session, pr, remote)
 
@@ -195,7 +195,7 @@ def _open_prs_info(target_branch: str | None, pat: str | None) -> list[pr_info_m
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
         return [
-            pr_info_mod.github_info(gh_pr.get_pr(gh, number, fields=gh_pr.PR_INFO_FIELDS), remote)
+            pr_info_mod.github_info(gh_pr.get_pr(gh, number, fields=gh_pr.PR_INFO_FIELDS), remote, gh)
             for number in gh_pr.open_pr_numbers(gh, target_branch)
         ]
     session = ado_session(pat)
@@ -225,7 +225,7 @@ def _ref_pr_info(ref: pr_ref.PrRef, pat: str | None, clients: dict) -> pr_info_m
             clients["gh"] = require_gh()
         base = clients["gh"]
         gh = base if ref.remote is None else base.for_repo(remote.owner, remote.repo)
-        return pr_info_mod.github_info(gh_pr.get_pr(gh, ref.pr_id, fields=gh_pr.PR_INFO_FIELDS), remote)
+        return pr_info_mod.github_info(gh_pr.get_pr(gh, ref.pr_id, fields=gh_pr.PR_INFO_FIELDS), remote, gh)
     if "session" not in clients:
         clients["session"] = ado_session(pat)
     session = clients["session"]
@@ -595,7 +595,10 @@ def pr_status(
 def _info_text(info: pr_info_mod.PrInfo, with_repo: bool = False) -> str:
     flags = ", ".join([info.state, *(["draft"] if info.draft else []), f"build: {info.build}"])
     name = f"PR {info.repo}#{info.number}" if with_repo and info.repo else f"PR #{info.number}"
-    return "\n".join([f"{name}: {info.title} ({flags})", info.url, *(f"Issue #{i.number}: {i.url}" for i in info.issues)])
+    lines = [f"{name}: {info.title} ({flags})", info.url]
+    if info.build == pr_info_mod.BUILD_CANCELLED:
+        lines.append(pr_cancel.cancelled_notice(info.cancel_reason))
+    return "\n".join([*lines, *(f"Issue #{i.number}: {i.url}" for i in info.issues)])
 
 
 def _echo_infos(infos: list[pr_info_mod.PrInfo], as_json: bool, with_repo: bool) -> None:
@@ -694,6 +697,59 @@ def pr_retry(
         gh_pr.retry(gh, pr_id=gh_pr.resolve_pr_id(gh, pr_id, target_branch))
         return
     pr_build.retry(remote, pat, target_branch, pr_id=pr_id)
+
+
+@pr_app.command("cancel-build")
+def pr_cancel_build(
+    reason: str = typer.Option(
+        ...,
+        "--reason",
+        help=f"Why the build is cancelled. Posted on the PR as a '{pr_cancel.PREFIX} <reason>' comment, which `bdt pr info` / `bdt pr status` show",
+    ),
+    target_branch: str | None = typer.Option(None, "--target-branch", help=_LOOKUP_TARGET_HELP),
+    pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
+    ),
+) -> None:
+    """Cancel the running build(s) of the PR opened from the current branch, or --pr-id directly
+    (Azure DevOps or GitHub, auto-detected), and record --reason on the PR. Queue it again with
+    `bdt pr requeue-build`.
+    """
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh = require_gh()
+        gh_pr.cancel(gh, reason, pr_id=gh_pr.resolve_pr_id(gh, pr_id, target_branch))
+        return
+    pr_build.cancel(remote, pat, target_branch, reason, pr_id=pr_id)
+
+
+@pr_app.command("requeue-build")
+def pr_requeue_build(
+    include_succeeded: bool = typer.Option(False, "--all", help="Also requeue pipelines/workflows whose latest build succeeded (default: only cancelled or failed ones)"),
+    target_branch: str | None = typer.Option(None, "--target-branch", help=_LOOKUP_TARGET_HELP),
+    pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
+    ),
+) -> None:
+    """Queue a new build for the PR opened from the current branch, or --pr-id directly (Azure DevOps or
+    GitHub, auto-detected): every pipeline whose latest build was cancelled or failed, run again from the start.
+    Unlike `bdt pr retry`, which re-runs only the failed stage(s)/job(s) of a failed build in place (and can't do
+    anything with a cancelled one).
+    """
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh = require_gh()
+        gh_pr.requeue(gh, include_succeeded, pr_id=gh_pr.resolve_pr_id(gh, pr_id, target_branch))
+        return
+    pr_build.requeue(remote, pat, target_branch, include_succeeded, pr_id=pr_id)
 
 
 @pr_app.command("watch-deploy")

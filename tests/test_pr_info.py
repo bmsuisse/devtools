@@ -64,6 +64,7 @@ def test_github_info_links_pr_and_closed_issue() -> None:
         "draft": True,
         "build": "pending",
         "issues": [{"number": 68, "url": "https://github.com/owner/repo/issues/68"}],
+        "cancel_reason": None,
         "repo": "owner/repo",
     }
 
@@ -107,7 +108,7 @@ def _build(status: str, result: str | None = None, pipeline: int = 1) -> dict:
     "builds,approval,expected",
     [
         ([], False, pr_info.BUILD_NONE),
-        ([_build("completed", "succeeded"), _build("completed", "canceled", 2)], False, pr_info.BUILD_PASSING),
+        ([_build("completed", "succeeded"), _build("completed", "canceled", 2)], False, pr_info.BUILD_CANCELLED),
         ([_build("completed", "succeeded"), _build("inProgress", None, 2)], False, pr_info.BUILD_PENDING),
         ([_build("notStarted")], False, pr_info.BUILD_PENDING),
         ([_build("inProgress")], True, pr_info.BUILD_WAITING),
@@ -619,10 +620,10 @@ def test_target_options_default_to_dev_except_lookups_which_do_not_filter() -> N
 
     found = dict(_target_options(typer.main.get_command(app)))
 
-    assert {"pr create", "pr status", "pr info", "pr retry", "pr publish", "pr update", "pr comment", "pr watch-deploy", "issue take"} <= set(found)
+    assert {"pr create", "pr status", "pr info", "pr retry", "pr cancel-build", "pr requeue-build", "pr publish", "pr update", "pr comment", "pr watch-deploy", "issue take"} <= set(found)
     # these only look an existing PR up (by the current branch): no target given means no filter on it, so a
     # PR into `main` is found without `--target main`. Only commands that create a PR or watch a branch need a target.
-    lookups = {"pr status", "pr info", "pr retry", "pr publish", "pr update", "pr comment", "issue take", "commit"}
+    lookups = {"pr status", "pr info", "pr retry", "pr cancel-build", "pr requeue-build", "pr publish", "pr update", "pr comment", "issue take", "commit"}
     assert {k for k, v in found.items() if v is None} == lookups
     assert {k: v for k, v in found.items() if v is not None} == {"pr create": "dev", "pr watch-deploy": "dev"}
 

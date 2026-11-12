@@ -15,6 +15,7 @@ from .ado_auth import AdoAuthError, ado_session
 from .cli_tools import EXIT_NEEDS_APPROVAL, HTTP_TIMEOUT_SECS, PollHeartbeat, WaitDeadline, detect_agent_session, ensure_agent_session_note, exit_wait_timeout, is_claude_code, status_rerun_cmd
 from .gitrepo import AdoRemote, current_branch, head_commit_subject
 from .pr_create_args import PrCreateOptions
+from . import pr_cancel
 from .pr_choice import PrCandidate, choose_pr
 from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
@@ -655,6 +656,35 @@ def add_comment(session: requests.Session, remote: AdoRemote, pr_id: int, conten
     r.raise_for_status()
 
 
+def list_comment_texts(session: requests.Session, remote: AdoRemote, pr_id: int) -> list[str]:
+    """The text of every user comment on the PR (system messages such as vote changes left out), oldest first."""
+    r = session.get(
+        f"{_base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}/pullRequests/{pr_id}/threads",
+        params={"api-version": "7.1"},
+        timeout=HTTP_TIMEOUT_SECS,
+    )
+    r.raise_for_status()
+    comments = [
+        c for thread in r.json().get("value", []) for c in thread.get("comments", []) if c.get("commentType") != "system" and not c.get("isDeleted")
+    ]
+    comments.sort(key=lambda c: c.get("publishedDate") or "")
+    return [c.get("content") or "" for c in comments]
+
+
+def cancel_reason(session: requests.Session, remote: AdoRemote, pr_id: int, builds: list) -> str | None:
+    """Why the cancelled build(s) among `builds` were cancelled, from the PR's newest `CANCELLED BUILD:` comment
+    about them; None if there is none (cancelled in the web UI, say) or the comments can't be read."""
+    cancelled = {b["id"] for b in builds if b.get("result") == "canceled"}
+    if not cancelled:
+        return None
+    try:
+        return pr_cancel.latest_reason(list_comment_texts(session, remote, pr_id), cancelled)
+    except AdoAuthError:
+        raise
+    except requests.RequestException:
+        return None  # the reason is a nicety on top of the build state
+
+
 def comment_with_screenshots(
     session: requests.Session,
     remote: AdoRemote,
@@ -884,6 +914,125 @@ def retry(
     print("\nRun `bdt pr status --wait` to watch the retry.")
 
 
+BUILD_RUNNING_STATUSES = ("inProgress", "notStarted", "postponed")
+
+
+def cancel_running_build(session: requests.Session, remote: AdoRemote, build_id: int) -> None:
+    """Ask Azure DevOps to cancel a build (`status: cancelling` -- https://learn.microsoft.com/rest/api/azure/devops/build/builds/update-build);
+    it stops what is running at its next opportunity. Needs the Build (Read & execute) PAT scope."""
+    r = session.patch(
+        f"{_base_url(remote)}/_apis/build/builds/{build_id}",
+        params={"api-version": "7.1"},
+        json={"status": "cancelling"},
+        timeout=HTTP_TIMEOUT_SECS,
+    )
+    r.raise_for_status()
+
+
+def cancel(
+    remote: AdoRemote, pat: str | None, target_branch: str | None, reason: str, source_branch: str | None = None, pr_id: int | None = None
+) -> None:
+    """Cancel the running build(s) of the PR opened from the current branch (or `pr_id`) -- one per pipeline, only
+    the latest -- then leave `reason` on the PR as a `CANCELLED BUILD:` comment, which `pr info` / `pr status` show."""
+    if not reason.strip():
+        sys.exit("A reason is required: say why the build is cancelled (--reason).")
+    session = ado_session(pat)
+    pr, source_branch = _resolve_pr_and_branch(session, remote, target_branch, source_branch, pr_id)
+    pr_number = pr["pullRequestId"]
+    builds = get_builds_for_pr(session, remote, source_branch, pr_number)
+    running = [b for b in latest_per_pipeline(builds) if b.get("status") in BUILD_RUNNING_STATUSES]
+    if not running:
+        sys.exit(f"No running build to cancel for PR #{pr_number}.")
+
+    cancelled: list[dict] = []
+    errors: list[str] = []
+    for b in running:
+        name = b.get("definition", {}).get("name", "?")
+        try:
+            cancel_running_build(session, remote, b["id"])
+        except AdoAuthError:
+            raise
+        except requests.RequestException as e:
+            errors.append(f"build #{b['id']} ({name}): {e}")
+            continue
+        cancelled.append(b)
+        print(f"Cancelling build #{b['id']} ({name})")
+
+    if cancelled:
+        body = pr_cancel.comment_body(
+            reason, ((b.get("definition", {}).get("name", "?"), b["id"], build_web_url(remote, b["id"])) for b in cancelled)
+        )
+        try:
+            add_comment(session, remote, pr_number, ensure_agent_session_note(body) or body)
+        except AdoAuthError:
+            raise
+        except requests.RequestException as e:
+            errors.append(f"the builds are cancelled, but the '{pr_cancel.PREFIX}' comment could not be posted: {e}")
+        else:
+            print(f"Added a '{pr_cancel.PREFIX}' comment to PR #{pr_number}")
+    if errors:
+        sys.exit("Failed to cancel: " + "; ".join(errors))
+
+    print("\nRun `bdt pr requeue-build` to run it again.")
+
+
+def queue_build(session: requests.Session, remote: AdoRemote, build: dict) -> dict:
+    """Queue a new build of `build`'s pipeline on the same ref and with the same parameters (`Builds - Queue`).
+    A PR's `refs/pull/<id>/merge` ref makes it the PR's own build again, on the PR's current merge commit."""
+    body: dict = {"definition": {"id": build["definition"]["id"]}, "sourceBranch": build["sourceBranch"]}
+    for key in ("parameters", "templateParameters"):
+        if build.get(key):
+            body[key] = build[key]
+    r = session.post(f"{_base_url(remote)}/_apis/build/builds", params={"api-version": "7.1"}, json=body, timeout=HTTP_TIMEOUT_SECS)
+    r.raise_for_status()
+    return r.json()
+
+
+def requeue(
+    remote: AdoRemote,
+    pat: str | None,
+    target_branch: str | None,
+    include_succeeded: bool = False,
+    source_branch: str | None = None,
+    pr_id: int | None = None,
+) -> None:
+    """Queue a whole new build for each pipeline of the PR whose latest build was cancelled or failed (or any
+    finished one with `include_succeeded`) -- as opposed to `retry`, which re-runs only the failed stage(s) of a
+    failed build in place and cannot do anything with a cancelled one."""
+    session = ado_session(pat)
+    pr, source_branch = _resolve_pr_and_branch(session, remote, target_branch, source_branch, pr_id)
+    pr_number = pr["pullRequestId"]
+    builds = get_builds_for_pr(session, remote, source_branch, pr_number)
+    if not builds:
+        sys.exit(f"No builds found for PR #{pr_number} -- nothing to requeue.")
+
+    latest = latest_per_pipeline(builds)
+    todo = [b for b in latest if b.get("status") == "completed" and (include_succeeded or b.get("result") != "succeeded")]
+    if not todo:
+        running = [b for b in latest if b.get("status") != "completed"]
+        sys.exit(
+            f"The build(s) of PR #{pr_number} are still running -- cancel them first (`bdt pr cancel-build --reason ...`)."
+            if running
+            else f"All builds of PR #{pr_number} succeeded -- nothing to requeue (--all queues them anyway)."
+        )
+
+    errors: list[str] = []
+    for b in todo:
+        name = b.get("definition", {}).get("name", "?")
+        try:
+            new = queue_build(session, remote, b)
+        except AdoAuthError:
+            raise
+        except requests.RequestException as e:
+            errors.append(f"{name}: {e}")
+            continue
+        print(f"Queued build #{new['id']} ({name}): {build_web_url(remote, new['id'])}")
+    if errors:
+        sys.exit("Failed to requeue: " + "; ".join(errors))
+
+    print("\nRun `bdt pr status --wait` to watch it.")
+
+
 def print_build(session: requests.Session, remote: AdoRemote, build: dict) -> None:
     build_id = build["id"]
     status = build.get("status", "unknown")
@@ -1050,8 +1199,14 @@ def run(
                 if not all_done and not wait:
                     print("\nTip: Use --wait to poll until all pipelines are completed.")
 
+                cancelled = any(b.get("result") == "canceled" for b in pipeline_builds)
+                if cancelled:
+                    print(f"\n{pr_cancel.cancelled_notice(cancel_reason(session, remote, pr_number, pipeline_builds))}")
                 if any(b.get("result") == "failed" for b in pipeline_builds):
                     print(f"\n{retry_hint()}")
+                    sys.exit(1)
+                if cancelled:
+                    print(f"\n{pr_cancel.REQUEUE_HINT}")
                     sys.exit(1)
                 # Only worth suggesting `pr watch-deploy` once this PR's own pipeline(s) have
                 # actually finished (not just because the caller ran without --wait) --

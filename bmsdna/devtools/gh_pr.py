@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from . import pr_issue_link
+from . import pr_cancel, pr_issue_link
 from .cli_tools import (
     CLI_TIMEOUT_SECS,
     EXIT_NEEDS_APPROVAL,
@@ -302,16 +302,16 @@ def retry_hint() -> str:
     return "Hint: to retry just the failed job(s) instead of a full rerun, run: `bdt pr retry`"
 
 
-def failed_run_ids(checks: list[dict]) -> list[int]:
-    """Distinct GitHub Actions run IDs backing a failing check in `checks`, in first-seen
-    order. Only `CheckRun` entries (GitHub Actions) carry a `detailsUrl` pointing at a
+def check_runs(checks: list[dict], buckets: set[str]) -> list[tuple[int, str]]:
+    """(run id, label) of the distinct GitHub Actions runs backing a check whose bucket is in `buckets`, in
+    first-seen order. Only `CheckRun` entries (GitHub Actions) carry a `detailsUrl` pointing at a
     run; legacy `StatusContext` entries (e.g. an external CI reporting a commit status)
-    have nothing a rerun can act on and are silently skipped.
+    have nothing a rerun or cancel can act on and are silently skipped.
     """
-    ids: list[int] = []
+    runs: list[tuple[int, str]] = []
     seen: set[int] = set()
     for check in checks:
-        if check_bucket(check) != "fail":
+        if check_bucket(check) not in buckets:
             continue
         match = _RUN_ID_RE.search(check.get("detailsUrl") or "")
         if not match:
@@ -319,8 +319,13 @@ def failed_run_ids(checks: list[dict]) -> list[int]:
         run_id = int(match.group(1))
         if run_id not in seen:
             seen.add(run_id)
-            ids.append(run_id)
-    return ids
+            runs.append((run_id, check_label(check)))
+    return runs
+
+
+def failed_run_ids(checks: list[dict]) -> list[int]:
+    """Distinct GitHub Actions run IDs backing a failing check in `checks`, in first-seen order."""
+    return [run_id for run_id, _ in check_runs(checks, {"fail"})]
 
 
 def retry(gh: GitHubClient, pr_id: int | None = None) -> None:
@@ -349,6 +354,84 @@ def retry(gh: GitHubClient, pr_id: int | None = None) -> None:
         sys.exit("Failed to retry: " + "; ".join(errors))
 
     print("\nRun `bdt pr status --wait` to watch the retry.")
+
+
+def cancel_reason(gh: GitHubClient, pr_number: int, checks: list[dict]) -> str | None:
+    """Why the cancelled run(s) behind `checks` were cancelled, from the PR's newest `CANCELLED BUILD:` comment about
+    them; None if no such comment exists -- a run cancelled any other way (superseded by a newer run, from the web UI)
+    is not reported as a cancelled build -- or the comments can't be read."""
+    cancelled = {run_id for run_id, _ in check_runs(checks, {"cancel"})}
+    if not cancelled:
+        return None
+    try:
+        comments = gh.paginate(f"{gh.repo_path}/issues/{pr_number}/comments")
+    except SystemExit:
+        return None
+    return pr_cancel.latest_reason([c.get("body") or "" for c in comments], cancelled)
+
+
+def cancel(gh: GitHubClient, reason: str, pr_id: int | None = None) -> None:
+    """Cancel the still-running workflow run(s) of the current branch's PR (or `pr_id`'s) via
+    `POST .../cancel`, then leave `reason` on the PR as a `CANCELLED BUILD:` comment, which `pr info` / `pr status` show."""
+    if not reason.strip():
+        sys.exit("A reason is required: say why the build is cancelled (--reason).")
+    pr = get_pr(gh, pr_id)
+    runs = check_runs(pr.get("statusCheckRollup") or [], {"pending", "waiting_approval"})
+    if not runs:
+        sys.exit(f"No running workflow run to cancel for PR #{pr['number']}.")
+
+    cancelled: list[tuple[str, int, str]] = []
+    errors: list[str] = []
+    for run_id, label in runs:
+        try:
+            gh.post(f"{gh.repo_path}/actions/runs/{run_id}/cancel")
+        except SystemExit as e:
+            errors.append(f"run {run_id}: {e.code or 'failed'}")
+            continue
+        cancelled.append((label, run_id, f"https://github.com/{gh.owner}/{gh.repo}/actions/runs/{run_id}"))
+        print(f"Cancelling run {run_id} ({label})")
+
+    if cancelled:
+        body = pr_cancel.comment_body(reason, cancelled)
+        try:
+            gh.post(f"{gh.repo_path}/issues/{pr['number']}/comments", {"body": ensure_agent_session_note(body) or body})
+        except SystemExit as e:
+            errors.append(f"the runs are cancelled, but the '{pr_cancel.PREFIX}' comment could not be posted: {e.code or 'failed'}")
+        else:
+            print(f"Added a '{pr_cancel.PREFIX}' comment to PR #{pr['number']}")
+    if errors:
+        sys.exit("Failed to cancel: " + "; ".join(errors))
+
+    print("\nRun `bdt pr requeue-build` to run it again.")
+
+
+def requeue(gh: GitHubClient, include_succeeded: bool = False, pr_id: int | None = None) -> None:
+    """Rerun, in full (`POST .../rerun`), the workflow run(s) of the current branch's PR (or `pr_id`'s) that were
+    cancelled or failed -- or any finished one with `include_succeeded` -- as opposed to `retry`, which reruns only
+    the failed jobs of a failed run and can do nothing with a cancelled one."""
+    pr = get_pr(gh, pr_id)
+    checks = pr.get("statusCheckRollup") or []
+    runs = check_runs(checks, {"fail", "cancel"} | ({"pass", "skipping"} if include_succeeded else set()))
+    if not runs:
+        running = check_runs(checks, {"pending", "waiting_approval"})
+        sys.exit(
+            f"The workflow run(s) of PR #{pr['number']} are still running -- cancel them first (`bdt pr cancel-build --reason ...`)."
+            if running
+            else f"Nothing to requeue for PR #{pr['number']}: no cancelled or failed run (--all reruns the others too)."
+        )
+
+    errors: list[str] = []
+    for run_id, label in runs:
+        try:
+            gh.post(f"{gh.repo_path}/actions/runs/{run_id}/rerun")
+        except SystemExit as e:
+            errors.append(f"run {run_id}: {e.code or 'failed'}")
+            continue
+        print(f"Requeued run {run_id} ({label})")
+    if errors:
+        sys.exit("Failed to requeue: " + "; ".join(errors))
+
+    print("\nRun `bdt pr status --wait` to watch it.")
 
 
 def get_workflow_runs_for_branch(gh: GitHubClient, branch: str, limit: int = 5) -> list[dict]:
@@ -499,8 +582,14 @@ def run(gh: GitHubClient, wait: bool, pr_id: int | None = None, timeout: float =
         for c in checks:
             print_check(c)
 
+        cancelled = cancel_reason(gh, pr["number"], checks) if "cancel" in buckets else None
+        if cancelled is not None:
+            print(f"\n{pr_cancel.cancelled_notice(cancelled)}")
         if "fail" in buckets:
             print(f"\n{retry_hint()}")
+            sys.exit(1)
+        if cancelled is not None:
+            print(f"\n{pr_cancel.REQUEUE_HINT}")
             sys.exit(1)
         # Only worth suggesting `pr watch-deploy` once this PR's own checks are actually
         # settled (not still pending, and not sitting on an unresolved approval prompt,

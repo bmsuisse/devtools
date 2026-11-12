@@ -14,6 +14,7 @@ import requests
 
 from .ado_auth import AdoAuthError
 from . import ado_issue, gh_pr, pr_build, pr_issue_link
+from .github_api import GitHubClient
 from .gitrepo import AdoRemote, GitHubRemote
 
 # `build` values: aggregate of every check/pipeline on the PR. "unknown" means the state couldn't
@@ -21,6 +22,7 @@ from .gitrepo import AdoRemote, GitHubRemote
 BUILD_PASSING = "passing"
 BUILD_FAILING = "failing"
 BUILD_PENDING = "pending"
+BUILD_CANCELLED = "cancelled"  # someone cancelled it (`bdt pr cancel-build` says why, see `PrInfo.cancel_reason`)
 BUILD_WAITING = "waiting"  # paused on a manual approval; nothing resolves it without a human
 BUILD_NONE = "none"
 BUILD_UNKNOWN = "unknown"
@@ -41,6 +43,7 @@ class PrInfo:
     draft: bool
     build: str
     issues: list[IssueRef] = field(default_factory=list)
+    cancel_reason: str | None = None  # why the build was cancelled, when `build` is "cancelled" and a `CANCELLED BUILD:` comment says
     repo: str = ""  # "owner/repo" (GitHub) or "org/project/repo" (Azure DevOps): which repo the PR is in
 
     def to_json_dict(self) -> dict:
@@ -53,11 +56,12 @@ def clean_text(text: str) -> str:
     return "".join(c for c in text if unicodedata.category(c)[0] != "C")
 
 
-def build_state(checks: list[dict]) -> str:
+def build_state(checks: list[dict], cancelled: bool = False) -> str:
     """Aggregate a GitHub `statusCheckRollup` into one `BUILD_*` value; worst state wins
-    (failing > waiting > pending > passing; none if nothing ran). Mirrors `gh_pr.run` (`bdt pr status`): only a "fail"
+    (failing > cancelled > waiting > pending > passing; none if nothing ran). Mirrors `gh_pr.run` (`bdt pr status`): only a "fail"
     bucket is failing, so skipped and cancelled checks (e.g. a run superseded by a newer push)
-    don't count against the PR -- the two commands must never disagree about the same PR.
+    don't count against the PR -- the two commands must never disagree about the same PR. A cancelled check
+    is only a cancelled build when `cancelled` says so, i.e. a `CANCELLED BUILD:` comment (`gh_pr.cancel_reason`) confirms it.
     """
     buckets = {gh_pr.check_bucket(c) for c in checks}
     if buckets <= {"skipping"}:
@@ -65,6 +69,8 @@ def build_state(checks: list[dict]) -> str:
         return BUILD_NONE
     if "fail" in buckets:
         return BUILD_FAILING
+    if cancelled:
+        return BUILD_CANCELLED
     if "waiting_approval" in buckets:
         return BUILD_WAITING
     if "pending" in buckets:
@@ -80,8 +86,9 @@ def _is_this_repo(repo: dict, remote: GitHubRemote) -> bool:
     )
 
 
-def github_info(pr: dict, remote: GitHubRemote) -> PrInfo:
-    """`pr` is `gh pr view --json` output with `gh_pr.PR_INFO_FIELDS`. Only issues of this repo are listed."""
+def github_info(pr: dict, remote: GitHubRemote, gh: GitHubClient | None = None) -> PrInfo:
+    """`pr` is `gh pr view --json` output with `gh_pr.PR_INFO_FIELDS`. Only issues of this repo are listed.
+    With `gh`, a cancelled check is looked up in the PR's `CANCELLED BUILD:` comments (one more request, only then)."""
     # GitHub's own answer to "which issues does merging this close" (closing keywords in the body,
     # or linked in the Development sidebar) -- a mere "related: <issue url>" mention isn't one
     issues = [
@@ -89,14 +96,17 @@ def github_info(pr: dict, remote: GitHubRemote) -> PrInfo:
         for i in pr.get("closingIssuesReferences") or []
         if _is_this_repo(i.get("repository") or {}, remote)
     ]
+    checks = pr.get("statusCheckRollup") or []
+    reason = gh_pr.cancel_reason(gh, pr["number"], checks) if gh is not None else None
     return PrInfo(
         number=pr["number"],
         title=clean_text(pr.get("title", "")),
         url=pr["url"],
         state=str(pr.get("state", "OPEN")).lower(),
         draft=bool(pr.get("isDraft")),
-        build=build_state(pr.get("statusCheckRollup") or []),
+        build=build_state(checks, cancelled=reason is not None),
         issues=issues,
+        cancel_reason=reason,
         repo=f"{remote.owner}/{remote.repo}",
     )
 
@@ -107,18 +117,21 @@ _ADO_STATE = {"active": "open", "completed": "merged", "abandoned": "closed"}
 def ado_build_state(builds: list[dict], has_pending_approval: bool) -> str:
     """Aggregate the latest build of each pipeline (`pr_build.latest_per_pipeline`) into one `BUILD_*`
     value, the way `pr_build.run` (`bdt pr status`) judges them: any failed result is failing, else any
-    unfinished build is pending -- or waiting, if a stage is blocked on a manual approval.
+    cancelled one is cancelled, else any unfinished build is pending -- or waiting, if a stage is blocked on a manual approval.
     """
     if not builds:
         return BUILD_NONE
     if any(b.get("result") == "failed" for b in builds):
         return BUILD_FAILING
+    if any(b.get("result") == "canceled" for b in builds):
+        return BUILD_CANCELLED
     if any(b.get("status") != "completed" for b in builds):
         return BUILD_WAITING if has_pending_approval else BUILD_PENDING
     return BUILD_PASSING
 
 
-def _ado_build(session: requests.Session, remote: AdoRemote, pr: dict) -> str:
+def _ado_build(session: requests.Session, remote: AdoRemote, pr: dict) -> tuple[str, str | None]:
+    """(`BUILD_*` state, why it was cancelled if it was and a `CANCELLED BUILD:` comment says)."""
     pr_id = pr["pullRequestId"]
     source_branch = pr["sourceRefName"].removeprefix("refs/heads/")
     try:
@@ -126,11 +139,13 @@ def _ado_build(session: requests.Session, remote: AdoRemote, pr: dict) -> str:
         # a timeline lookup per running build -- only worth it when nothing has failed yet
         failed = any(b.get("result") == "failed" for b in builds)
         approval = not failed and any(b.get("status") != "completed" for b in builds) and bool(pr_build.find_pending_approvals(session, remote, builds))
+        state = ado_build_state(builds, approval)
+        reason = pr_build.cancel_reason(session, remote, pr_id, builds) if state == BUILD_CANCELLED else None
     except AdoAuthError:
         raise  # a PAT without the Build scope is not "unknown": say so
     except requests.RequestException:
-        return BUILD_UNKNOWN
-    return ado_build_state(builds, approval)
+        return BUILD_UNKNOWN, None
+    return state, reason
 
 
 def ado_info(session: requests.Session, pr: dict, remote: AdoRemote) -> PrInfo:
@@ -140,13 +155,15 @@ def ado_info(session: requests.Session, pr: dict, remote: AdoRemote) -> PrInfo:
         for n in pr_issue_link.find_issue_refs_in_body(pr.get("description"), remote)
     ]
     pr_id = pr["pullRequestId"]
+    build, reason = _ado_build(session, remote, pr)
     return PrInfo(
         number=pr_id,
         title=clean_text(pr.get("title", "")),
         url=pr_build.pr_web_url(remote, pr_id),
         state=_ADO_STATE.get(str(pr.get("status", "active")).lower(), "open"),
         draft=bool(pr.get("isDraft")),
-        build=_ado_build(session, remote, pr),
+        build=build,
         issues=issues,
+        cancel_reason=reason,
         repo=f"{remote.org}/{remote.project}/{remote.repo}",
     )

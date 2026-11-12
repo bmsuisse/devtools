@@ -104,7 +104,7 @@ def auth_failure_message(response: requests.Response, pat_used: bool) -> str:
         lines.append(f"Azure DevOps says: {says}")
     if pat_used:
         lines.append(f"Credentials: the PAT from {PAT_SOURCES}.")
-        causes = ["it lacks the scope this call needs" + (f" ({scope})" if scope else "")]
+        causes: list[str] = ["it lacks the scope this call needs" + (f" ({scope})" if scope else "")]
         if response.status_code != 403:
             causes += ["it has expired or was revoked", "it was created for a different organization" + (f" than '{org}'" if org else "")]
         else:
@@ -143,7 +143,7 @@ def _check_auth_hook(pat_used: bool):
                 raise error
 
             # replaces the generic "401 Client Error: Unauthorized for url" `raise_for_status` would raise
-            response.raise_for_status = raise_for_status  # type: ignore[method-assign]
+            setattr(response, "raise_for_status", raise_for_status)
         return response
 
     return hook

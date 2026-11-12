@@ -50,7 +50,7 @@ Where your shell tool has a time limit shorter than CI (it kills the command and
 `bdt pr status --wait --timeout 540` (seconds, below the limit): after that long it prints the current state and
 exits 4 — just run the same command again to keep waiting. Exit 3 = a stage needs a human's approval.
 
-`pr status`, `info`, `retry`, `publish`, `update`, `comment` (and `issue take`
+`pr status`, `info`, `retry`, `cancel-build`, `requeue-build`, `publish`, `update`, `comment` (and `issue take`
 without a number) find the PR opened from the current branch into **any**
 target; `--target`/`--target-branch` only narrows it. With several open PRs
 for the branch (e.g. into `dev` and `main`) they ask which one on a terminal,
@@ -62,6 +62,13 @@ Auth: Azure DevOps works with no setup if azure-identity's `DefaultAzureCredenti
 credential (env vars, managed identity, a cached `az login`, ...); otherwise pass
 `--pat`/`AZURE_DEVOPS_EXT_PAT`/`AZURE_DEVOPS_PAT`. GitHub needs `GH_TOKEN`/`GITHUB_TOKEN` (falls back
 to `gh auth token` if `gh` is installed); scopes `repo`, plus `project` for boards and `workflow` for reruns.
+A PAT needs Code (Read & write), Build (Read & execute) and Work Items (Read & write); a 401/403 from Azure DevOps
+says which scope the failing call needed.
+
+A build that is running but shouldn't (wrong branch, superseded, broken infra): `bdt pr cancel-build --reason "..."`
+(the reason is required; it is posted on the PR as `CANCELLED BUILD: ...` and shown by `pr info`/`pr status`), later
+`bdt pr requeue-build` for a whole new build -- `bdt pr retry` only re-runs the failed stages of a failed build.
+`pr status` exits 1 for a cancelled build.
 
 ## Creating a PR
 
