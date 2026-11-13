@@ -366,10 +366,17 @@ def web_url(git_url: str) -> str:
     else:
         parsed = urlparse(git_url)
         host, path = parsed.hostname or "", parsed.path
+    host = host.lower()
     parts = [unquote(p) for p in path.strip("/").split("/")]
-    if host.lower() == "github.com" and len(parts) == 2:
+    # Legacy Azure DevOps hosts: https://org.visualstudio.com/[DefaultCollection/]project/_git/repo, ssh vs-ssh.visualstudio.com
+    if host == "vs-ssh.visualstudio.com":
+        host = "ssh.dev.azure.com"
+    elif host.endswith(".visualstudio.com"):
+        org, host = host.removesuffix(".visualstudio.com"), "dev.azure.com"
+        parts = [org, *(parts[1:] if parts[0].lower() == "defaultcollection" else parts)]
+    if host == "github.com" and len(parts) == 2:
         return f"https://github.com/{quote(parts[0], safe='')}/{quote(parts[1].removesuffix('.git'), safe='')}"
-    if host.lower() in ("dev.azure.com", "ssh.dev.azure.com"):
+    if host in ("dev.azure.com", "ssh.dev.azure.com"):
         if len(parts) == 4 and parts[2] == "_git":  # https://org@dev.azure.com/org/project/_git/repo
             org, project, repo = parts[0], parts[1], parts[3]
         elif len(parts) == 3 and parts[1] == "_git":  # a repo named like its project: org/_git/repo
