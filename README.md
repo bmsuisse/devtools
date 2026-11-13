@@ -690,7 +690,7 @@ those orgs are searched.
 ## `bdt list-repo`
 
 ```bash
-bdt list-repo [--root ~/projects] [--org MYORG] [--github-org MYORG] [--local] [--no-local] [--fast] [--json] [--pat PAT]
+bdt list-repo [--root ~/projects] [--org MYORG] [--github-org MYORG] [--local] [--no-local] [--include-disabled] [--fast] [--json] [--pat PAT]
 ```
 
 The browse counterpart to `bdt find-repo`: lists **every** repo of the Azure DevOps org and/or GitHub org
@@ -707,11 +707,16 @@ configured, or with `--local`, it lists the clones under the work dir instead (t
 - **Description:** GitHub has a repo description and it is used. Azure DevOps repos and local clones have none, so the
   first sentence of the README stands in (empty if there is no README, or only badges, headings and template text).
 - **Commit:** the newest commit of the default branch (GitHub / Azure DevOps).
-- **Cost:** GitHub needs one extra request per repo for the commit, Azure DevOps two (commit and README); all run concurrently
-  (about 15 s for ~400 Azure DevOps repos). `--fast` skips them: GitHub then shows only its last push date,
-  Azure DevOps repos no commit and no description. Repos without commits, or whose commits can't be read, have empty fields.
+- **Disabled repos:** Azure DevOps (and GitHub) repos that are disabled are left out. `--include-disabled` lists them too,
+  marked `(DISABLED)` in the description column of the text output and `"disabled": true` in `--json`. A disabled Azure DevOps
+  repo has no commit or description (they aren't readable, so they aren't requested). Azure DevOps has no disabled *projects*,
+  only disabled repos.
+- **Cost:** GitHub returns descriptions and newest commits in one GraphQL query per 100 repos (about 5 s for 43 repos).
+  Azure DevOps needs a commit request per repo, plus README requests for repos that have commits, 16 at a time
+  (about 9 s for ~300 repos). `--fast` skips those for Azure DevOps, leaving commit and description empty.
+  Repos without commits, or whose commits can't be read, have empty fields.
 - **`--json`:** prints an array of objects for scripts instead of the aligned text, with full (untruncated) values:
-  `project`, `name`, `source` (`ado`/`github`), `git_url` (to clone), `web_url` (to open in the browser),
+  `project`, `name`, `source` (`ado`/`github`), `disabled`, `git_url` (to clone), `web_url` (to open in the browser),
   `location`, `last_commit_id`, `last_commit_date` (ISO 8601), `last_commit_author`, `description`.
   Both URLs are always there; local clones have `name` instead of `project`/`source`, and their `git_url` is the clone's
   `origin` (`web_url` is "" for a host other than GitHub / Azure DevOps).

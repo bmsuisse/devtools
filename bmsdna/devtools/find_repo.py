@@ -86,10 +86,12 @@ class RemoteRepo:
     source: str = "ado"
     description: str = ""
     last_commit: CommitInfo = CommitInfo()
+    disabled: bool = False
 
 
 ADO_API_VERSION = "7.1"
 ADO_PAGE_SIZE = 100
+ADO_DETAIL_WORKERS = 16
 
 
 def _ado_get(url: str, headers: dict[str, str], params: dict[str, str | int] | None = None) -> tuple[bool, dict | str]:
@@ -155,7 +157,10 @@ def _ado_all_repos(org: str, headers: dict[str, str]) -> list[RemoteRepo]:
             print(f"warning: couldn't list repos for project '{project['name']}': {str(data).strip()}", file=sys.stderr)
             return []
         assert isinstance(data, dict)
-        return [RemoteRepo(project["name"], r["name"], r["remoteUrl"]) for r in data.get("value", [])]
+        return [
+            RemoteRepo(project["name"], r["name"], r["remoteUrl"], disabled=bool(r.get("isDisabled")))
+            for r in data.get("value", [])
+        ]
 
     all_repos: list[RemoteRepo] = []
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -170,7 +175,7 @@ def find_remote(org: str, name: str, pat: str | None = None) -> list[RemoteRepo]
     return _prefer_exact(_ado_all_repos(org, headers), name, key=lambda r: r.name)
 
 
-def _github_all_repos(client: GitHubClient, org: str, limit: int | None = 1000) -> list[RemoteRepo]:
+def _github_all_repos(client: GitHubClient, org: str) -> list[RemoteRepo]:
     """Every repo of `org`'s GitHub account.
 
     Unlike Azure DevOps, GitHub has a single flat list of repos per org/user
@@ -185,13 +190,8 @@ def _github_all_repos(client: GitHubClient, org: str, limit: int | None = 1000) 
             path, params = "user/repos", {"affiliation": "owner"}
         else:
             path = f"users/{org_path}/repos"
-    items = client.paginate(path, params, limit=limit)
-    return [
-        RemoteRepo(
-            org, r["name"], r["html_url"], source="github", description=r.get("description") or "", last_commit=CommitInfo(date=r.get("pushed_at") or "")
-        )
-        for r in items
-    ]
+    items = client.paginate(path, params, limit=1000)
+    return [RemoteRepo(org, r["name"], r["html_url"], source="github") for r in items]
 
 
 def find_github(client: GitHubClient, org: str, name: str) -> list[RemoteRepo]:
@@ -243,9 +243,17 @@ def readme_summary(text: str) -> str:
 
 
 def _ado_details(org: str, repo: RemoteRepo, headers: dict[str, str]) -> RemoteRepo:
-    """`repo` plus README-derived description and default-branch last commit date (Azure DevOps has neither on the repo)."""
+    """`repo` plus its default-branch newest commit and a README-derived description (Azure DevOps has neither on the repo)."""
     base = f"https://dev.azure.com/{quote(org)}/{quote(repo.project)}/_apis/git/repositories/{quote(repo.name)}"
-    # No README / empty repo / no access to the content: just a blank field, not a failed listing.
+    # Failures below are a blank field, not a failed listing (no access, empty repo, no README).
+    ok, commits = _ado_get(f"{base}/commits", headers, {"searchCriteria.$top": 1})
+    commit_list = commits.get("value") if ok and isinstance(commits, dict) else None
+    if commit_list == []:
+        return repo  # a successful answer with no commits: no README either, don't spend requests on it
+    last_commit = CommitInfo()  # also what a failed commit request leaves; the README may still be readable
+    if commit_list:
+        c = commit_list[0]
+        last_commit = CommitInfo(c.get("commitId", ""), c.get("committer", {}).get("date", ""), c.get("author", {}).get("name", ""))
     # JSON is requested explicitly: without it the items API answers with the raw file instead of `content`.
     description = ""
     for name in README_NAMES:
@@ -255,42 +263,63 @@ def _ado_details(org: str, repo: RemoteRepo, headers: dict[str, str]) -> RemoteR
         if ok and isinstance(readme, dict):
             description = readme_summary(readme.get("content") or "")
             break
-    ok, commits = _ado_get(f"{base}/commits", headers, {"searchCriteria.$top": 1})
-    last_commit = CommitInfo()
-    if ok and isinstance(commits, dict) and commits.get("value"):
-        c = commits["value"][0]
-        last_commit = CommitInfo(c.get("commitId", ""), c.get("committer", {}).get("date", ""), c.get("author", {}).get("name", ""))
     return replace(repo, description=description, last_commit=last_commit)
 
 
-def _github_last_commit(client: GitHubClient, repo: RemoteRepo) -> RemoteRepo:
-    """`repo` with its default branch's newest commit (the repo listing only has the last push time)."""
-    # Any HTTP error is non-fatal for the listing (like a failing ADO project): keep the push time from the listing.
-    # 404/409 (no access / empty repo) are expected; anything else (rate limit, 5xx) is worth a warning.
-    r = client.request(
-        "GET",
-        f"repos/{quote(repo.project, safe='')}/{quote(repo.name, safe='')}/commits",
-        ok=tuple(range(400, 600)),
-        params={"per_page": 1},
-    )
-    if r.status_code not in (200, 404, 409):
-        print(f"warning: couldn't read the newest commit of '{repo.project}/{repo.name}': HTTP {r.status_code}", file=sys.stderr)
-    commits = r.json() if r.status_code == 200 else []
-    if not commits:
-        return repo
-    c = commits[0]
-    git = c.get("commit", {})
-    return replace(repo, last_commit=CommitInfo(c.get("sha", ""), git.get("committer", {}).get("date", ""), git.get("author", {}).get("name", "")))
+_GITHUB_REPOS_QUERY = """
+query($login: String!, $after: String) {
+  repositoryOwner(login: $login) {
+    repositories(first: 100, after: $after, ownerAffiliations: OWNER) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        name url description pushedAt isDisabled
+        defaultBranchRef { target { ... on Commit { oid committedDate author { name } } } }
+      }
+    }
+  }
+}
+"""
+
+
+def _github_repos_with_commits(client: GitHubClient, org: str) -> list[RemoteRepo]:
+    """Every repo of `org` (an org or a user) with description and default-branch newest commit, 100 repos per request.
+
+    One GraphQL query per page gets what would take a REST request per repo for the commit. An empty
+    repo has no default branch: it keeps its push time.
+    """
+    repos: list[RemoteRepo] = []
+    after: str | None = None
+    while True:
+        owner = client.graphql(_GITHUB_REPOS_QUERY, login=org, after=after)["repositoryOwner"]
+        if owner is None:
+            sys.exit(f"GitHub account '{org}' not found (or not visible to your token).")
+        page = owner["repositories"]
+        for r in page["nodes"]:
+            commit = ((r.get("defaultBranchRef") or {}).get("target")) or {}
+            last_commit = (
+                CommitInfo(commit.get("oid", ""), commit.get("committedDate", ""), (commit.get("author") or {}).get("name") or "")
+                if commit
+                else CommitInfo(date=r.get("pushedAt") or "")
+            )
+            repos.append(
+                RemoteRepo(
+                    org, r["name"], r["url"], source="github", description=r.get("description") or "", last_commit=last_commit, disabled=bool(r.get("isDisabled"))
+                )
+            )
+        if not page["pageInfo"]["hasNextPage"]:
+            return repos
+        after = page["pageInfo"]["endCursor"]
 
 
 def list_remote(
-    *, org: str | None, github_org: str | None, pat: str | None = None, fast: bool = False
+    *, org: str | None, github_org: str | None, pat: str | None = None, fast: bool = False, include_disabled: bool = False
 ) -> list[RemoteRepo]:
     """Every repo of `org` (Azure DevOps) and/or `github_org` (GitHub), sorted by project and name.
 
-    GitHub repos carry their description and last push time already. Unless `fast`, each repo also costs
-    one request for its newest commit (id, author, exact date) -- GitHub -- or two (that plus the README
-    for a description, which Azure DevOps lacks) -- Azure DevOps. They run concurrently like the project fan-out.
+    Disabled repos are left out unless `include_disabled` (they can't be cloned, and their commits and
+    README aren't readable, so they get no description or commit either). GitHub comes with description and
+    newest commit in one query per 100 repos. Azure DevOps costs a commit request plus up to a few README
+    requests per repo, run concurrently like the project fan-out, unless `fast`.
     """
     repos: list[RemoteRepo] = []
     headers = auth_header(pat) if org else {}
@@ -300,19 +329,19 @@ def list_remote(
         if org:
             searches.append(pool.submit(_ado_all_repos, org, headers))
         if github_org and gh:
-            searches.append(pool.submit(_github_all_repos, gh, github_org, None))  # no cap: it lists *all* repos
+            searches.append(pool.submit(_github_repos_with_commits, gh, github_org))
         for search in searches:
             repos += search.result()
 
-    if not fast:
-        def details(r: RemoteRepo) -> RemoteRepo:
-            if r.source == "github":
-                assert gh
-                return _github_last_commit(gh, r)
-            assert org
-            return _ado_details(org, r, headers)
+    if not include_disabled:
+        repos = [r for r in repos if not r.disabled]
 
-        with ThreadPoolExecutor(max_workers=8) as pool:
+    if org and not fast:
+
+        def details(r: RemoteRepo) -> RemoteRepo:
+            return r if r.source != "ado" or r.disabled else _ado_details(org, r, headers)
+
+        with ThreadPoolExecutor(max_workers=ADO_DETAIL_WORKERS) as pool:
             repos = list(pool.map(details, repos))
     return sorted(repos, key=lambda r: (r.project.lower(), r.name.lower()))
 
@@ -413,6 +442,7 @@ def run_list(
     github_org: str | None = None,
     local: bool = False,
     no_local: bool = False,
+    include_disabled: bool = False,
     fast: bool = False,
     as_json: bool = False,
     pat: str | None = None,
@@ -425,7 +455,7 @@ def run_list(
     """
     if local and no_local:
         sys.exit("--local and --no-local contradict each other.")
-    entries: list[dict[str, str | None]]
+    entries: list[dict[str, str | bool | None]]
     search_root = root or work_dir()
     if local or not (org or github_org):
         if no_local:
@@ -449,19 +479,28 @@ def run_list(
             for r in list_local(search_root)
         ]
         labels = [str(e["location"]) for e in entries]
+        descriptions = [str(e["description"]) for e in entries]
     else:
-        remote = list_remote(org=org, github_org=github_org, pat=pat, fast=fast)
+        remote = list_remote(org=org, github_org=github_org, pat=pat, fast=fast, include_disabled=include_disabled)
         # Without a work dir there is simply nothing cloned; only the --local listing insists that it exists.
         clones = {} if no_local or not search_root.is_dir() else local_clones_by_web_url(search_root)
         entries = []
         for r in remote:
             git_url, browse_url = _remote_urls(r)
-            entry: dict[str, str | None] = {"project": r.project, "name": r.name, "source": r.source, "git_url": git_url, "web_url": browse_url}
+            entry: dict[str, str | bool | None] = {
+                "project": r.project,
+                "name": r.name,
+                "source": r.source,
+                "disabled": r.disabled,
+                "git_url": git_url,
+                "web_url": browse_url,
+            }
             if not no_local:
                 clone_path = clones.get(browse_url.lower())
                 entry["location"] = str(clone_path) if clone_path else None
             entries.append({**entry, **_commit_fields(r.last_commit), "description": r.description})
         labels = [f"{r.project}/{r.name}" for r in remote]
+        descriptions = ["(DISABLED) " * r.disabled + r.description for r in remote]
 
     if as_json:
         print(json.dumps(entries, indent=2, ensure_ascii=False))
@@ -470,9 +509,9 @@ def run_list(
     labels = [_printable(label) for label in labels]
     authors = [_printable(str(e["last_commit_author"])) for e in entries]
     label_w, author_w = max(map(len, labels), default=0), max(map(len, authors), default=0)
-    for label, author, e in zip(labels, authors, entries):
+    for label, author, description, e in zip(labels, authors, descriptions, entries):
         commit = f"{str(e['last_commit_date'])[:10]:<10}  {str(e['last_commit_id'])[:8]:<8}  {author:<{author_w}}"
-        print(f"{label:<{label_w}}  {commit}  {_printable(str(e['description']))}".rstrip())
+        print(f"{label:<{label_w}}  {commit}  {_printable(description)}".rstrip())
 
 
 def _printable(text: str) -> str:

@@ -2014,11 +2014,16 @@ def list_repo_cmd(
         "--no-local",
         help="Don't look for local clones of the listed repos: --json then has no `location` (otherwise the clone's path, or null if not cloned)",
     ),
+    include_disabled: bool = typer.Option(
+        False,
+        "--include-disabled",
+        help="Also list disabled repos (left out by default): marked `(DISABLED)` in the text, `\"disabled\": true` in --json",
+    ),
     fast: bool = typer.Option(
         False,
         "--fast",
-        help="Skip the extra requests per repo (newest commit; for Azure DevOps also the README). GitHub then shows only "
-        "its last push date, Azure DevOps repos no commit and no description",
+        help="Azure DevOps only: skip the commit and README requests per repo, leaving those columns empty "
+        "(GitHub always comes with them, in one query per 100 repos)",
     ),
     as_json: bool = typer.Option(False, "--json", help="Print a JSON array instead of aligned text"),
     pat: str | None = typer.Option(
@@ -2038,7 +2043,7 @@ def list_repo_cmd(
     git and browser URL, and the path of the local clone (see --no-local).
     """
     find_repo_mod.run_list(
-        root=root, org=org, github_org=github_org, local=local, no_local=no_local, fast=fast, as_json=as_json, pat=pat
+        root=root, org=org, github_org=github_org, local=local, no_local=no_local, include_disabled=include_disabled, fast=fast, as_json=as_json, pat=pat
     )
 
 
