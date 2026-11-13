@@ -1243,23 +1243,36 @@ catch-all, service-to-service endpoints and an external API folder.
 then on only *new* unused routes fail -- and a baseline line whose route has since been deleted, excluded or
 used is reported as `api-route-baseline-stale`, so the list can only shrink.
 
-## `bdt deps affected` / `bdt deps advisories`
+## `bdt deps affected` / `bdt deps advisories` / `bdt deps cooldown`
 
-Security incidents and supply chain attacks (bmsuisse/devtools#113): which locked dependencies are touched? Both
-commands only read: they never edit a file, a lock or an environment. They cover `uv.lock` (PyPI) and `bun.lock` (npm)
-below each `--path` (default: the current directory; `node_modules`, virtualenvs, `.git` and `.worktrees` are skipped).
-Git, path, alias and workspace sources can't be matched against an advisory: they are listed as `unsupported`, never skipped.
+Security incidents and supply chain attacks (bmsuisse/devtools#113): which locked dependencies are touched? All
+commands only read: they never edit a file, a lock or an environment. They cover `uv.lock` (PyPI), `bun.lock` (npm) and
+Gradle (Maven: `gradle.lockfile` and the version catalog `gradle/libs.versions.toml`) below each `--path` (default: the
+current directory; `node_modules`, virtualenvs, `.git`, `.gradle` and `.worktrees` are skipped).
+Git, path, alias and workspace sources, and Gradle entries without an exact version in the catalog (managed by a BOM, or a
+range), can't be matched against an advisory: they are listed as `unsupported`, never skipped. A catalog lists the direct
+dependencies only; transitive ones need Gradle dependency locking (`gradle.lockfile`).
 
 ```bash
 bdt deps affected lodash --version-spec "<4.17.21" --path ~/projects/CCMT2 --path ~/projects/OneSales
 bdt deps advisories --path .          # OSV lookup of every locked version, one status per affected package
 bdt deps advisories --json            # machine-readable
+bdt deps cooldown --ecosystem Maven --base origin/dev   # CI: no Gradle version added or changed within the cooldown
 ```
 
 `affected PACKAGE` lists the locked versions of one package (PyPI names are normalised, npm names exact; `--ecosystem`
 narrows) and marks those matching `--version-spec` (comparators such as `<4.17.21` or `>=1.0,<2`, comma = and). Exit 0
 none matches, 1 a locked version matches, 2 setup error (no lockfile, unreadable lockfile, bad spec), 3 incomplete (a
 git/path/alias source of that name could not be matched).
+
+`cooldown` answers "is a locked version younger than the dependency cooldown?" (`--cooldown-days`, default 5). uv
+(`exclude-newer`) and bun (`minimumReleaseAge`) enforce the cooldown while resolving; Gradle has no such setting and
+pins exact versions, so this is its check. The release time is the upload time of the POM (`Last-Modified`) on Maven
+Central, Google Maven or the Gradle plugin portal. `--base REV` looks only at versions the file does not have at `REV`
+(use the target branch in CI, so an old pin never fails a later pull request); without it every locked version is looked
+up. `--exempt NAME` (repeatable, `group:artifact` for Maven) lets one package through: the per-invocation exception for a
+security fix younger than the cooldown, as for uv and bun. Exit 0 none inside the cooldown (or all exempt), 1 a version
+inside it, 2 setup error, 3 a release time could not be read; a version without a public release time is listed, not failed.
 
 `advisories` queries [OSV](https://osv.dev) (GHSA, PYSEC and the OpenSSF `MAL-` malicious-package advisories) and the
 CISA KEV feed, groups aliases (GHSA = PYSEC = CVE) and reports per locked package one status. The maintenance skill's

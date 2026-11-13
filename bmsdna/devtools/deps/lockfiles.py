@@ -1,7 +1,7 @@
-"""Read `uv.lock` (PyPI) and `bun.lock` (npm) into `LockedPackage`s.
+"""Read `uv.lock` (PyPI), `bun.lock` (npm), `gradle.lockfile` and Gradle version catalogs (Maven) into `LockedPackage`s.
 
-Only registry packages are returned; git, path, editable and workspace sources are reported as `Unsupported` so a
-scan never claims to have looked at a dependency it can't match against an advisory.
+Only registry packages are returned; git, path, editable and workspace sources (and Gradle versions a catalog does not pin)
+are reported as `Unsupported` so a scan never claims to have looked at a dependency it can't match against an advisory.
 """
 
 from __future__ import annotations
@@ -17,8 +17,13 @@ from typing import Any, cast
 
 from .versions import Ecosystem, normalize_name
 
-LOCKFILE_NAMES = {"uv.lock": "PyPI", "bun.lock": "npm"}
-_SKIP_DIRS = frozenset({"node_modules", ".venv", "venv", ".git", ".worktrees", "__pycache__", ".tox"})
+LOCKFILE_NAMES = {"uv.lock": "PyPI", "bun.lock": "npm", "gradle.lockfile": "Maven"}
+_SKIP_DIRS = frozenset({"node_modules", ".venv", "venv", ".git", ".worktrees", "__pycache__", ".tox", ".gradle"})
+
+
+def is_lockfile(path: Path) -> bool:
+    """A lockfile by name, or a Gradle version catalog (`gradle/*.versions.toml`: the pins of a project without locking)."""
+    return path.name in LOCKFILE_NAMES or (path.name.endswith(".versions.toml") and path.parent.name == "gradle")
 
 
 class LockfileError(ValueError):
@@ -51,27 +56,34 @@ class LockfileContent:
 
 
 def find_lockfiles(roots: Iterable[Path]) -> list[Path]:
-    """Every `uv.lock` / `bun.lock` below the roots; `node_modules`, virtualenvs, `.git` and `.worktrees` are not entered
-    (a root that itself lives inside one is still scanned)."""
+    """Every `uv.lock` / `bun.lock` / `gradle.lockfile` / `gradle/*.versions.toml` below the roots; `node_modules`,
+    virtualenvs, `.git`, `.gradle` and `.worktrees` are not entered (a root that itself lives inside one is still scanned)."""
     found: list[Path] = []
     errors: list[str] = []
     for root in roots:
-        if root.is_file() and root.name in LOCKFILE_NAMES:
+        if root.is_file() and is_lockfile(root):
             found.append(root)
             continue
         for dirpath, dirnames, filenames in os.walk(
             root, onerror=lambda exc: errors.append(f"{exc.filename}: {exc.strerror}")
         ):
             dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS)
-            found.extend(Path(dirpath) / name for name in sorted(filenames) if name in LOCKFILE_NAMES)
+            found.extend(Path(dirpath) / name for name in sorted(filenames) if is_lockfile(Path(dirpath) / name))
     if errors:  # an unreadable directory may hide a lockfile: the scan is incomplete, not clean
         raise LockfileError(f"cannot read directory ({'; '.join(errors)})")
     return sorted(dict.fromkeys(p.resolve() for p in found))
 
 
-def read_lockfile(path: Path) -> LockfileContent:
+def read_lockfile(path: Path, text: str | None = None) -> LockfileContent:
+    """Parse the lockfile at `path`; `text` is its content when it was not read from disk (an older git revision)."""
     try:
-        return read_uv_lock(path) if path.name == "uv.lock" else read_bun_lock(path)
+        if path.name == "uv.lock":
+            return read_uv_lock(path, text)
+        if path.name == "gradle.lockfile":
+            return read_gradle_lockfile(path, text)
+        if path.name.endswith(".versions.toml"):
+            return read_gradle_catalog(path, text)
+        return read_bun_lock(path, text)
     except (
         OSError,
         tomllib.TOMLDecodeError,
@@ -86,8 +98,8 @@ def read_lockfile(path: Path) -> LockfileContent:
 # ── uv.lock ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
 
-def read_uv_lock(path: Path) -> LockfileContent:
-    data = tomllib.loads(path.read_text(encoding="utf-8"))
+def read_uv_lock(path: Path, text: str | None = None) -> LockfileContent:
+    data = tomllib.loads(text if text is not None else path.read_text(encoding="utf-8"))
     if not isinstance(data.get("package"), list) or not data["package"]:
         raise ValueError("no [[package]] entries: not a uv lockfile")
     content = LockfileContent(path, "PyPI")
@@ -159,8 +171,8 @@ def loads_jsonc(text: str) -> object:
     return json.loads(cleaned)
 
 
-def read_bun_lock(path: Path) -> LockfileContent:
-    data = loads_jsonc(path.read_text(encoding="utf-8"))
+def read_bun_lock(path: Path, text: str | None = None) -> LockfileContent:
+    data = loads_jsonc(text if text is not None else path.read_text(encoding="utf-8"))
     if (
         not isinstance(data, dict)
         or not isinstance(data.get("packages"), dict)
@@ -207,4 +219,81 @@ def read_bun_lock(path: Path) -> LockfileContent:
                 declared.get(name) if is_direct else None,
             )
         )
+    return content
+
+
+# ── Gradle: gradle.lockfile and version catalogs ─────────────────────────────────────────────────────────────────
+
+_GRADLE_RANGE_RE = re.compile(r"^[\[(]|[\])]$|\+$|^latest\.")
+
+
+def _catalog_version(spec: object, versions: dict[str, Any]) -> tuple[str | None, str]:
+    """The exact version a catalog entry pins, or None and the reason it can't be matched."""
+    if isinstance(spec, dict):
+        table = cast("dict[str, Any]", spec)
+        if "ref" in table:
+            return _catalog_version(versions.get(table["ref"]), versions)
+        spec = table.get("strictly") or table.get("require") or table.get("prefer")
+    if not isinstance(spec, str) or not spec:
+        return (None, "no version in the catalog (managed by a BOM or platform, or by the build script)")
+    if _GRADLE_RANGE_RE.search(spec):
+        return (None, f"version {spec!r} is a range or dynamic selector, not an exact version")
+    return spec, ""
+
+
+def read_gradle_catalog(path: Path, text: str | None = None) -> LockfileContent:
+    """`gradle/libs.versions.toml`: libraries and plugins with their pinned versions. Direct dependencies only (transitive
+    ones need Gradle dependency locking); entries without a version are `Unsupported`."""
+    data = tomllib.loads(text if text is not None else path.read_text(encoding="utf-8"))
+    if not isinstance(data.get("libraries"), dict) and not isinstance(data.get("plugins"), dict):
+        raise ValueError("no [libraries] or [plugins] table: not a Gradle version catalog")
+    versions = cast("dict[str, Any]", data.get("versions") or {})
+    content = LockfileContent(path, "Maven")
+    seen: set[tuple[str, str]] = set()
+
+    def add(name: str, spec: object) -> None:
+        version, reason = _catalog_version(spec, versions)
+        if version is None:
+            content.unsupported.append(Unsupported(path, name, reason))
+        elif (name, version) not in seen:
+            seen.add((name, version))
+            content.packages.append(LockedPackage("Maven", name, version, True, path))
+
+    for entry in (data.get("libraries") or {}).values():
+        if isinstance(entry, str):
+            parts = entry.split(":")
+            name, spec = ":".join(parts[:2]), (parts[2] if len(parts) > 2 else None)
+        else:
+            module = entry.get("module") or f"{entry.get('group', '')}:{entry.get('name', '')}"
+            name, spec = module, entry.get("version")
+        if name.count(":") != 1 or not all(name.split(":")):
+            raise ValueError(f"cannot read library coordinates {name!r}")
+        add(name, spec)
+    for entry in (data.get("plugins") or {}).values():
+        if isinstance(entry, str):
+            plugin_id, _, spec = entry.partition(":")
+        else:
+            plugin_id, spec = entry["id"], entry.get("version")
+        add(f"{plugin_id}:{plugin_id}.gradle.plugin", spec)  # the plugin marker artifact
+    return content
+
+
+def read_gradle_lockfile(path: Path, text: str | None = None) -> LockfileContent:
+    """`gradle.lockfile` (dependency locking): one `group:artifact:version=configuration,...` line per resolved module."""
+    direct: set[str] = set()
+    for catalog in (path.parent / "gradle").glob("*.versions.toml") if (path.parent / "gradle").is_dir() else ():
+        direct.update(p.name for p in read_gradle_catalog(catalog).packages)
+    content = LockfileContent(path, "Maven")
+    seen: set[tuple[str, str]] = set()
+    for raw in (text if text is not None else path.read_text(encoding="utf-8")).splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or line.startswith("empty="):
+            continue
+        coordinates = line.partition("=")[0].split(":")
+        if len(coordinates) != 3 or not all(coordinates):
+            raise ValueError(f"cannot read line {line!r}")
+        name, version = ":".join(coordinates[:2]), coordinates[2]
+        if (name, version) not in seen:
+            seen.add((name, version))
+            content.packages.append(LockedPackage("Maven", name, version, name in direct, path))
     return content
