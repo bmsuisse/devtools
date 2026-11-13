@@ -199,3 +199,16 @@ def test_advisories_for_gradle_point_at_the_catalog_and_the_cooldown_exception(
     assert "[exempt-eligible] com.squareup.okhttp3:okhttp 4.12.0" in result.output and "-> 5.0.0" in result.output
     assert "gradle/libs.versions.toml" in result.output
     assert "bdt deps cooldown --exempt com.squareup.okhttp3:okhttp" in result.output
+
+
+def test_cooldown_lists_catalog_entries_it_cannot_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "gradle").mkdir()
+    (tmp_path / "gradle" / "libs.versions.toml").write_text(
+        CATALOG + 'compose-ui = { module = "androidx.compose.ui:ui" }\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(deps_cli, "OsvClient", YoungClient)
+
+    result = runner.invoke(app, ["deps", "cooldown", "--path", str(tmp_path), "--cooldown-days", "1"])
+
+    assert result.exit_code == 0, result.output
+    assert "[unsupported] androidx.compose.ui:ui" in result.output and "none of the 2 checked" in result.output

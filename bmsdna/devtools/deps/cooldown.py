@@ -11,7 +11,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from .lockfiles import LockedPackage, LockfileContent, LockfileError, read_lockfile
+from .lockfiles import LockedPackage, LockfileContent, LockfileError, Unsupported, read_lockfile
 from .osv import DataError
 from .versions import Ecosystem, normalize_name
 
@@ -28,6 +28,7 @@ class CooldownResult:
     young: list[Young] = field(default_factory=list)
     exempt: list[Young] = field(default_factory=list)
     unknown: list[LockedPackage] = field(default_factory=list)  # release time not known (private or unlisted package)
+    unsupported: list[Unsupported] = field(default_factory=list)  # entries that could not be matched, never skipped
     incomplete: list[str] = field(default_factory=list)
     checked: int = 0
 

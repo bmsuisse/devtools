@@ -12,7 +12,7 @@ import typer
 
 from .advisories import DEFAULT_COOLDOWN_DAYS, ScanResult, scan
 from .cooldown import CooldownResult, changed_packages, check
-from .lockfiles import LockedPackage, LockfileContent, LockfileError, find_lockfiles, read_lockfile
+from .lockfiles import LockedPackage, LockfileContent, LockfileError, Unsupported, find_lockfiles, read_lockfile
 from .osv import DataError, OsvClient
 from .versions import ECOSYSTEMS, VersionError, normalize_name, spec_matches
 
@@ -167,6 +167,7 @@ def _render_cooldown(result: CooldownResult, cooldown_days: float) -> str:
         f"unknown  {pkg.lockfile}: {pkg.name} {pkg.version}: no public release time (private or unlisted)"
         for pkg in result.unknown
     ]
+    lines += [f"[unsupported] {item.name}: {item.reason}  {item.lockfile}" for item in result.unsupported]
     lines += [f"[incomplete] {reason}" for reason in result.incomplete]
     return "\n".join(lines)
 
@@ -202,9 +203,11 @@ def cooldown(
         raise typer.Exit(EXIT_SETUP)
     contents = [c for c in _read_all(path) if not ecosystem or c.ecosystem == ecosystem]
     packages: list[LockedPackage] = []
+    unsupported: list[Unsupported] = []
     try:
         for content in contents:
             packages.extend(changed_packages(content, base) if base else content.packages)
+            unsupported.extend(content.unsupported)
     except LockfileError as exc:
         typer.echo(f"bdt deps: {exc}", err=True)
         raise typer.Exit(EXIT_SETUP) from exc
@@ -212,10 +215,14 @@ def cooldown(
     result = check(
         packages, OsvClient().release_time, cooldown_days=cooldown_days, exempt=exempt_names, now=datetime.now(UTC)
     )
-    typer.echo(
-        _render_cooldown(result, cooldown_days)
-        or f"bdt deps: none of the {result.checked} checked versions is inside the {cooldown_days:g}-day cooldown"
-    )
+    result.unsupported = unsupported
+    report = _render_cooldown(result, cooldown_days)
+    if not result.young and not result.incomplete:
+        summary = (
+            f"bdt deps: none of the {result.checked} checked versions is inside the {cooldown_days:g}-day cooldown"
+        )
+        report = f"{report}\n{summary}" if report else summary
+    typer.echo(report)
     if result.incomplete:
         raise typer.Exit(EXIT_INCOMPLETE)
     raise typer.Exit(EXIT_FOUND if result.young else 0)

@@ -114,3 +114,8 @@ def test_maven_release_time_is_none_when_no_repository_has_it_and_an_error_when_
         OsvClient(FakeSession([FakeResponse(status=503)] * 3)).release_time("Maven", "a:b", "1")  # type: ignore[arg-type]
     with pytest.raises(DataError):
         OsvClient(FakeSession([FakeResponse(headers={"Last-Modified": "garbage"})])).release_time("Maven", "a:b", "1")  # type: ignore[arg-type]
+
+
+def test_a_maven_pom_without_last_modified_is_an_error_not_an_unknown_age() -> None:
+    with pytest.raises(DataError, match="Last-Modified"):
+        OsvClient(FakeSession([FakeResponse(headers={})])).release_time("Maven", "a:b", "1")  # type: ignore[arg-type]

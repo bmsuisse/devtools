@@ -103,8 +103,12 @@ def test_maven_ordering_follows_comparable_version() -> None:
         < parse_maven("1.0-rc1")
         < parse_maven("1.0")
         < parse_maven("1.0-sp1")
+        < parse_maven("1.0-1")
         < parse_maven("1.0.1")
-    )
+    )  # a hyphen opens a sublist: `1.0-1` is older than `1.0.1`
+    assert parse_maven("1.0") == parse_maven("1.0-ga") == parse_maven("1.0-final")
+    assert parse_maven("1-a1") < parse_maven("1-b1") < parse_maven("1-m1") < parse_maven("1-rc1") < parse_maven("1")
+    assert parse_maven("1.0-SNAPSHOT") < parse_maven("1.0")
     assert parse_maven("1.9.0") < parse_maven("1.10.0")  # numeric, not lexical
     assert parse_maven("4.12.0") < parse_maven("5.0.0-alpha.3")
 

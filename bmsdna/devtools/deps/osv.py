@@ -150,8 +150,10 @@ class OsvClient:
                         raise DataError(f"HTTP {response.status_code} from {url}")
                     else:
                         stamp = response.headers.get("Last-Modified")
+                        if not stamp:  # the POM exists, so its age is unreadable data, not "unknown"
+                            raise DataError(f"{url} has no Last-Modified header")
                         try:
-                            return parsedate_to_datetime(stamp).astimezone(UTC) if stamp else None
+                            return parsedate_to_datetime(stamp).astimezone(UTC)
                         except (TypeError, ValueError) as exc:
                             raise DataError(f"{url} has an unreadable Last-Modified header {stamp!r}") from exc
                 time.sleep(RETRY_BACKOFF_SECS * (attempt + 1))

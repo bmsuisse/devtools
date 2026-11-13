@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from functools import total_ordering
-from typing import Literal
+from typing import Literal, cast
 
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
@@ -64,56 +64,94 @@ def parse_semver(text: str) -> SemVer:
     return SemVer(int(major), int(minor), int(patch), prerelease)
 
 
-# Maven's ComparableVersion, without its corner cases: `1.0` == `1.0.0`, `1.0-alpha-1` < `1.0-rc1` < `1.0` < `1.0-sp1` < `1.0.1`.
-_MAVEN_QUALIFIER_RANK = {
-    "alpha": 0,
-    "a": 0,
-    "beta": 1,
-    "b": 1,
-    "milestone": 2,
-    "m": 2,
-    "rc": 3,
-    "cr": 3,
-    "snapshot": 4,
-    "": 5,
-    "ga": 5,
-    "final": 5,
-    "release": 5,
-    "sp": 6,
-}
-_MAVEN_ITEM_RE = re.compile(r"\d+|[A-Za-z]+")
+# Maven's ComparableVersion (the Maven 3 algorithm): a version is a nested list, a hyphen or a digit/letter change opens a
+# sublist, trailing "null" items (0, "", "ga", "final", "release") are dropped. `1.0` == `1.0.0`, `1.0-alpha-1` < `1.0-rc1`
+# < `1.0` < `1.0-sp1` < `1.0-1` < `1.0.1`.
+_MAVEN_QUALIFIERS = ("alpha", "beta", "milestone", "rc", "snapshot", "", "sp")
+_MAVEN_ALIASES = {"ga": "", "final": "", "release": "", "cr": "rc"}
 _MAVEN_VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+-]*$")
 
-
-def _maven_is_null(item: int | str) -> bool:
-    return item == 0 if isinstance(item, int) else _MAVEN_QUALIFIER_RANK.get(item) == 5
+MavenItem = tuple[str, "int | str | list[MavenItem]"]  # ("i", int) | ("s", qualifier) | ("l", items)
 
 
-def _maven_item_key(item: int | str) -> tuple[int, int, str]:
-    if isinstance(item, int):
-        return (2, item, "")
-    rank = _MAVEN_QUALIFIER_RANK.get(item)
-    return (1, 7, item) if rank is None else (1, rank, "")  # unknown qualifiers sort after every known one
+def _maven_string_item(text: str, followed_by_digit: bool) -> MavenItem:
+    if followed_by_digit and len(text) == 1:
+        text = {"a": "alpha", "b": "beta", "m": "milestone"}.get(text, text)
+    return ("s", _MAVEN_ALIASES.get(text, text))
+
+
+def _maven_item(is_digit: bool, text: str) -> MavenItem:
+    return ("i", int(text)) if is_digit else _maven_string_item(text, False)
+
+
+def _maven_is_null(item: MavenItem) -> bool:
+    kind, value = item
+    return value == 0 if kind == "i" else value == "" if kind == "s" else not value
+
+
+def _maven_normalize(items: list[MavenItem]) -> None:
+    for i in range(len(items) - 1, -1, -1):
+        if _maven_is_null(items[i]):
+            del items[i]
+        elif items[i][0] != "l":
+            break
+
+
+def _maven_qualifier_key(text: str) -> str:
+    return str(_MAVEN_QUALIFIERS.index(text)) if text in _MAVEN_QUALIFIERS else f"{len(_MAVEN_QUALIFIERS)}-{text}"
+
+
+def _maven_compare(left: MavenItem, right: MavenItem | None) -> int:
+    lkind, lvalue = left
+    if right is None:  # comparing with a missing item: 0 / "" / an empty list are the same as nothing
+        if lkind == "i":
+            return 0 if lvalue == 0 else 1
+        if lkind == "s":
+            key, release = _maven_qualifier_key(str(lvalue)), _maven_qualifier_key("")
+            return (key > release) - (key < release)
+        return _maven_compare(cast("list[MavenItem]", lvalue)[0], None) if lvalue else 0
+    rkind, rvalue = right
+    if lkind == "i":
+        if rkind == "i":
+            return (cast("int", lvalue) > cast("int", rvalue)) - (cast("int", lvalue) < cast("int", rvalue))
+        return 1  # a number is newer than a qualifier or a sublist
+    if lkind == "s":
+        if rkind == "s":
+            a, b = _maven_qualifier_key(str(lvalue)), _maven_qualifier_key(str(rvalue))
+            return (a > b) - (a < b)
+        return -1  # a qualifier is older than a number or a sublist
+    if rkind == "i":
+        return -1
+    if rkind == "s":
+        return 1
+    lhs, rhs = cast("list[MavenItem]", lvalue), cast("list[MavenItem]", rvalue)
+    for i in range(max(len(lhs), len(rhs))):
+        a_item = lhs[i] if i < len(lhs) else None
+        b_item = rhs[i] if i < len(rhs) else None
+        if a_item is not None:
+            result = _maven_compare(a_item, b_item)
+        else:  # the left list is shorter: the right item against nothing, reversed
+            assert b_item is not None
+            result = -_maven_compare(b_item, None)
+        if result:
+            return result
+    return 0
+
+
+def _maven_freeze(item: MavenItem) -> object:
+    kind, value = item
+    return tuple(_maven_freeze(i) for i in cast("list[MavenItem]", value)) if kind == "l" else (kind, value)
 
 
 @total_ordering
 @dataclass(frozen=True, slots=True)
 class MavenVersion:
-    items: tuple[int | str, ...]
+    root: tuple[object, ...]  # frozen, normalised: equal versions have equal roots
     text: str
+    items: tuple[MavenItem, ...] = ()
 
     def _compare(self, other: MavenVersion) -> int:
-        for i in range(max(len(self.items), len(other.items))):
-            mine = self.items[i] if i < len(self.items) else None
-            theirs = other.items[i] if i < len(other.items) else None
-            if mine is None:  # a missing item is the "null" item of the other one's kind: 0 or the release qualifier
-                mine = 0 if isinstance(theirs, int) else ""
-            if theirs is None:
-                theirs = 0 if isinstance(mine, int) else ""
-            a, b = _maven_item_key(mine), _maven_item_key(theirs)
-            if a != b:
-                return -1 if a < b else 1
-        return 0
+        return _maven_compare(("l", list(self.items)), ("l", list(other.items)))
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, MavenVersion) and self._compare(other) == 0
@@ -124,10 +162,7 @@ class MavenVersion:
         return self._compare(other) < 0
 
     def __hash__(self) -> int:
-        items = list(self.items)
-        while items and _maven_is_null(items[-1]):
-            items.pop()
-        return hash(tuple(items))
+        return hash(self.root)
 
     def __str__(self) -> str:
         return self.text
@@ -137,8 +172,41 @@ def parse_maven(text: str) -> MavenVersion:
     text = text.strip()
     if not _MAVEN_VERSION_RE.match(text):
         raise VersionError(f"not a Maven version: {text!r}")
-    items: list[int | str] = [int(tok) if tok.isdigit() else tok for tok in _MAVEN_ITEM_RE.findall(text.lower())]
-    return MavenVersion(tuple(items), text)
+    version = text.lower()
+    root: list[MavenItem] = []
+    current = root
+    stack = [root]
+    is_digit, start = False, 0
+
+    def open_sublist() -> list[MavenItem]:
+        sub: list[MavenItem] = []
+        current.append(("l", sub))
+        stack.append(sub)
+        return sub
+
+    for i, ch in enumerate(version):
+        if ch in ".-":
+            current.append(("i", 0) if i == start else _maven_item(is_digit, version[start:i]))
+            start = i + 1
+            if ch == "-":
+                current = open_sublist()
+        elif ch.isdigit():
+            if not is_digit and i > start:
+                current.append(_maven_string_item(version[start:i], True))
+                start = i
+                current = open_sublist()
+            is_digit = True
+        else:
+            if is_digit and i > start:
+                current.append(_maven_item(True, version[start:i]))
+                start = i
+                current = open_sublist()
+            is_digit = False
+    if len(version) > start:
+        current.append(_maven_item(is_digit, version[start:]))
+    for sub in reversed(stack):
+        _maven_normalize(sub)
+    return MavenVersion(cast("tuple[object, ...]", _maven_freeze(("l", root))), text, tuple(root))
 
 
 def parse_version(ecosystem: Ecosystem, text: str) -> Version | SemVer | MavenVersion:
