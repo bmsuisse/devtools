@@ -13,10 +13,12 @@ from bmsdna.devtools.find_repo import (
     find_local,
     find_remote,
     list_local,
+    local_clones_by_web_url,
     list_remote,
     readme_summary,
     run,
     run_list,
+    web_url,
     work_dir,
 )
 
@@ -909,10 +911,12 @@ def test_list_local_reports_readme_summary_and_last_commit_date(tmp_path) -> Non
     _git(["add", "."], cwd=repo)
     _git(["commit", "-q", "-m", "readme", "--date=2020-02-03T04:05:06Z"], cwd=repo)
 
-    [(path, description, last_commit)] = list_local(tmp_path)
+    [local_repo] = list_local(tmp_path)
+    path, description, last_commit = local_repo.path, local_repo.description, local_repo.last_commit
 
     assert path == repo
     assert description == "Makes widgets."
+    assert local_repo.origin_url == ""  # no origin configured
     assert last_commit.id == _git(["rev-parse", "HEAD"], cwd=repo).stdout.strip()
     assert last_commit.author == "Test"
     assert last_commit.date[:4].isdigit()
@@ -971,7 +975,9 @@ def test_run_list_json_is_structured(monkeypatch, capsys) -> None:
             "project": "P",
             "name": "a",
             "source": "ado",
-            "url": "u1",
+            "git_url": "u1",
+            "web_url": "",
+            "location": None,
             "last_commit_id": "0123456789abcdef",
             "last_commit_date": "2026-01-02T03:04:05Z",
             "last_commit_author": "Ann",
@@ -1004,3 +1010,125 @@ def test_run_list_without_org_lists_local_clones_and_says_so(tmp_path, capsys) -
     captured = capsys.readouterr()
     assert str(tmp_path / "widgets") in captured.out
     assert "listing local clones" in captured.err
+
+
+# --- web_url / local clones / --no-local ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "git_url, expected",
+    [
+        ("https://github.com/org/repo.git", "https://github.com/org/repo"),
+        ("https://github.com/org/repo", "https://github.com/org/repo"),
+        ("git@github.com:org/repo.git", "https://github.com/org/repo"),
+        ("ssh://git@github.com/org/repo.git", "https://github.com/org/repo"),
+        (
+            "https://bmeurope@dev.azure.com/bmeurope/My%20Project/_git/the-repo",
+            "https://dev.azure.com/bmeurope/My%20Project/_git/the-repo",
+        ),
+        ("https://dev.azure.com/bmeurope/My Project/_git/the-repo", "https://dev.azure.com/bmeurope/My%20Project/_git/the-repo"),
+        ("git@ssh.dev.azure.com:v3/bmeurope/My%20Project/the-repo", "https://dev.azure.com/bmeurope/My%20Project/_git/the-repo"),
+        ("https://dev.azure.com/bmeurope/_git/solo", "https://dev.azure.com/bmeurope/solo/_git/solo"),
+        ("https://example.com/org/repo.git", ""),
+        ("", ""),
+    ],
+)
+def test_web_url(git_url, expected) -> None:
+    assert web_url(git_url) == expected
+
+
+def _clone_with_origin(path, origin) -> None:
+    init_repo(path)
+    _git(["remote", "add", "origin", origin], cwd=path)
+
+
+def test_local_clones_by_web_url_matches_across_url_styles(tmp_path) -> None:
+    ado = tmp_path / "flat-name"
+    gh = tmp_path / "github" / "tool"
+    _clone_with_origin(ado, "git@ssh.dev.azure.com:v3/org/Proj/repo")
+    _clone_with_origin(gh, "https://github.com/Org/Tool.git")
+    init_repo(tmp_path / "no-origin")
+
+    assert local_clones_by_web_url(tmp_path) == {
+        "https://dev.azure.com/org/proj/_git/repo": ado,
+        "https://github.com/org/tool": gh,
+    }
+
+
+def _listing_json(monkeypatch, capsys, **kwargs) -> list[dict]:
+    import json
+
+    monkeypatch.setattr(
+        find_repo_mod,
+        "list_remote",
+        lambda **kw: [
+            RemoteRepo("Proj", "repo", "https://org@dev.azure.com/org/Proj/_git/repo"),
+            RemoteRepo("Proj", "other", "https://org@dev.azure.com/org/Proj/_git/other"),
+            RemoteRepo("org", "tool", "https://github.com/org/tool", source="github"),
+        ],
+    )
+    run_list(as_json=True, **kwargs)
+    return json.loads(capsys.readouterr().out)
+
+
+def test_run_list_json_has_git_and_web_url_and_local_location(monkeypatch, capsys, tmp_path) -> None:
+    _clone_with_origin(tmp_path / "repo-clone", "https://org@dev.azure.com/org/Proj/_git/repo")
+    _clone_with_origin(tmp_path / "tool-clone", "git@github.com:org/tool.git")
+
+    entries = _listing_json(monkeypatch, capsys, root=tmp_path, org="org")
+
+    assert [(e["git_url"], e["web_url"], e["location"]) for e in entries] == [
+        (
+            "https://org@dev.azure.com/org/Proj/_git/repo",
+            "https://dev.azure.com/org/Proj/_git/repo",
+            str(tmp_path / "repo-clone"),
+        ),
+        ("https://org@dev.azure.com/org/Proj/_git/other", "https://dev.azure.com/org/Proj/_git/other", None),
+        ("https://github.com/org/tool.git", "https://github.com/org/tool", str(tmp_path / "tool-clone")),
+    ]
+
+
+def test_run_list_no_local_omits_location_and_never_scans_clones(monkeypatch, capsys, tmp_path) -> None:
+    def boom(root):
+        raise AssertionError("must not look for local clones")
+
+    monkeypatch.setattr(find_repo_mod, "local_clones_by_web_url", boom)
+
+    entries = _listing_json(monkeypatch, capsys, root=tmp_path, org="org", no_local=True)
+
+    assert all("location" not in e for e in entries)
+    assert all(e["git_url"] and e["web_url"] for e in entries)
+
+
+def test_run_list_remote_without_work_dir_has_null_locations(monkeypatch, capsys, tmp_path) -> None:
+    entries = _listing_json(monkeypatch, capsys, root=tmp_path / "missing", org="org")
+
+    assert [e["location"] for e in entries] == [None, None, None]
+
+
+def test_run_list_local_json_has_urls(tmp_path, capsys) -> None:
+    import json
+
+    _clone_with_origin(tmp_path / "widgets", "git@github.com:org/widgets.git")
+
+    run_list(root=tmp_path, org=None, local=True, as_json=True)
+
+    [entry] = json.loads(capsys.readouterr().out)
+    assert entry["git_url"] == "git@github.com:org/widgets.git"
+    assert entry["web_url"] == "https://github.com/org/widgets"
+    assert entry["location"] == str(tmp_path / "widgets")
+
+
+def test_run_list_rejects_contradicting_or_pointless_no_local(tmp_path) -> None:
+    with pytest.raises(SystemExit):
+        run_list(root=tmp_path, org="org", local=True, no_local=True)
+    with pytest.raises(SystemExit):
+        run_list(root=tmp_path, org=None, no_local=True)
+
+
+def test_cli_list_repo_no_local_flag(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("AZDO_ORG", raising=False)
+
+    result = runner.invoke(app, ["list-repo", "--local", "--no-local", "--root", str(tmp_path)])
+
+    assert result.exit_code == 1

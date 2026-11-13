@@ -690,7 +690,7 @@ those orgs are searched.
 ## `bdt list-repo`
 
 ```bash
-bdt list-repo [--root ~/projects] [--org MYORG] [--github-org MYORG] [--local] [--fast] [--json] [--pat PAT]
+bdt list-repo [--root ~/projects] [--org MYORG] [--github-org MYORG] [--local] [--no-local] [--fast] [--json] [--pat PAT]
 ```
 
 The browse counterpart to `bdt find-repo`: lists **every** repo of the Azure DevOps org and/or GitHub org
@@ -711,8 +711,14 @@ configured, or with `--local`, it lists the clones under the work dir instead (t
   (about 15 s for ~400 Azure DevOps repos). `--fast` skips them: GitHub then shows only its last push date,
   Azure DevOps repos no commit and no description. Repos without commits, or whose commits can't be read, have empty fields.
 - **`--json`:** prints an array of objects for scripts instead of the aligned text, with full (untruncated) values:
-  `project`, `name`, `source` (`ado`/`github`), `url`, `last_commit_id`, `last_commit_date` (ISO 8601),
-  `last_commit_author`, `description` -- local clones have `name` and `location` instead of `project`/`source`/`url`.
+  `project`, `name`, `source` (`ado`/`github`), `git_url` (to clone), `web_url` (to open in the browser),
+  `location`, `last_commit_id`, `last_commit_date` (ISO 8601), `last_commit_author`, `description`.
+  Both URLs are always there; local clones have `name` instead of `project`/`source`, and their `git_url` is the clone's
+  `origin` (`web_url` is "" for a host other than GitHub / Azure DevOps).
+- **Local clones:** `location` is the path of your clone of that repo under the work dir (found by matching each
+  clone's `origin` URL, whether it was cloned via https or ssh), or `null` if it isn't cloned. `--no-local` skips that
+  lookup and leaves `location` out of the JSON entirely; the aligned text never shows it. `--local` and `--no-local`
+  contradict each other, and `--no-local` needs an org to list.
 
 ## `bdt cleanup worktrees` / `bdt cleanup orphaned-dbs` / `bdt cleanup db` / `bdt cleanup worktree`
 
