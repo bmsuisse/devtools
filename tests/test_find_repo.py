@@ -796,34 +796,43 @@ def test_list_remote_fast_makes_no_per_repo_requests(monkeypatch) -> None:
     assert not [c for c in calls if c[0].endswith(("/items", "/commits"))]
 
 
-class FakeGitHubCommits(FakeGitHub):
-    """FakeGitHub that also answers `repos/<org>/<name>/commits?per_page=1`."""
+class FakeGitHubGraphQL:
+    """Stands in for GitHubClient.graphql, serving `pages` of repository nodes one call at a time."""
 
-    def __init__(self, repos, commits: dict[str, FakeResp]):
-        super().__init__(repos)
-        self.commits = commits
-        self.commit_calls: list[tuple[str, dict | None]] = []
+    def __init__(self, pages: list[list[dict]], owner_missing: bool = False):
+        self.pages = pages
+        self.owner_missing = owner_missing
+        self.calls: list[dict] = []
 
-    def request(self, method, path, ok=(), **kwargs):
-        if path.endswith("/commits"):
-            self.commit_calls.append((path, kwargs.get("params")))
-            return self.commits[path.split("/")[-2]]
-        return super().request(method, path, ok=ok, **kwargs)
-
-
-def _github_repos_and_commits() -> FakeGitHubCommits:
-    commit = {"sha": "abc123", "commit": {"author": {"name": "Ann"}, "committer": {"date": "2026-03-04T05:06:07Z"}}}
-    return FakeGitHubCommits(
-        [
-            {"name": "empty", "html_url": "https://github.com/org/empty", "description": None, "pushed_at": "2020-01-01T00:00:00Z"},
-            {"name": "a", "html_url": "https://github.com/org/a", "description": "Does a", "pushed_at": "2026-03-04T05:06:08Z"},
-        ],
-        {"a": FakeResp(body=[commit]), "empty": FakeResp(409, {"message": "Git Repository is empty."})},
-    )
+    def graphql(self, query, **variables):
+        self.calls.append(variables)
+        if self.owner_missing:
+            return {"repositoryOwner": None}
+        i = len(self.calls) - 1
+        return {
+            "repositoryOwner": {
+                "repositories": {
+                    "pageInfo": {"hasNextPage": i + 1 < len(self.pages), "endCursor": f"cursor{i}"},
+                    "nodes": self.pages[i],
+                }
+            }
+        }
 
 
-def test_list_remote_reads_github_description_and_newest_commit(monkeypatch) -> None:
-    client = _github_repos_and_commits()
+def _gh_node(name: str, **kw) -> dict:
+    return {
+        "name": name,
+        "url": f"https://github.com/org/{name}",
+        "description": None,
+        "pushedAt": "2020-01-01T00:00:00Z",
+        "isDisabled": False,
+        "defaultBranchRef": {"target": {"oid": "abc123", "committedDate": "2026-03-04T05:06:07Z", "author": {"name": "Ann"}}},
+        **kw,
+    }
+
+
+def test_list_remote_reads_github_description_and_newest_commit_in_one_query_per_page(monkeypatch) -> None:
+    client = FakeGitHubGraphQL([[_gh_node("a", description="Does a")], [_gh_node("empty", defaultBranchRef=None)]])
     monkeypatch.setattr(find_repo_mod, "require_gh", lambda: client)
 
     result = list_remote(org=None, github_org="org")
@@ -837,46 +846,61 @@ def test_list_remote_reads_github_description_and_newest_commit(monkeypatch) -> 
             description="Does a",
             last_commit=CommitInfo("abc123", "2026-03-04T05:06:07Z", "Ann"),
         ),
-        # empty repo (HTTP 409): keeps the push time from the listing
+        # empty repo: no default branch, so it keeps the push time
         RemoteRepo("org", "empty", "https://github.com/org/empty", source="github", last_commit=CommitInfo(date="2020-01-01T00:00:00Z")),
     ]
-    assert ("repos/org/a/commits", {"per_page": 1}) in client.commit_calls
+    assert client.calls == [{"login": "org", "after": None}, {"login": "org", "after": "cursor0"}]
 
 
-def test_list_remote_fast_github_uses_push_time_only(monkeypatch) -> None:
-    client = _github_repos_and_commits()
-    monkeypatch.setattr(find_repo_mod, "require_gh", lambda: client)
+def test_list_remote_unknown_github_account_exits(monkeypatch) -> None:
+    monkeypatch.setattr(find_repo_mod, "require_gh", lambda: FakeGitHubGraphQL([], owner_missing=True))
 
-    result = list_remote(org=None, github_org="org", fast=True)
+    with pytest.raises(SystemExit) as exc_info:
+        list_remote(org=None, github_org="nobody")
 
-    assert [r.last_commit for r in result] == [CommitInfo(date="2026-03-04T05:06:08Z"), CommitInfo(date="2020-01-01T00:00:00Z")]
-    assert client.commit_calls == []
+    assert "nobody" in str(exc_info.value)
 
 
-def test_list_remote_github_has_no_repo_cap_and_survives_commit_errors(monkeypatch, capsys) -> None:
-    client = FakeGitHubCommits(
-        [
-            {"name": "limited", "html_url": "u1", "description": "d", "pushed_at": "2026-01-01T00:00:00Z"},
-            {"name": "ok", "html_url": "u2", "description": "d", "pushed_at": "2026-01-02T00:00:00Z"},
-        ],
-        {
-            "limited": FakeResp(403, {"message": "rate limited"}),
-            "ok": FakeResp(body=[{"sha": "abc", "commit": {"author": {"name": "Ann"}, "committer": {"date": "2026-01-03T00:00:00Z"}}}]),
-        },
+def test_list_remote_hides_disabled_repos_unless_asked(monkeypatch) -> None:
+    monkeypatch.setattr(
+        find_repo_mod, "require_gh", lambda: FakeGitHubGraphQL([[_gh_node("on"), _gh_node("off", isDisabled=True)]])
     )
-    limits: list = []
-    paginate = client.paginate
-    client.paginate = lambda path, params=None, **kw: (limits.append(kw.get("limit", "unset")), paginate(path, params))[1]  # type: ignore[method-assign]
-    monkeypatch.setattr(find_repo_mod, "require_gh", lambda: client)
 
-    result = list_remote(org=None, github_org="org")
+    assert [r.name for r in list_remote(org=None, github_org="org")] == ["on"]
+    shown = list_remote(org=None, github_org="org", include_disabled=True)
+    assert [(r.name, r.disabled) for r in shown] == [("off", True), ("on", False)]
 
-    assert limits == [None]
-    assert [(r.name, r.last_commit) for r in result] == [
-        ("limited", CommitInfo(date="2026-01-01T00:00:00Z")),
-        ("ok", CommitInfo("abc", "2026-01-03T00:00:00Z", "Ann")),
-    ]
-    assert "org/limited" in capsys.readouterr().err
+
+def test_list_remote_ado_disabled_repos_are_filtered_and_get_no_detail_requests(monkeypatch) -> None:
+    calls: list = []
+    repos = {
+        "A": [
+            {"name": "live", "remoteUrl": "https://a/live"},
+            {"name": "off", "remoteUrl": "https://a/off", "isDisabled": True},
+        ]
+    }
+    monkeypatch.setattr(requests, "get", _fake_ado_details([{"name": "A"}], repos, {"live": "# Live\n\nLive repo."}, {"live": "2026-01-02T03:04:05Z"}, calls))
+
+    default = list_remote(org="org", github_org=None)
+    included = list_remote(org="org", github_org=None, include_disabled=True)
+
+    assert [r.name for r in default] == ["live"]
+    assert [(r.name, r.disabled, r.description) for r in included] == [("live", False, "Live repo."), ("off", True, "")]
+    assert not [c for c in calls if "/off/" in c[0]]  # disabled repos' commits/README are never requested
+
+
+def test_list_remote_ado_skips_readme_requests_for_repos_without_commits(monkeypatch) -> None:
+    calls: list = []
+    monkeypatch.setattr(
+        requests,
+        "get",
+        _fake_ado_details([{"name": "A"}], {"A": [{"name": "empty", "remoteUrl": "https://a/empty"}]}, {}, {}, calls),
+    )
+
+    [repo] = list_remote(org="org", github_org=None)
+
+    assert repo == RemoteRepo("A", "empty", "https://a/empty")
+    assert [c[0].rsplit("/", 1)[-1] for c in calls if "/empty/" in c[0]] == ["commits"]
 
 
 def test_list_remote_ado_tries_other_readme_names(monkeypatch) -> None:
@@ -891,7 +915,7 @@ def test_list_remote_ado_tries_other_readme_names(monkeypatch) -> None:
             content = readmes.get(params["path"])
             return FakeResp(body={"content": content}) if content else FakeResp(404, {"message": "nope"})
         if url.endswith("/commits"):
-            return FakeResp(body={"value": []})
+            return FakeResp(body={"value": [{"commitId": "c1", "author": {"name": "Ann"}, "committer": {"date": "2026-01-01"}}]})
         return FakeResp(body={"value": [{"name": "alpha", "remoteUrl": "https://a/alpha"}]})
 
     monkeypatch.setattr(requests, "get", fake_get)
@@ -975,6 +999,7 @@ def test_run_list_json_is_structured(monkeypatch, capsys) -> None:
             "project": "P",
             "name": "a",
             "source": "ado",
+            "disabled": False,
             "git_url": "u1",
             "web_url": "",
             "location": None,
@@ -1136,3 +1161,36 @@ def test_cli_list_repo_no_local_flag(tmp_path, monkeypatch) -> None:
     result = runner.invoke(app, ["list-repo", "--local", "--no-local", "--root", str(tmp_path)])
 
     assert result.exit_code == 1
+
+
+def test_run_list_marks_disabled_repos_in_text_and_json(monkeypatch, capsys) -> None:
+    import json
+
+    seen: list = []
+    monkeypatch.setattr(
+        find_repo_mod,
+        "list_remote",
+        lambda **kw: seen.append(kw["include_disabled"]) or [RemoteRepo("P", "gone", "u", disabled=True), RemoteRepo("P", "ok", "u2", description="Fine")],
+    )
+
+    run_list(root=None, org="org", include_disabled=True)
+    text = capsys.readouterr().out
+    run_list(root=None, org="org", include_disabled=True, as_json=True)
+    data = json.loads(capsys.readouterr().out)
+
+    assert [line.endswith(("(DISABLED)", "Fine")) for line in text.splitlines()] == [True, True]
+    assert text.splitlines()[0].startswith("P/gone") and "(DISABLED)" in text.splitlines()[0]
+    assert [e["disabled"] for e in data] == [True, False]
+    assert seen == [True, True]
+
+
+def test_cli_list_repo_include_disabled_flag_is_forwarded(monkeypatch) -> None:
+    seen: dict = {}
+    monkeypatch.setattr(find_repo_mod, "run_list", lambda **kw: seen.update(kw))
+
+    result = runner.invoke(app, ["list-repo", "--org", "o", "--include-disabled"])
+
+    assert result.exit_code == 0, result.output
+    assert seen["include_disabled"] is True
+    runner.invoke(app, ["list-repo", "--org", "o"])
+    assert seen["include_disabled"] is False
