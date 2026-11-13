@@ -247,10 +247,13 @@ def _ado_details(org: str, repo: RemoteRepo, headers: dict[str, str]) -> RemoteR
     base = f"https://dev.azure.com/{quote(org)}/{quote(repo.project)}/_apis/git/repositories/{quote(repo.name)}"
     # Failures below are a blank field, not a failed listing (no access, empty repo, no README).
     ok, commits = _ado_get(f"{base}/commits", headers, {"searchCriteria.$top": 1})
-    if not (ok and isinstance(commits, dict) and commits.get("value")):
-        return repo  # no commits means no README either: don't spend requests on it
-    c = commits["value"][0]
-    last_commit = CommitInfo(c.get("commitId", ""), c.get("committer", {}).get("date", ""), c.get("author", {}).get("name", ""))
+    commit_list = commits.get("value") if ok and isinstance(commits, dict) else None
+    if commit_list == []:
+        return repo  # a successful answer with no commits: no README either, don't spend requests on it
+    last_commit = CommitInfo()  # also what a failed commit request leaves; the README may still be readable
+    if commit_list:
+        c = commit_list[0]
+        last_commit = CommitInfo(c.get("commitId", ""), c.get("committer", {}).get("date", ""), c.get("author", {}).get("name", ""))
     # JSON is requested explicitly: without it the items API answers with the raw file instead of `content`.
     description = ""
     for name in README_NAMES:

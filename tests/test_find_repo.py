@@ -1194,3 +1194,20 @@ def test_cli_list_repo_include_disabled_flag_is_forwarded(monkeypatch) -> None:
     assert seen["include_disabled"] is True
     runner.invoke(app, ["list-repo", "--org", "o"])
     assert seen["include_disabled"] is False
+
+
+def test_list_remote_ado_failing_commit_request_still_looks_up_the_readme(monkeypatch) -> None:
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if url.endswith("/_apis/projects"):
+            return FakeResp(body={"value": [{"name": "A"}]})
+        if url.endswith("/commits"):
+            return FakeResp(503, {"message": "try later"})
+        if url.endswith("/items"):
+            return FakeResp(body={"content": "Readable README."}) if params["path"] == "/README.md" else FakeResp(404, {})
+        return FakeResp(body={"value": [{"name": "alpha", "remoteUrl": "https://a/alpha"}]})
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    [repo] = list_remote(org="org", github_org=None)
+
+    assert (repo.description, repo.last_commit) == ("Readable README.", CommitInfo())

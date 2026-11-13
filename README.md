@@ -708,8 +708,9 @@ configured, or with `--local`, it lists the clones under the work dir instead (t
   first sentence of the README stands in (empty if there is no README, or only badges, headings and template text).
 - **Commit:** the newest commit of the default branch (GitHub / Azure DevOps).
 - **Disabled repos:** Azure DevOps (and GitHub) repos that are disabled are left out. `--include-disabled` lists them too,
-  marked `(DISABLED)` in the description column of the text output and `"disabled": true` in `--json`; they have no commit
-  or description (those aren't readable). Azure DevOps has no disabled *projects*, only disabled repos.
+  marked `(DISABLED)` in the description column of the text output and `"disabled": true` in `--json`. A disabled Azure DevOps
+  repo has no commit or description (they aren't readable, so they aren't requested). Azure DevOps has no disabled *projects*,
+  only disabled repos.
 - **Cost:** GitHub returns descriptions and newest commits in one GraphQL query per 100 repos (about 5 s for 43 repos).
   Azure DevOps needs a commit request per repo, plus README requests for repos that have commits, 16 at a time
   (about 9 s for ~300 repos). `--fast` skips those for Azure DevOps, leaving commit and description empty.
