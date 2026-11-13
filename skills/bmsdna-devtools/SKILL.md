@@ -195,6 +195,17 @@ copies an env file in (auto-detects `.local_env` then `.env`), and runs
 `--install` inside the new worktree if given. Prefer this over raw
 `git worktree add` so env-file copying and submodule init aren't forgotten.
 
+## Listing all repos
+
+```bash
+bdt list-repo [--org MYORG] [--github-org MYORG] [--local] [--fast] [--json]
+```
+
+Every repo of the Azure DevOps / GitHub org (`AZDO_ORG`, `GITHUB_ORG`; else the local clones) with newest commit
+(date, id, author) and a README/GitHub one-line description -- use it to see what repos exist before `bdt find-repo <name>`
+locates or clones one. `--json` gives an array of objects (`project`, `name`, `url`, `last_commit_id`, `last_commit_date`,
+`last_commit_author`, `description`) for processing; `--fast` skips the per-repo requests for commit and README.
+
 ## Committing and pushing
 
 ```bash

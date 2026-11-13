@@ -5,7 +5,20 @@ import requests
 from typer.testing import CliRunner
 
 from bmsdna.devtools.cli import app
-from bmsdna.devtools.find_repo import RemoteRepo, find_github, find_local, find_remote, run, work_dir
+from bmsdna.devtools import find_repo as find_repo_mod
+from bmsdna.devtools.find_repo import (
+    CommitInfo,
+    RemoteRepo,
+    find_github,
+    find_local,
+    find_remote,
+    list_local,
+    list_remote,
+    readme_summary,
+    run,
+    run_list,
+    work_dir,
+)
 
 runner = CliRunner()
 
@@ -685,3 +698,245 @@ def test_clone_appends_to_existing_git_config_env(tmp_path, monkeypatch) -> None
     assert env["GIT_CONFIG_COUNT"] == "2"
     assert (env["GIT_CONFIG_KEY_0"], env["GIT_CONFIG_VALUE_0"]) == ("http.sslCAInfo", "/etc/ca.pem")
     assert (env["GIT_CONFIG_KEY_1"], env["GIT_CONFIG_VALUE_1"]) == ("http.extraheader", "AUTHORIZATION: Basic abc")
+
+
+# --- readme_summary -------------------------------------------------------------
+
+
+def test_readme_summary_takes_first_sentence_of_first_paragraph() -> None:
+    text = "# Widgets\n\n![badge](x.svg)\n\nWidgets make\nthings. They are fast.\n\nSecond paragraph."
+
+    assert readme_summary(text) == "Widgets make things."
+
+
+def test_readme_summary_skips_templates_and_numbered_lists() -> None:
+    assert readme_summary("# Intro\nTODO: Give a short introduction.\n\nReal text here.") == "Real text here."
+    assert readme_summary("# Introduction\n1.\tInstallation process\n2.\tSoftware dependencies") == "Introduction"
+
+
+def test_readme_summary_does_not_end_a_sentence_after_a_digit_or_inside_a_version() -> None:
+    assert readme_summary("Needs Python 3.14 or newer. More.") == "Needs Python 3.14 or newer."
+
+
+def test_readme_summary_falls_back_to_heading_then_empty() -> None:
+    assert readme_summary("# Only a heading\n") == "Only a heading"
+    assert readme_summary("") == ""
+
+
+def test_readme_summary_is_shortened() -> None:
+    assert len(readme_summary("word " * 100)) == 120
+
+
+# --- list_remote ----------------------------------------------------------------
+
+
+def _fake_ado_details(projects, repos_by_project, readmes: dict[str, FakeResp | str], commits: dict[str, str], calls):
+    """Fake `requests.get` that also answers a repo's README (`/items`) and newest commit (`/commits`)."""
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        calls.append((url, headers, params))
+        if url.endswith("/_apis/projects"):
+            return FakeResp(body={"value": projects})
+        if url.endswith("/items"):
+            readme = readmes.get(url.split("/")[-2])
+            if readme is None:
+                return FakeResp(404, {"message": "no README"})
+            return readme if isinstance(readme, FakeResp) else FakeResp(body={"content": readme})
+        if url.endswith("/commits"):
+            date = commits.get(url.split("/")[-2])
+            commit = {"commitId": f"id-{url.split('/')[-2]}", "author": {"name": "Ann"}, "committer": {"date": date}}
+            return FakeResp(body={"value": [commit] if date else []})
+        return FakeResp(body={"value": repos_by_project[url.split("/")[-4]]})
+
+    return fake_get
+
+
+def test_list_remote_adds_readme_description_and_last_commit_to_ado_repos(monkeypatch) -> None:
+    calls: list = []
+    monkeypatch.setattr(
+        requests,
+        "get",
+        _fake_ado_details(
+            [{"name": "B"}, {"name": "A"}],
+            {
+                "A": [{"name": "zed", "remoteUrl": "https://a/zed"}, {"name": "alpha", "remoteUrl": "https://a/alpha"}],
+                "B": [{"name": "beta", "remoteUrl": "https://b/beta"}],
+            },
+            {"alpha": "# Alpha\n\nDoes alpha things. And more.", "beta": FakeResp(500, {"message": "boom"})},
+            {"alpha": "2026-01-02T03:04:05Z", "zed": "2025-05-05T00:00:00Z"},
+            calls,
+        ),
+    )
+
+    result = list_remote(org="org", github_org=None, pat="secret")
+
+    assert result == [
+        RemoteRepo("A", "alpha", "https://a/alpha", description="Does alpha things.", last_commit=CommitInfo("id-alpha", "2026-01-02T03:04:05Z", "Ann")),
+        RemoteRepo("A", "zed", "https://a/zed", last_commit=CommitInfo("id-zed", "2025-05-05T00:00:00Z", "Ann")),
+        RemoteRepo("B", "beta", "https://b/beta"),
+    ]
+    items = [c for c in calls if c[0].endswith("/items")]
+    assert all(c[1] == {"Authorization": "pat:secret", "Accept": "application/json"} for c in items)
+    assert all(c[2]["path"] == "/README.md" and c[2]["includeContent"] == "true" for c in items)
+
+
+def test_list_remote_fast_makes_no_per_repo_requests(monkeypatch) -> None:
+    calls: list = []
+    monkeypatch.setattr(
+        requests,
+        "get",
+        _fake_ado_details([{"name": "A"}], {"A": [{"name": "alpha", "remoteUrl": "https://a/alpha"}]}, {}, {}, calls),
+    )
+
+    result = list_remote(org="org", github_org=None, fast=True)
+
+    assert result == [RemoteRepo("A", "alpha", "https://a/alpha")]
+    assert not [c for c in calls if c[0].endswith(("/items", "/commits"))]
+
+
+class FakeGitHubCommits(FakeGitHub):
+    """FakeGitHub that also answers `repos/<org>/<name>/commits?per_page=1`."""
+
+    def __init__(self, repos, commits: dict[str, FakeResp]):
+        super().__init__(repos)
+        self.commits = commits
+        self.commit_calls: list[tuple[str, dict | None]] = []
+
+    def request(self, method, path, ok=(), **kwargs):
+        if path.endswith("/commits"):
+            self.commit_calls.append((path, kwargs.get("params")))
+            return self.commits[path.split("/")[-2]]
+        return super().request(method, path, ok=ok, **kwargs)
+
+
+def _github_repos_and_commits() -> FakeGitHubCommits:
+    commit = {"sha": "abc123", "commit": {"author": {"name": "Ann"}, "committer": {"date": "2026-03-04T05:06:07Z"}}}
+    return FakeGitHubCommits(
+        [
+            {"name": "empty", "html_url": "https://github.com/org/empty", "description": None, "pushed_at": "2020-01-01T00:00:00Z"},
+            {"name": "a", "html_url": "https://github.com/org/a", "description": "Does a", "pushed_at": "2026-03-04T05:06:08Z"},
+        ],
+        {"a": FakeResp(body=[commit]), "empty": FakeResp(409, {"message": "Git Repository is empty."})},
+    )
+
+
+def test_list_remote_reads_github_description_and_newest_commit(monkeypatch) -> None:
+    client = _github_repos_and_commits()
+    monkeypatch.setattr(find_repo_mod, "require_gh", lambda: client)
+
+    result = list_remote(org=None, github_org="org")
+
+    assert result == [
+        RemoteRepo(
+            "org",
+            "a",
+            "https://github.com/org/a",
+            source="github",
+            description="Does a",
+            last_commit=CommitInfo("abc123", "2026-03-04T05:06:07Z", "Ann"),
+        ),
+        # empty repo (HTTP 409): keeps the push time from the listing
+        RemoteRepo("org", "empty", "https://github.com/org/empty", source="github", last_commit=CommitInfo(date="2020-01-01T00:00:00Z")),
+    ]
+    assert ("repos/org/a/commits", {"per_page": 1}) in client.commit_calls
+
+
+def test_list_remote_fast_github_uses_push_time_only(monkeypatch) -> None:
+    client = _github_repos_and_commits()
+    monkeypatch.setattr(find_repo_mod, "require_gh", lambda: client)
+
+    result = list_remote(org=None, github_org="org", fast=True)
+
+    assert [r.last_commit for r in result] == [CommitInfo(date="2026-03-04T05:06:08Z"), CommitInfo(date="2020-01-01T00:00:00Z")]
+    assert client.commit_calls == []
+
+
+# --- list_local / run_list ------------------------------------------------------
+
+
+def test_list_local_reports_readme_summary_and_last_commit_date(tmp_path) -> None:
+    repo = init_repo(tmp_path / "ProjectA" / "widgets")
+    (repo / "README.md").write_text("# Widgets\n\nMakes widgets. Fast.\n")
+    _git(["add", "."], cwd=repo)
+    _git(["commit", "-q", "-m", "readme", "--date=2020-02-03T04:05:06Z"], cwd=repo)
+
+    [(path, description, last_commit)] = list_local(tmp_path)
+
+    assert path == repo
+    assert description == "Makes widgets."
+    assert last_commit.id == _git(["rev-parse", "HEAD"], cwd=repo).stdout.strip()
+    assert last_commit.author == "Test"
+    assert last_commit.date[:4].isdigit()
+
+
+def test_run_list_prints_aligned_columns(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        find_repo_mod,
+        "list_remote",
+        lambda **kw: [
+            RemoteRepo(
+                "P", "a", "u1", description="Does a", last_commit=CommitInfo("0123456789abcdef", "2026-01-02T03:04:05Z", "Ann")
+            ),
+            RemoteRepo("Project", "longer-name", "u2", last_commit=CommitInfo("fedcba9876543210", "2025-12-31T00:00:00Z", "Bo")),
+        ],
+    )
+
+    run_list(root=None, org="org")
+
+    assert capsys.readouterr().out.splitlines() == [
+        "P/a                  2026-01-02  01234567  Ann  Does a",
+        "Project/longer-name  2025-12-31  fedcba98  Bo",
+    ]
+
+
+def test_run_list_json_is_structured(monkeypatch, capsys) -> None:
+    import json
+
+    monkeypatch.setattr(
+        find_repo_mod,
+        "list_remote",
+        lambda **kw: [
+            RemoteRepo("P", "a", "u1", description="Does a", last_commit=CommitInfo("0123456789abcdef", "2026-01-02T03:04:05Z", "Ann"))
+        ],
+    )
+
+    run_list(root=None, org="org", as_json=True)
+
+    assert json.loads(capsys.readouterr().out) == [
+        {
+            "project": "P",
+            "name": "a",
+            "source": "ado",
+            "url": "u1",
+            "last_commit_id": "0123456789abcdef",
+            "last_commit_date": "2026-01-02T03:04:05Z",
+            "last_commit_author": "Ann",
+            "description": "Does a",
+        }
+    ]
+
+
+def test_cli_list_repo_local_json(tmp_path, monkeypatch) -> None:
+    import json
+
+    monkeypatch.delenv("AZDO_ORG", raising=False)
+    repo = init_repo(tmp_path / "widgets")
+    (repo / "README.md").write_text("Makes widgets.\n")
+
+    result = runner.invoke(app, ["list-repo", "--local", "--root", str(tmp_path), "--json"])
+
+    assert result.exit_code == 0, result.output
+    [entry] = json.loads(result.stdout)
+    assert entry["name"] == "widgets" and entry["location"] == str(repo)
+    assert entry["description"] == "Makes widgets."
+    assert entry["last_commit_id"] and entry["last_commit_date"] and entry["last_commit_author"] == "Test"
+
+
+def test_run_list_without_org_lists_local_clones_and_says_so(tmp_path, capsys) -> None:
+    init_repo(tmp_path / "widgets")
+
+    run_list(root=tmp_path, org=None)
+
+    captured = capsys.readouterr()
+    assert str(tmp_path / "widgets") in captured.out
+    assert "listing local clones" in captured.err
