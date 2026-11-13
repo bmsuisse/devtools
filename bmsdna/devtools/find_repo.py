@@ -31,7 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TypeVar
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlparse
 
 import requests
 
@@ -329,14 +329,81 @@ def _local_last_commit(path: Path) -> CommitInfo:
     return CommitInfo(*parts) if len(parts) == 3 else CommitInfo()
 
 
-def list_local(root: Path) -> list[tuple[Path, str, CommitInfo]]:
-    """Every clone under `root` as (path, README one-liner, newest commit)."""
+@dataclass(frozen=True)
+class LocalRepo:
+    path: Path
+    description: str
+    last_commit: CommitInfo
+    origin_url: str  # `remote.origin.url`, "" if the clone has no origin
+
+
+def _local_origin_url(path: Path) -> str:
+    try:
+        r = subprocess.run(["git", "config", "--get", "remote.origin.url"], cwd=path, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        sys.exit("'git' is required for this command but wasn't found on PATH.")
+    return r.stdout.strip()
+
+
+def list_local(root: Path) -> list[LocalRepo]:
+    """Every clone under `root` with its README one-liner, newest commit and origin URL."""
     result = []
     for path in sorted(find_repos(root)):
         readme = next((path / n for n in README_NAMES if (path / n).is_file()), None)
         text = readme.read_text(encoding="utf-8", errors="replace") if readme else ""
-        result.append((path, readme_summary(text), _local_last_commit(path)))
+        result.append(LocalRepo(path, readme_summary(text), _local_last_commit(path), _local_origin_url(path)))
     return result
+
+
+_SCP_LIKE_REMOTE = re.compile(r"^[\w.-]+@([\w.-]+):(.+)$")
+
+
+def web_url(git_url: str) -> str:
+    """Browser URL of the Azure DevOps / GitHub repo a git remote (https, `ssh://` or scp-like) points to; "" if unrecognised."""
+    scp = _SCP_LIKE_REMOTE.match(git_url)
+    if scp:
+        host, path = scp.groups()
+    else:
+        parsed = urlparse(git_url)
+        host, path = parsed.hostname or "", parsed.path
+    host = host.lower()
+    parts = [unquote(p) for p in path.strip("/").split("/")]
+    # Legacy Azure DevOps hosts: https://org.visualstudio.com/[DefaultCollection/]project/_git/repo, ssh vs-ssh.visualstudio.com
+    if host == "vs-ssh.visualstudio.com":
+        host = "ssh.dev.azure.com"
+    elif host.endswith(".visualstudio.com"):
+        org, host = host.removesuffix(".visualstudio.com"), "dev.azure.com"
+        parts = [org, *(parts[1:] if parts[0].lower() == "defaultcollection" else parts)]
+    if host == "github.com" and len(parts) == 2:
+        return f"https://github.com/{quote(parts[0], safe='')}/{quote(parts[1].removesuffix('.git'), safe='')}"
+    if host in ("dev.azure.com", "ssh.dev.azure.com"):
+        if len(parts) == 4 and parts[2] == "_git":  # https://org@dev.azure.com/org/project/_git/repo
+            org, project, repo = parts[0], parts[1], parts[3]
+        elif len(parts) == 3 and parts[1] == "_git":  # a repo named like its project: org/_git/repo
+            org, project, repo = parts[0], parts[2], parts[2]
+        elif len(parts) == 4 and parts[0] == "v3":  # ssh: v3/org/project/repo
+            org, project, repo = parts[1], parts[2], parts[3]
+        else:
+            return ""
+        return "https://dev.azure.com/" + "/".join(quote(x, safe="") for x in (org, project, "_git", repo))
+    return ""
+
+
+def local_clones_by_web_url(root: Path) -> dict[str, Path]:
+    """Clones under `root` keyed by their origin's lower-cased `web_url` (the first clone wins if a repo is cloned twice)."""
+    clones: dict[str, Path] = {}
+    for path in sorted(find_repos(root)):
+        key = web_url(_local_origin_url(path)).lower()
+        if key:
+            clones.setdefault(key, path)
+    return clones
+
+
+def _remote_urls(repo: RemoteRepo) -> tuple[str, str]:
+    """(git clone URL, browser URL) of `repo`."""
+    if repo.source == "github":  # `remote_url` is the html_url
+        return repo.remote_url.removesuffix(".git") + ".git", repo.remote_url
+    return repo.remote_url, web_url(repo.remote_url)
 
 
 def run_list(
@@ -345,6 +412,7 @@ def run_list(
     org: str | None,
     github_org: str | None = None,
     local: bool = False,
+    no_local: bool = False,
     fast: bool = False,
     as_json: bool = False,
     pat: str | None = None,
@@ -352,11 +420,16 @@ def run_list(
     """`bdt list-repo`: print every repo with its last commit date and description.
 
     Lists `org`'s Azure DevOps repos and/or `github_org`'s GitHub repos; with neither (or with
-    `local`) lists the clones under `root` (default `work_dir()`) instead.
+    `local`) lists the clones under `root` (default `work_dir()`) instead. The JSON of a remote
+    listing also names each repo's local clone (`location`, null if not cloned) unless `no_local`.
     """
-    entries: list[dict[str, str]]
+    if local and no_local:
+        sys.exit("--local and --no-local contradict each other.")
+    entries: list[dict[str, str | None]]
+    search_root = root or work_dir()
     if local or not (org or github_org):
-        search_root = root or work_dir()
+        if no_local:
+            sys.exit("--no-local needs an org to list (AZDO_ORG / GITHUB_ORG or --org / --github-org).")
         if not search_root.is_dir():
             sys.exit(
                 f"Local work dir {search_root} doesn't exist. Set AZDO_WORK_DIR (or BMS_WORK_DIR) to "
@@ -364,21 +437,30 @@ def run_list(
             )
         if not local:
             print("No org configured (AZDO_ORG / GITHUB_ORG or --org / --github-org): listing local clones.", file=sys.stderr)
-        entries = [{"name": p.name, "location": str(p), **_commit_fields(c), "description": d} for p, d, c in list_local(search_root)]
-        labels = [e["location"] for e in entries]
-    else:
-        remote = list_remote(org=org, github_org=github_org, pat=pat, fast=fast)
         entries = [
             {
-                "project": r.project,
-                "name": r.name,
-                "source": r.source,
-                "url": r.remote_url,
+                "name": r.path.name,
+                "git_url": r.origin_url,
+                "web_url": web_url(r.origin_url),
+                "location": str(r.path),
                 **_commit_fields(r.last_commit),
                 "description": r.description,
             }
-            for r in remote
+            for r in list_local(search_root)
         ]
+        labels = [str(e["location"]) for e in entries]
+    else:
+        remote = list_remote(org=org, github_org=github_org, pat=pat, fast=fast)
+        # Without a work dir there is simply nothing cloned; only the --local listing insists that it exists.
+        clones = {} if no_local or not search_root.is_dir() else local_clones_by_web_url(search_root)
+        entries = []
+        for r in remote:
+            git_url, browse_url = _remote_urls(r)
+            entry: dict[str, str | None] = {"project": r.project, "name": r.name, "source": r.source, "git_url": git_url, "web_url": browse_url}
+            if not no_local:
+                clone_path = clones.get(browse_url.lower())
+                entry["location"] = str(clone_path) if clone_path else None
+            entries.append({**entry, **_commit_fields(r.last_commit), "description": r.description})
         labels = [f"{r.project}/{r.name}" for r in remote]
 
     if as_json:
@@ -386,11 +468,11 @@ def run_list(
         return
     # Descriptions and authors are remote-controlled text: don't let them drive the terminal (JSON above keeps them verbatim).
     labels = [_printable(label) for label in labels]
-    authors = [_printable(e["last_commit_author"]) for e in entries]
+    authors = [_printable(str(e["last_commit_author"])) for e in entries]
     label_w, author_w = max(map(len, labels), default=0), max(map(len, authors), default=0)
     for label, author, e in zip(labels, authors, entries):
-        commit = f"{e['last_commit_date'][:10]:<10}  {e['last_commit_id'][:8]:<8}  {author:<{author_w}}"
-        print(f"{label:<{label_w}}  {commit}  {_printable(e['description'])}".rstrip())
+        commit = f"{str(e['last_commit_date'])[:10]:<10}  {str(e['last_commit_id'])[:8]:<8}  {author:<{author_w}}"
+        print(f"{label:<{label_w}}  {commit}  {_printable(str(e['description']))}".rstrip())
 
 
 def _printable(text: str) -> str:
@@ -398,7 +480,7 @@ def _printable(text: str) -> str:
     return "".join(c if c.isprintable() else " " for c in text)
 
 
-def _commit_fields(c: CommitInfo) -> dict[str, str]:
+def _commit_fields(c: CommitInfo) -> dict[str, str | None]:
     return {"last_commit_id": c.id, "last_commit_date": c.date, "last_commit_author": c.author}
 
 

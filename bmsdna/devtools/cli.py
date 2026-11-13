@@ -2008,7 +2008,12 @@ def list_repo_cmd(
     github_org: str | None = typer.Option(
         None, "--github-org", envvar=["GITHUB_ORG", "BMS_GITHUB_ORG"], help="GitHub org to list"
     ),
-    local: bool = typer.Option(False, "--local", help="List the local clones under --root even if an org is configured"),
+    local: bool = typer.Option(False, "--local", help="List only the local clones under --root, even if an org is configured"),
+    no_local: bool = typer.Option(
+        False,
+        "--no-local",
+        help="Don't look for local clones of the listed repos: --json then has no `location` (otherwise the clone's path, or null if not cloned)",
+    ),
     fast: bool = typer.Option(
         False,
         "--fast",
@@ -2029,9 +2034,12 @@ def list_repo_cmd(
     as `find-repo`); with no org configured, or with --local, the clones under the work dir.
     GitHub supplies its own description. Azure DevOps and local repos have none, so the first sentence of
     the README stands in. The commit is the newest one of the default branch on GitHub / Azure DevOps and of
-    any branch in a local clone. --json gives the same data as an array of objects, with full ids and dates.
+    any branch in a local clone. --json gives the same data as an array of objects, with full ids and dates, the
+    git and browser URL, and the path of the local clone (see --no-local).
     """
-    find_repo_mod.run_list(root=root, org=org, github_org=github_org, local=local, fast=fast, as_json=as_json, pat=pat)
+    find_repo_mod.run_list(
+        root=root, org=org, github_org=github_org, local=local, no_local=no_local, fast=fast, as_json=as_json, pat=pat
+    )
 
 
 @cleanup_app.command("worktrees")

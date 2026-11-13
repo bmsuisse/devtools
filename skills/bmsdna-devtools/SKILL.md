@@ -198,13 +198,14 @@ copies an env file in (auto-detects `.local_env` then `.env`), and runs
 ## Listing all repos
 
 ```bash
-bdt list-repo [--org MYORG] [--github-org MYORG] [--local] [--fast] [--json]
+bdt list-repo [--org MYORG] [--github-org MYORG] [--local] [--no-local] [--fast] [--json]
 ```
 
 Every repo of the Azure DevOps / GitHub org (`AZDO_ORG`, `GITHUB_ORG`; else the local clones) with newest commit
 (date, id, author) and a README/GitHub one-line description -- use it to see what repos exist before `bdt find-repo <name>`
-locates or clones one. `--json` gives an array of objects (`project`, `name`, `url`, `last_commit_id`, `last_commit_date`,
-`last_commit_author`, `description`) for processing; `--fast` skips the per-repo requests for commit and README.
+locates or clones one. `--json` gives an array of objects (`project`, `name`, `git_url`, `web_url`, `location`, `last_commit_id`,
+`last_commit_date`, `last_commit_author`, `description`) for processing; `location` is your local clone of the repo (null if
+none; `--no-local` skips the lookup and drops the key). `--fast` skips the per-repo requests for commit and README.
 
 ## Committing and pushing
 
