@@ -1,4 +1,4 @@
-"""Version parsing and matching for the two supported ecosystems: PyPI (PEP 440) and npm (semver).
+"""Version parsing and matching for the supported ecosystems: PyPI (PEP 440), npm (semver) and Maven (Gradle).
 
 A `spec` is a comma/space separated list of comparators (`<4.17.21`, `>=1.0,<2`, `==1.2.3`); declared npm ranges from a
 `package.json` (`^4`, `~1.2`, `1.x`, `>=1 <3 || ^5`) go through `npm_range_satisfied`.
@@ -14,8 +14,8 @@ from typing import Literal
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
 
-Ecosystem = Literal["PyPI", "npm"]
-ECOSYSTEMS: tuple[Ecosystem, ...] = ("PyPI", "npm")
+Ecosystem = Literal["PyPI", "npm", "Maven"]
+ECOSYSTEMS: tuple[Ecosystem, ...] = ("PyPI", "npm", "Maven")
 
 
 class VersionError(ValueError):
@@ -64,12 +64,91 @@ def parse_semver(text: str) -> SemVer:
     return SemVer(int(major), int(minor), int(patch), prerelease)
 
 
-def parse_version(ecosystem: Ecosystem, text: str) -> Version | SemVer:
+# Maven's ComparableVersion, without its corner cases: `1.0` == `1.0.0`, `1.0-alpha-1` < `1.0-rc1` < `1.0` < `1.0-sp1` < `1.0.1`.
+_MAVEN_QUALIFIER_RANK = {
+    "alpha": 0,
+    "a": 0,
+    "beta": 1,
+    "b": 1,
+    "milestone": 2,
+    "m": 2,
+    "rc": 3,
+    "cr": 3,
+    "snapshot": 4,
+    "": 5,
+    "ga": 5,
+    "final": 5,
+    "release": 5,
+    "sp": 6,
+}
+_MAVEN_ITEM_RE = re.compile(r"\d+|[A-Za-z]+")
+_MAVEN_VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+-]*$")
+
+
+def _maven_is_null(item: int | str) -> bool:
+    return item == 0 if isinstance(item, int) else _MAVEN_QUALIFIER_RANK.get(item) == 5
+
+
+def _maven_item_key(item: int | str) -> tuple[int, int, str]:
+    if isinstance(item, int):
+        return (2, item, "")
+    rank = _MAVEN_QUALIFIER_RANK.get(item)
+    return (1, 7, item) if rank is None else (1, rank, "")  # unknown qualifiers sort after every known one
+
+
+@total_ordering
+@dataclass(frozen=True, slots=True)
+class MavenVersion:
+    items: tuple[int | str, ...]
+    text: str
+
+    def _compare(self, other: MavenVersion) -> int:
+        for i in range(max(len(self.items), len(other.items))):
+            mine = self.items[i] if i < len(self.items) else None
+            theirs = other.items[i] if i < len(other.items) else None
+            if mine is None:  # a missing item is the "null" item of the other one's kind: 0 or the release qualifier
+                mine = 0 if isinstance(theirs, int) else ""
+            if theirs is None:
+                theirs = 0 if isinstance(mine, int) else ""
+            a, b = _maven_item_key(mine), _maven_item_key(theirs)
+            if a != b:
+                return -1 if a < b else 1
+        return 0
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, MavenVersion) and self._compare(other) == 0
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, MavenVersion):
+            return NotImplemented
+        return self._compare(other) < 0
+
+    def __hash__(self) -> int:
+        items = list(self.items)
+        while items and _maven_is_null(items[-1]):
+            items.pop()
+        return hash(tuple(items))
+
+    def __str__(self) -> str:
+        return self.text
+
+
+def parse_maven(text: str) -> MavenVersion:
+    text = text.strip()
+    if not _MAVEN_VERSION_RE.match(text):
+        raise VersionError(f"not a Maven version: {text!r}")
+    items: list[int | str] = [int(tok) if tok.isdigit() else tok for tok in _MAVEN_ITEM_RE.findall(text.lower())]
+    return MavenVersion(tuple(items), text)
+
+
+def parse_version(ecosystem: Ecosystem, text: str) -> Version | SemVer | MavenVersion:
     if ecosystem == "PyPI":
         try:
             return Version(text.strip())
         except InvalidVersion as exc:
             raise VersionError(f"not a PEP 440 version: {text!r}") from exc
+    if ecosystem == "Maven":
+        return parse_maven(text)
     return parse_semver(text)
 
 
@@ -214,6 +293,8 @@ def _names_prerelease_of(comparator: str, version: SemVer) -> bool:
 
 
 def declared_range_satisfied(ecosystem: Ecosystem, declared: str, version: str) -> bool:
+    if ecosystem == "Maven":  # Gradle catalogs pin exact versions: nothing declared is a range we could evaluate
+        raise VersionError(f"Maven version ranges are not evaluated: {declared!r}")
     return (
         pypi_specifier_satisfied(declared, version) if ecosystem == "PyPI" else npm_range_satisfied(declared, version)
     )

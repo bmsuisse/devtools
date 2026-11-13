@@ -7,6 +7,7 @@ from __future__ import annotations
 import time
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any, Protocol, cast
 from urllib.parse import quote
 
@@ -19,6 +20,12 @@ OSV_URL = "https://api.osv.dev"
 KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 PYPI_URL = "https://pypi.org/pypi"
 NPM_URL = "https://registry.npmjs.org"
+# Where a Gradle dependency can live, in lookup order: the first repository that has the POM gives the release time.
+MAVEN_REPOS = (
+    "https://repo1.maven.org/maven2",
+    "https://dl.google.com/dl/android/maven2",
+    "https://plugins.gradle.org/m2",
+)
 BATCH_SIZE = 500
 MAX_PAGES = 100  # backstop: OSV pages hold up to 1000 advisories, no package has anywhere near that many
 RETRY_ATTEMPTS = 3
@@ -122,9 +129,41 @@ class OsvClient:
         except (KeyError, TypeError) as exc:
             raise DataError("CISA KEV feed has an unexpected shape") from exc
 
+    def _maven_release_time(self, name: str, version: str) -> datetime | None:
+        """`Last-Modified` of the POM in the first Maven repository that has it (the upload time of the release)."""
+        group, _, artifact = name.partition(":")
+        path = f"{group.replace('.', '/')}/{artifact}/{version}/{artifact}-{version}.pom"
+        for repo in MAVEN_REPOS:
+            url = f"{repo}/{path}"
+            last: Exception | None = None
+            for attempt in range(RETRY_ATTEMPTS):
+                try:
+                    response = self._session.head(url, timeout=HTTP_TIMEOUT_SECS, allow_redirects=True)
+                except requests.RequestException as exc:
+                    last = exc
+                else:
+                    if response.status_code == 404:
+                        break  # not in this repository: try the next one
+                    if response.status_code in (429, 500, 502, 503, 504):
+                        last = DataError(f"HTTP {response.status_code} from {url}")
+                    elif not response.ok:
+                        raise DataError(f"HTTP {response.status_code} from {url}")
+                    else:
+                        stamp = response.headers.get("Last-Modified")
+                        try:
+                            return parsedate_to_datetime(stamp).astimezone(UTC) if stamp else None
+                        except (TypeError, ValueError) as exc:
+                            raise DataError(f"{url} has an unreadable Last-Modified header {stamp!r}") from exc
+                time.sleep(RETRY_BACKOFF_SECS * (attempt + 1))
+            else:
+                raise DataError(f"{url} unreachable: {last}")
+        return None
+
     def release_time(self, ecosystem: Ecosystem, name: str, version: str) -> datetime | None:
         """When the version was published: the youngest file for PyPI (uv gates per file), `time[version]` for npm
-        (bun's source). None when the registry doesn't know it (private package)."""
+        (bun's source), the POM's `Last-Modified` for Maven. None when the registry doesn't know it (private package)."""
+        if ecosystem == "Maven":
+            return self._maven_release_time(name, version)
         if ecosystem == "PyPI":
             data = self._request("GET", f"{PYPI_URL}/{quote(name)}/{quote(version)}/json", allow_404=True)
             files = (data or {}).get("urls") or []

@@ -8,8 +8,8 @@ from bmsdna.devtools.deps.osv import DataError, OsvClient
 
 
 class FakeResponse:
-    def __init__(self, payload: Any = None, status: int = 200) -> None:
-        self._payload, self.status_code = payload, status
+    def __init__(self, payload: Any = None, status: int = 200, headers: dict[str, str] | None = None) -> None:
+        self._payload, self.status_code, self.headers = payload, status, headers or {}
 
     @property
     def ok(self) -> bool:
@@ -29,6 +29,9 @@ class FakeSession:
         if isinstance(item, Exception):
             raise item
         return item
+
+    def head(self, url: str, **kwargs: Any) -> FakeResponse:
+        return self.request("HEAD", url, **kwargs)
 
 
 @pytest.fixture(autouse=True)
@@ -90,3 +93,24 @@ def test_a_repeating_page_token_is_an_error_not_an_endless_loop() -> None:
 
     with pytest.raises(DataError, match="does not terminate"):
         OsvClient(session).query_batch([("PyPI", "x", "1.0")])  # type: ignore[arg-type]
+
+
+def test_maven_release_time_is_the_pom_last_modified_of_the_first_repository_that_has_it() -> None:
+    session = FakeSession(
+        [FakeResponse(status=404), FakeResponse(headers={"Last-Modified": "Wed, 13 Aug 2025 20:29:43 GMT"})]
+    )
+    released = OsvClient(session).release_time("Maven", "androidx.core:core-ktx", "1.17.0")  # type: ignore[arg-type]
+
+    assert released is not None and (released.year, released.month, released.day, released.hour) == (2025, 8, 13, 20)
+    assert [call[1] for call in session.calls] == [
+        "https://repo1.maven.org/maven2/androidx/core/core-ktx/1.17.0/core-ktx-1.17.0.pom",
+        "https://dl.google.com/dl/android/maven2/androidx/core/core-ktx/1.17.0/core-ktx-1.17.0.pom",
+    ]
+
+
+def test_maven_release_time_is_none_when_no_repository_has_it_and_an_error_when_one_is_down() -> None:
+    assert OsvClient(FakeSession([FakeResponse(status=404)] * 3)).release_time("Maven", "internal:lib", "1") is None  # type: ignore[arg-type]
+    with pytest.raises(DataError):
+        OsvClient(FakeSession([FakeResponse(status=503)] * 3)).release_time("Maven", "a:b", "1")  # type: ignore[arg-type]
+    with pytest.raises(DataError):
+        OsvClient(FakeSession([FakeResponse(headers={"Last-Modified": "garbage"})])).release_time("Maven", "a:b", "1")  # type: ignore[arg-type]

@@ -287,7 +287,18 @@ def _commands(finding: Finding) -> list[str]:
     pkg, target = finding.package, finding.target
     if finding.status not in ("exempt-eligible", "bump") or not target:
         return []
-    where = f"cd {pkg.lockfile.parent}"
+    project = pkg.lockfile.parent.parent if pkg.lockfile.parent.name == "gradle" else pkg.lockfile.parent
+    where = f"cd {project}"
+    if pkg.ecosystem == "Maven":
+        step = f"{where} && set {pkg.name} to {target} in the Gradle version catalog (gradle/libs.versions.toml)" + (
+            ", then `./gradlew dependencies --write-locks`" if pkg.lockfile.name == "gradle.lockfile" else ""
+        )
+        if finding.status == "bump":
+            return [step]
+        return [
+            step,
+            f"{where} && bdt deps cooldown --exempt {pkg.name}   # Gradle has no cooldown setting: pass the exception here",
+        ]
     if pkg.ecosystem == "PyPI":
         if finding.status == "bump":
             return [f"{where} && uv lock --upgrade-package {pkg.name} && uv sync"]
