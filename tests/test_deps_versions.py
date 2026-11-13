@@ -4,6 +4,7 @@ from bmsdna.devtools.deps.versions import (
     VersionError,
     normalize_name,
     npm_range_satisfied,
+    parse_maven,
     parse_semver,
     pypi_specifier_satisfied,
     spec_matches,
@@ -26,6 +27,10 @@ def test_pypi_names_are_normalised_npm_names_are_not() -> None:
         ("PyPI", ">=2.0,<2.32.4", "2.19.1", True),
         ("PyPI", "==2.19.1", "2.19.1", True),
         ("PyPI", "!=2.19.1", "2.19.1", False),
+        ("Maven", "<4.12.1", "4.12.0", True),
+        ("Maven", ">=1.0,<2", "2.0-rc1", True),
+        ("Maven", "<2025.10.00", "2025.09.00", True),
+        ("Maven", "<1.10", "1.10.0", False),
     ],
 )
 def test_spec_matches(ecosystem: str, spec: str, version: str, expected: bool) -> None:
@@ -87,3 +92,27 @@ def test_npm_prereleases_only_satisfy_ranges_that_name_a_prerelease_of_the_same_
     declared: str, version: str, expected: bool
 ) -> None:
     assert npm_range_satisfied(declared, version) is expected
+
+
+def test_maven_ordering_follows_comparable_version() -> None:
+    assert parse_maven("1.0") == parse_maven("1.0.0")
+    assert hash(parse_maven("1.0")) == hash(parse_maven("1.0.0"))
+    assert (
+        parse_maven("1.0-alpha-1")
+        < parse_maven("1.0-beta")
+        < parse_maven("1.0-rc1")
+        < parse_maven("1.0")
+        < parse_maven("1.0-sp1")
+        < parse_maven("1.0-1")
+        < parse_maven("1.0.1")
+    )  # a hyphen opens a sublist: `1.0-1` is older than `1.0.1`
+    assert parse_maven("1.0") == parse_maven("1.0-ga") == parse_maven("1.0-final")
+    assert parse_maven("1-a1") < parse_maven("1-b1") < parse_maven("1-m1") < parse_maven("1-rc1") < parse_maven("1")
+    assert parse_maven("1.0-SNAPSHOT") < parse_maven("1.0")
+    assert parse_maven("1.9.0") < parse_maven("1.10.0")  # numeric, not lexical
+    assert parse_maven("4.12.0") < parse_maven("5.0.0-alpha.3")
+
+
+def test_a_maven_version_that_is_not_one_is_unknown() -> None:
+    with pytest.raises(VersionError):
+        parse_maven("[1.0,2.0)")

@@ -141,3 +141,91 @@ def test_an_unreadable_directory_fails_the_scan_instead_of_hiding_lockfiles(tmp_
             find_lockfiles([tmp_path])
     finally:
         locked.chmod(0o700)
+
+
+CATALOG = """\
+[versions]
+okhttp = "4.12.0"
+kotlin = { strictly = "2.2.20" }
+dynamic = "1.+"
+
+[libraries]
+okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+okio = "com.squareup.okio:okio:3.9.0"
+by-parts = { group = "org.example", name = "lib", version = "1.2.3" }
+compose-ui = { module = "androidx.compose.ui:ui" }
+floating = { module = "org.example:floating", version.ref = "dynamic" }
+
+[plugins]
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+"""
+
+GRADLE_LOCKFILE = """\
+# This is a Gradle generated file for dependency locking.
+# Manual edits can break the build and are not advised.
+com.squareup.okhttp3:okhttp:4.12.0=compileClasspath,runtimeClasspath
+com.squareup.okio:okio-jvm:3.6.0=compileClasspath,runtimeClasspath
+com.squareup.okhttp3:okhttp:4.12.0=testCompileClasspath
+empty=annotationProcessor
+"""
+
+
+def test_gradle_catalog(tmp_path: Path) -> None:
+    catalog = tmp_path / "gradle" / "libs.versions.toml"
+    catalog.parent.mkdir()
+    catalog.write_text(CATALOG, encoding="utf-8")
+    content = read_lockfile(catalog)
+
+    assert content.ecosystem == "Maven"
+    assert {(p.name, p.version) for p in content.packages} == {
+        ("com.squareup.okhttp3:okhttp", "4.12.0"),
+        ("com.squareup.okio:okio", "3.9.0"),
+        ("org.example:lib", "1.2.3"),
+        ("org.jetbrains.kotlin.android:org.jetbrains.kotlin.android.gradle.plugin", "2.2.20"),
+    }
+    assert all(p.direct for p in content.packages)
+    reasons = {u.name: u.reason for u in content.unsupported}
+    assert set(reasons) == {"androidx.compose.ui:ui", "org.example:floating"}  # reported, not silently skipped
+    assert "BOM" in reasons["androidx.compose.ui:ui"] and "dynamic" in reasons["org.example:floating"]
+
+
+def test_gradle_lockfile_marks_catalog_entries_direct(tmp_path: Path) -> None:
+    (tmp_path / "gradle").mkdir()
+    (tmp_path / "gradle" / "libs.versions.toml").write_text(CATALOG, encoding="utf-8")
+    lock = tmp_path / "gradle.lockfile"
+    lock.write_text(GRADLE_LOCKFILE, encoding="utf-8")
+    found = {(p.name, p.version): p.direct for p in read_lockfile(lock).packages}
+
+    assert found == {("com.squareup.okhttp3:okhttp", "4.12.0"): True, ("com.squareup.okio:okio-jvm", "3.6.0"): False}
+
+
+def test_read_lockfile_can_parse_text_that_is_not_on_disk(tmp_path: Path) -> None:
+    lock = tmp_path / "gradle.lockfile"  # does not exist: the content comes from an older git revision
+    assert [p.version for p in read_lockfile(lock, GRADLE_LOCKFILE).packages] == ["4.12.0", "3.6.0"]
+
+
+def test_find_lockfiles_includes_gradle_lockfiles_and_catalogs_only(tmp_path: Path) -> None:
+    for rel in (
+        "app/gradle.lockfile",
+        "app/gradle/libs.versions.toml",
+        "app/gradle/wrapper/gradle-wrapper.properties",
+        "app/pyproject.toml",
+        "app/versions.toml",
+        "app/.gradle/gradle.lockfile",
+    ):
+        target = tmp_path / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("", encoding="utf-8")
+
+    found = {p.relative_to(tmp_path.resolve()).as_posix() for p in find_lockfiles([tmp_path])}
+
+    assert found == {"app/gradle.lockfile", "app/gradle/libs.versions.toml"}
+
+
+@pytest.mark.parametrize("text", ["[tool]\nx = 1\n", '[libraries]\nbad = { module = "nogroup" }\n'])
+def test_a_catalog_that_is_not_one_or_has_bad_coordinates_is_an_error(tmp_path: Path, text: str) -> None:
+    catalog = tmp_path / "gradle" / "libs.versions.toml"
+    catalog.parent.mkdir()
+    catalog.write_text(text, encoding="utf-8")
+    with pytest.raises(LockfileError):
+        read_lockfile(catalog)
