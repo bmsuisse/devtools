@@ -170,7 +170,7 @@ def find_remote(org: str, name: str, pat: str | None = None) -> list[RemoteRepo]
     return _prefer_exact(_ado_all_repos(org, headers), name, key=lambda r: r.name)
 
 
-def _github_all_repos(client: GitHubClient, org: str) -> list[RemoteRepo]:
+def _github_all_repos(client: GitHubClient, org: str, limit: int | None = 1000) -> list[RemoteRepo]:
     """Every repo of `org`'s GitHub account.
 
     Unlike Azure DevOps, GitHub has a single flat list of repos per org/user
@@ -185,7 +185,7 @@ def _github_all_repos(client: GitHubClient, org: str) -> list[RemoteRepo]:
             path, params = "user/repos", {"affiliation": "owner"}
         else:
             path = f"users/{org_path}/repos"
-    items = client.paginate(path, params, limit=1000)
+    items = client.paginate(path, params, limit=limit)
     return [
         RemoteRepo(
             org, r["name"], r["html_url"], source="github", description=r.get("description") or "", last_commit=CommitInfo(date=r.get("pushed_at") or "")
@@ -247,10 +247,14 @@ def _ado_details(org: str, repo: RemoteRepo, headers: dict[str, str]) -> RemoteR
     base = f"https://dev.azure.com/{quote(org)}/{quote(repo.project)}/_apis/git/repositories/{quote(repo.name)}"
     # No README / empty repo / no access to the content: just a blank field, not a failed listing.
     # JSON is requested explicitly: without it the items API answers with the raw file instead of `content`.
-    ok, readme = _ado_get(
-        f"{base}/items", {**headers, "Accept": "application/json"}, {"path": "/README.md", "includeContent": "true"}
-    )
-    description = readme_summary(readme.get("content") or "") if ok and isinstance(readme, dict) else ""
+    description = ""
+    for name in README_NAMES:
+        ok, readme = _ado_get(
+            f"{base}/items", {**headers, "Accept": "application/json"}, {"path": f"/{name}", "includeContent": "true"}
+        )
+        if ok and isinstance(readme, dict):
+            description = readme_summary(readme.get("content") or "")
+            break
     ok, commits = _ado_get(f"{base}/commits", headers, {"searchCriteria.$top": 1})
     last_commit = CommitInfo()
     if ok and isinstance(commits, dict) and commits.get("value"):
@@ -261,8 +265,16 @@ def _ado_details(org: str, repo: RemoteRepo, headers: dict[str, str]) -> RemoteR
 
 def _github_last_commit(client: GitHubClient, repo: RemoteRepo) -> RemoteRepo:
     """`repo` with its default branch's newest commit (the repo listing only has the last push time)."""
-    # 404/409: no access to the commits / an empty repo -- keep the push time from the listing
-    r = client.request("GET", f"repos/{quote(repo.project, safe='')}/{quote(repo.name, safe='')}/commits", ok=(404, 409), params={"per_page": 1})
+    # Any HTTP error is non-fatal for the listing (like a failing ADO project): keep the push time from the listing.
+    # 404/409 (no access / empty repo) are expected; anything else (rate limit, 5xx) is worth a warning.
+    r = client.request(
+        "GET",
+        f"repos/{quote(repo.project, safe='')}/{quote(repo.name, safe='')}/commits",
+        ok=tuple(range(400, 600)),
+        params={"per_page": 1},
+    )
+    if r.status_code not in (200, 404, 409):
+        print(f"warning: couldn't read the newest commit of '{repo.project}/{repo.name}': HTTP {r.status_code}", file=sys.stderr)
     commits = r.json() if r.status_code == 200 else []
     if not commits:
         return repo
@@ -288,7 +300,7 @@ def list_remote(
         if org:
             searches.append(pool.submit(_ado_all_repos, org, headers))
         if github_org and gh:
-            searches.append(pool.submit(_github_all_repos, gh, github_org))
+            searches.append(pool.submit(_github_all_repos, gh, github_org, None))  # no cap: it lists *all* repos
         for search in searches:
             repos += search.result()
 
@@ -372,11 +384,18 @@ def run_list(
     if as_json:
         print(json.dumps(entries, indent=2, ensure_ascii=False))
         return
-    authors = [e["last_commit_author"] for e in entries]
+    # Descriptions and authors are remote-controlled text: don't let them drive the terminal (JSON above keeps them verbatim).
+    labels = [_printable(label) for label in labels]
+    authors = [_printable(e["last_commit_author"]) for e in entries]
     label_w, author_w = max(map(len, labels), default=0), max(map(len, authors), default=0)
-    for label, e in zip(labels, entries):
-        commit = f"{e['last_commit_date'][:10]:<10}  {e['last_commit_id'][:8]:<8}  {e['last_commit_author']:<{author_w}}"
-        print(f"{label:<{label_w}}  {commit}  {e['description']}".rstrip())
+    for label, author, e in zip(labels, authors, entries):
+        commit = f"{e['last_commit_date'][:10]:<10}  {e['last_commit_id'][:8]:<8}  {author:<{author_w}}"
+        print(f"{label:<{label_w}}  {commit}  {_printable(e['description'])}".rstrip())
+
+
+def _printable(text: str) -> str:
+    """`text` with control characters (ESC, tabs, newlines, ...) replaced by spaces."""
+    return "".join(c if c.isprintable() else " " for c in text)
 
 
 def _commit_fields(c: CommitInfo) -> dict[str, str]:

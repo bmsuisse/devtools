@@ -777,7 +777,7 @@ def test_list_remote_adds_readme_description_and_last_commit_to_ado_repos(monkey
     ]
     items = [c for c in calls if c[0].endswith("/items")]
     assert all(c[1] == {"Authorization": "pat:secret", "Accept": "application/json"} for c in items)
-    assert all(c[2]["path"] == "/README.md" and c[2]["includeContent"] == "true" for c in items)
+    assert all(c[2]["path"].lower().startswith("/readme") and c[2]["includeContent"] == "true" for c in items)
 
 
 def test_list_remote_fast_makes_no_per_repo_requests(monkeypatch) -> None:
@@ -851,6 +851,55 @@ def test_list_remote_fast_github_uses_push_time_only(monkeypatch) -> None:
     assert client.commit_calls == []
 
 
+def test_list_remote_github_has_no_repo_cap_and_survives_commit_errors(monkeypatch, capsys) -> None:
+    client = FakeGitHubCommits(
+        [
+            {"name": "limited", "html_url": "u1", "description": "d", "pushed_at": "2026-01-01T00:00:00Z"},
+            {"name": "ok", "html_url": "u2", "description": "d", "pushed_at": "2026-01-02T00:00:00Z"},
+        ],
+        {
+            "limited": FakeResp(403, {"message": "rate limited"}),
+            "ok": FakeResp(body=[{"sha": "abc", "commit": {"author": {"name": "Ann"}, "committer": {"date": "2026-01-03T00:00:00Z"}}}]),
+        },
+    )
+    limits: list = []
+    paginate = client.paginate
+    client.paginate = lambda path, params=None, **kw: (limits.append(kw.get("limit", "unset")), paginate(path, params))[1]  # type: ignore[method-assign]
+    monkeypatch.setattr(find_repo_mod, "require_gh", lambda: client)
+
+    result = list_remote(org=None, github_org="org")
+
+    assert limits == [None]
+    assert [(r.name, r.last_commit) for r in result] == [
+        ("limited", CommitInfo(date="2026-01-01T00:00:00Z")),
+        ("ok", CommitInfo("abc", "2026-01-03T00:00:00Z", "Ann")),
+    ]
+    assert "org/limited" in capsys.readouterr().err
+
+
+def test_list_remote_ado_tries_other_readme_names(monkeypatch) -> None:
+    calls: list = []
+    readmes = {"/README.markdown": "Found in the markdown variant."}
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        calls.append(params and params.get("path"))
+        if url.endswith("/_apis/projects"):
+            return FakeResp(body={"value": [{"name": "A"}]})
+        if url.endswith("/items"):
+            content = readmes.get(params["path"])
+            return FakeResp(body={"content": content}) if content else FakeResp(404, {"message": "nope"})
+        if url.endswith("/commits"):
+            return FakeResp(body={"value": []})
+        return FakeResp(body={"value": [{"name": "alpha", "remoteUrl": "https://a/alpha"}]})
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    [repo] = list_remote(org="org", github_org=None)
+
+    assert repo.description == "Found in the markdown variant."
+    assert calls.count("/README.md") == 1 and "/README" not in calls  # stops at the first name that exists
+
+
 # --- list_local / run_list ------------------------------------------------------
 
 
@@ -887,6 +936,21 @@ def test_run_list_prints_aligned_columns(monkeypatch, capsys) -> None:
         "P/a                  2026-01-02  01234567  Ann  Does a",
         "Project/longer-name  2025-12-31  fedcba98  Bo",
     ]
+
+
+def test_run_list_text_strips_terminal_control_characters_but_json_keeps_them(monkeypatch, capsys) -> None:
+    import json
+
+    evil = RemoteRepo("P", "a", "u", description="hi\x1b[2Jthere\tx", last_commit=CommitInfo("0123456789", "2026-01-02", "A\x1bB"))
+    monkeypatch.setattr(find_repo_mod, "list_remote", lambda **kw: [evil])
+
+    run_list(root=None, org="org")
+    text = capsys.readouterr().out
+    run_list(root=None, org="org", as_json=True)
+    data = capsys.readouterr().out
+
+    assert "\x1b" not in text and "\t" not in text and "hi [2J" in text
+    assert json.loads(data)[0]["description"] == "hi\x1b[2Jthere\tx"
 
 
 def test_run_list_json_is_structured(monkeypatch, capsys) -> None:
