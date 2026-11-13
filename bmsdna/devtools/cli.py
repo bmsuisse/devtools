@@ -1997,6 +1997,43 @@ def find_repo_cmd(
     find_repo_mod.run(name, root=root, org=org, github_org=github_org, yes=yes, pat=pat)
 
 
+@app.command("list-repo")
+def list_repo_cmd(
+    root: Path | None = typer.Option(
+        None,
+        "--root",
+        help="Local work dir to list when no org is set or with --local (default: $AZDO_WORK_DIR/$BMS_WORK_DIR, falling back to ~/projects, or C:/Projects on Windows)",
+    ),
+    org: str | None = typer.Option(None, "--org", envvar=["AZDO_ORG", "BMS_ORG"], help="Azure DevOps org to list"),
+    github_org: str | None = typer.Option(
+        None, "--github-org", envvar=["GITHUB_ORG", "BMS_GITHUB_ORG"], help="GitHub org to list"
+    ),
+    local: bool = typer.Option(False, "--local", help="List the local clones under --root even if an org is configured"),
+    fast: bool = typer.Option(
+        False,
+        "--fast",
+        help="Skip the extra requests per repo (newest commit; for Azure DevOps also the README). GitHub then shows only "
+        "its last push date, Azure DevOps repos no commit and no description",
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Print a JSON array instead of aligned text"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
+    ),
+) -> None:
+    """List all repos with last commit (date, id, author) and a one-line description -- the browse counterpart to `find-repo`.
+
+    Lists every repo of the Azure DevOps org and/or GitHub org (same --org/--github-org and env vars
+    as `find-repo`); with no org configured, or with --local, the clones under the work dir.
+    GitHub supplies its own description. Azure DevOps and local repos have none, so the first sentence of
+    the README stands in. The commit is the newest one of the default branch on GitHub / Azure DevOps and of
+    any branch in a local clone. --json gives the same data as an array of objects, with full ids and dates.
+    """
+    find_repo_mod.run_list(root=root, org=org, github_org=github_org, local=local, fast=fast, as_json=as_json, pat=pat)
+
+
 @cleanup_app.command("worktrees")
 def cleanup_worktrees(
     root: Path = typer.Argument(Path("."), help="Root folder to scan for git repositories (recursively)"),

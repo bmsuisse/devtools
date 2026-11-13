@@ -687,6 +687,33 @@ Set the org env vars in your shell profile to make `bdt find-repo <name>` work a
 the `cross-repo-discovery` skill's `ALL_REPOS.md` sync. Needs ADO auth / a GitHub token only when
 those orgs are searched.
 
+## `bdt list-repo`
+
+```bash
+bdt list-repo [--root ~/projects] [--org MYORG] [--github-org MYORG] [--local] [--fast] [--json] [--pat PAT]
+```
+
+The browse counterpart to `bdt find-repo`: lists **every** repo of the Azure DevOps org and/or GitHub org
+(same flags and env vars as `find-repo`), sorted by project and name, one line each:
+
+```text
+bmsuisse/bicep-cost                  2026-11-06  fbf7e85f  Adrian Ehrsam  CLI for estimating Costs for Azure Infra, based on Bicep
+```
+
+The columns are the newest commit's date, short id and author, then a one-line description. With no org
+configured, or with `--local`, it lists the clones under the work dir instead (the path takes the place of
+`project/repo`; the commit is the newest one on any branch of the clone).
+
+- **Description:** GitHub has a repo description and it is used. Azure DevOps repos and local clones have none, so the
+  first sentence of the README stands in (empty if there is no README, or only badges, headings and template text).
+- **Commit:** the newest commit of the default branch (GitHub / Azure DevOps).
+- **Cost:** GitHub needs one extra request per repo for the commit, Azure DevOps two (commit and README); all run concurrently
+  (about 15 s for ~400 Azure DevOps repos). `--fast` skips them: GitHub then shows only its last push date,
+  Azure DevOps repos no commit and no description. Repos without commits, or whose commits can't be read, have empty fields.
+- **`--json`:** prints an array of objects for scripts instead of the aligned text, with full (untruncated) values:
+  `project`, `name`, `source` (`ado`/`github`), `url`, `last_commit_id`, `last_commit_date` (ISO 8601),
+  `last_commit_author`, `description` -- local clones have `name` and `location` instead of `project`/`source`/`url`.
+
 ## `bdt cleanup worktrees` / `bdt cleanup orphaned-dbs` / `bdt cleanup db` / `bdt cleanup worktree`
 
 ```bash
