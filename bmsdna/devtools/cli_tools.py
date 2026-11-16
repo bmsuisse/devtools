@@ -9,6 +9,7 @@ concerns for arguments that come from user input, e.g. PR titles).
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import shutil
@@ -122,7 +123,7 @@ def exit_wait_timeout(msg: str, print_details: Callable[[], object], deadline: W
 
 
 _TIMEOUT_COMMANDS = ("timeout", "gtimeout")  # GNU coreutils; macOS has it as `gtimeout` unless aliased
-_TIMEOUT_OPTIONS_WITH_VALUE = ("-k", "--kill-after", "-s", "--signal")
+_TIMEOUT_LONG_OPTIONS_WITH_VALUE = ("--kill-after", "--signal")
 _DURATION_UNITS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
 _ETIME_RE = re.compile(r"^(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)$")  # [[dd-]hh:]mm:ss, as printed by `ps -o etime`
 _MAX_ANCESTORS = 8
@@ -130,19 +131,39 @@ _MAX_ANCESTORS = 8
 
 def parse_timeout_command(args: list[str]) -> float | None:
     """The duration (seconds) of a `timeout [OPTION]... DURATION COMMAND...` command line, or None if `args` isn't
-    one, the duration is 0 (= no limit) or it can't be read."""
+    one, the duration is 0 / infinite (= no limit) or the options can't be read with confidence: not detecting a
+    limit is harmless, a wrong one would cut the wait short."""
     if not args or os.path.basename(args[0]) not in _TIMEOUT_COMMANDS:
         return None
     rest = iter(args[1:])
     for arg in rest:
-        if arg in _TIMEOUT_OPTIONS_WITH_VALUE:
-            next(rest, None)
-        elif arg.startswith("-") and arg != "-":
+        if arg == "--":
+            arg = next(rest, "")
+        elif arg.startswith("--"):
+            # getopt accepts any unambiguous prefix of a long option (`--kill 5`)
+            if "=" not in arg and len(arg) > 2 and any(opt.startswith(arg) for opt in _TIMEOUT_LONG_OPTIONS_WITH_VALUE):
+                next(rest, None)
             continue
-        else:
-            m = re.fullmatch(r"(\d+(?:\.\d*)?|\.\d+)([smhd]?)", arg)
-            return float(m.group(1)) * _DURATION_UNITS[m.group(2)] or None if m else None
+        elif arg.startswith("-") and arg != "-":
+            for pos, flag in enumerate(arg[1:], start=1):
+                if flag in "ks":  # the value is the rest of the cluster (`-k5`), else the next argument
+                    if pos == len(arg) - 1:
+                        next(rest, None)
+                    break
+                if flag not in "fpv":
+                    return None
+            continue
+        return _parse_duration(arg)
     return None
+
+
+def _parse_duration(text: str) -> float | None:
+    m = re.fullmatch(r"(.+?)([smhd]?)", text)
+    try:
+        seconds = float(m.group(1)) * _DURATION_UNITS[m.group(2)] if m else 0.0
+    except ValueError:
+        return None
+    return seconds if math.isfinite(seconds) and seconds > 0 else None
 
 
 def _parse_etime(text: str) -> float | None:
@@ -174,7 +195,7 @@ def enclosing_timeout_remaining() -> float | None:
     remaining: float | None = None
     pid = os.getppid()
     for _ in range(_MAX_ANCESTORS):
-        if pid <= 1 or (info := _process_info(pid)) is None:
+        if pid < 1 or (info := _process_info(pid)) is None:
             break
         ppid, elapsed, args = info
         limit = parse_timeout_command(args)

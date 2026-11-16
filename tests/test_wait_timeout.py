@@ -23,6 +23,13 @@ from bmsdna.devtools.pr_build import run as ado_run
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def no_enclosing_timeout(monkeypatch) -> None:
+    """Whatever wraps the test run (an agent's `timeout 300 pytest`) must not clamp the waits under test; the tests
+    of the detection itself set their own."""
+    monkeypatch.setattr("bmsdna.devtools.cli_tools.enclosing_timeout_remaining", lambda: None)
+
+
 @pytest.fixture
 def sleeps(monkeypatch) -> list[float]:
     """A fake clock: `time.sleep` only advances `time.monotonic`, and records what it was asked for."""
@@ -201,6 +208,13 @@ def test_cli_rejects_a_timeout_that_is_not_a_finite_number(monkeypatch, bad) -> 
         (["gtimeout", "1.5h", "bdt"], 5400),
         (["timeout", "-k", "10", "--signal=INT", "-v", "600", "bdt"], 600),
         (["timeout", "--kill-after", "10", "--foreground", "600s", "bdt"], 600),
+        (["timeout", "-vk", "5", "600", "bdt"], 600),  # a flag cluster ending in -k takes the next argument
+        (["timeout", "-vk5", "600", "bdt"], 600),
+        (["timeout", "--kill", "5", "--sig", "KILL", "600", "bdt"], 600),  # abbreviated long options
+        (["timeout", "--", "600", "bdt"], 600),
+        (["timeout", "1e3", "bdt"], 1000),
+        (["timeout", "-x", "600", "bdt"], None),  # unknown option: don't guess
+        (["timeout", "inf", "bdt"], None),
         (["timeout", "0", "bdt"], None),  # 0 = no limit
         (["timeout", "soon", "bdt"], None),
         (["timeout"], None),
@@ -230,6 +244,14 @@ def test_the_closest_of_several_nested_timeouts_wins(monkeypatch) -> None:
     _fake_ancestors(monkeypatch, [(101, 0.0, ["timeout", "590", "bdt"]), (102, 0.0, ["bash", "-c", "..."]), (1, 50.0, ["timeout", "300", "bash"])])
 
     assert enclosing_timeout_remaining() == 250
+
+
+def test_a_timeout_that_is_pid_1_is_found_too(monkeypatch) -> None:
+    # `docker run image timeout 590 bdt pr status --wait`
+    monkeypatch.setattr("os.getppid", lambda: 1)
+    monkeypatch.setattr("bmsdna.devtools.cli_tools._process_info", lambda pid: (0, 2.0, ["timeout", "590", "bdt"]) if pid == 1 else None)
+
+    assert enclosing_timeout_remaining() == 588
 
 
 def test_no_enclosing_timeout(monkeypatch) -> None:
@@ -280,4 +302,5 @@ def test_a_real_timeout_process_is_found_above_us() -> None:
     code = "from bmsdna.devtools.cli_tools import enclosing_timeout_remaining as r; print(r())"
     out = subprocess.run(["timeout", "600", sys.executable, "-c", code], capture_output=True, encoding="utf-8", check=True).stdout
 
-    assert 590 <= float(out) <= 600
+    assert out.strip() != "None"
+    assert 0 <= float(out) <= 600  # less if the test run itself is under a shorter `timeout`
