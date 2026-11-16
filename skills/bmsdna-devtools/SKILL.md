@@ -54,7 +54,8 @@ only informational.
 
 Where your shell tool has a time limit shorter than CI (it kills the command and drops its output), run
 `bdt pr status --wait --timeout 540` (seconds, below the limit): after that long it prints the current state and
-exits 4 — just run the same command again to keep waiting. Exit 3 = a stage needs a human's approval.
+exits 4 — just run the same command again to keep waiting. (Wrapping it as `timeout 590 bdt pr status --wait` works
+too: `bdt` sees the enclosing `timeout` and stops 30 s before it.) Exit 3 = a stage needs a human's approval.
 
 `pr status`, `info`, `retry`, `publish`, `update`, `comment` (and `issue take`
 without a number) find the PR opened from the current branch into **any**

@@ -38,7 +38,7 @@ from . import translate as translate_mod
 from . import pr_build, pr_cancel, pr_info as pr_info_mod, pr_issue_link, pr_merge_defaults, pr_ref, pr_labels, pull as pull_mod, worktree as worktree_mod
 from .ado_auth import AdoAuthError, ado_session, auth_header
 from .bdt_config import find_pyproject, load_bdt_table
-from .cli_tools import CLI_TIMEOUT_SECS, EXIT_WAIT_TIMEOUT, detect_agent_session, require_gh
+from .cli_tools import CLI_TIMEOUT_SECS, EXIT_WAIT_TIMEOUT, detect_agent_session, limit_by_enclosing_timeout, require_gh
 from .github_api import GitHubClient
 from .pr_create_args import PrCreateArgsError, extract_labels, parse_pr_create_args, resolve_body, unsupported_notes
 from .deps.cli import deps_app
@@ -575,7 +575,8 @@ def pr_status(
         "--timeout",
         help="With --wait: stop after this many seconds if the checks are still running, print their current state and exit "
         f"{EXIT_WAIT_TIMEOUT} (0 = wait forever, the default). Use it where the caller's own time limit is shorter than CI, "
-        "e.g. an agent's shell tool, then re-run the same command to keep waiting",
+        "e.g. an agent's shell tool, then re-run the same command to keep waiting. Under an enclosing `timeout N` (as in "
+        "`timeout 590 bdt pr status --wait`) it is cut to end shortly before that kills us, even without --timeout",
     ),
     pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
     pat: str | None = typer.Option(None, "--pat", envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"], help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)"),
@@ -586,6 +587,8 @@ def pr_status(
     if timeout and not wait:
         raise typer.BadParameter("--timeout only works together with --wait", param_hint="--timeout")
     _check_poll_options(None, timeout)
+    if wait:
+        timeout = limit_by_enclosing_timeout(timeout)
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
