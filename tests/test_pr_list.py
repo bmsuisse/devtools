@@ -164,3 +164,11 @@ def test_pr_list_cli_rejects_unknown_state(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
 
     assert runner.invoke(app, ["pr", "list", "--state", "bogus"]).exit_code == 2
+
+
+def test_ado_list_quotes_the_repo_name() -> None:
+    session = _Session([])
+
+    pr_list.ado_list(session, AdoRemote("myorg", "MyProj", "lib%20core"))  # ty: ignore[invalid-argument-type]
+
+    assert session.calls[0][0].endswith("/repositories/lib%2520core/pullrequests")

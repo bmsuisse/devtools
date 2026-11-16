@@ -7,6 +7,7 @@ Plain data like `pr_info`, so `--json` can feed other tools. Cheap on purpose: n
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from urllib.parse import quote
 
 import requests
 
@@ -68,7 +69,7 @@ def github_list(gh: GitHubClient, state: str = "open", limit: int = 30) -> list[
 def ado_list(session: requests.Session, remote: AdoRemote, state: str = "open", limit: int = 30) -> list[PrSummary]:
     """Newest first."""
     r = session.get(
-        f"{pr_build._base_url(remote)}/_apis/git/repositories/{remote.repo}/pullrequests",
+        f"{pr_build._base_url(remote)}/_apis/git/repositories/{quote(remote.repo, safe='')}/pullrequests",
         params={"searchCriteria.status": _ADO_STATUS[state], "$top": limit, "api-version": "7.1"},
         timeout=HTTP_TIMEOUT_SECS,
     )
