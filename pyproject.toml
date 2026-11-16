@@ -112,3 +112,7 @@ ban-relative-imports = "all"
 
 [tool.ty.src]
 exclude = [".worktrees", ".claude"]
+
+[tool.uv]
+exclude-newer = "5 days"
+exclude-newer-package = { pgdevkit = false }
