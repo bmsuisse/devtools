@@ -119,9 +119,9 @@ it watches a branch-triggered build/workflow run, not any particular PR.)
 bdt pr list [--state open|merged|closed|all] [--limit N] [--json]
 ```
 
-The PRs of the current repo (Azure DevOps or GitHub), newest first: id, state, name (title) and tags
+The active PRs of the current repo (Azure DevOps or GitHub), newest first: id, state, name (title) and tags
 (labels), one per line: `#42  open (draft)  feat: widgets  [bug, test-full]`. Only open PRs unless `--state` says
-otherwise (`closed` = abandoned, i.e. not merged); `--limit` defaults to 30. `--json` prints a list of
+otherwise (`open` = active; `closed` = abandoned, i.e. not merged); `--limit` defaults to 30. `--json` prints a list of
 `{number, title, state, draft, labels, url}` (`[]` when there is none). No build or merge state per PR, as that
 is a request each: `bdt pr info --pr-id N` has it.
 

@@ -824,7 +824,7 @@ def pr_list(
         "open",
         "--state",
         "-s",
-        help="Which PRs: open (default), merged, closed (abandoned, i.e. not merged) or all",
+        help="Which PRs: open = active (default), merged, closed (abandoned, i.e. not merged) or all",
     ),
     limit: int = typer.Option(30, "--limit", "-L", min=1, help="Show at most this many PRs, newest first"),
     as_json: bool = typer.Option(False, "--json", help="Print machine-readable JSON (a list, [] when there is none)"),
@@ -836,7 +836,7 @@ def pr_list(
     ),
 ) -> None:
     """List the PRs of the current repo (Azure DevOps or GitHub, auto-detected): id, state, name and tags
-    (labels), newest first. Only open ones unless --state says otherwise."""
+    (labels), newest first. Only active (open) ones unless --state says otherwise."""
     if state not in pr_list_mod.STATES:
         raise typer.BadParameter(f"must be one of: {', '.join(pr_list_mod.STATES)}", param_hint="--state")
     remote = current_remote()
