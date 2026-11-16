@@ -106,7 +106,7 @@ def test_gh_wait_times_out_with_exit_4_and_reports_every_check(monkeypatch, slee
     monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: _gh_pr([PASSED, PENDING]))
 
     with pytest.raises(SystemExit) as exc:
-        gh_run("gh", wait=True, timeout=70)
+        gh_run(MagicMock(), wait=True, timeout=70)
 
     out = capsys.readouterr().out
     assert exc.value.code == EXIT_WAIT_TIMEOUT
@@ -131,7 +131,7 @@ def test_gh_wait_without_timeout_keeps_polling(monkeypatch, sleeps) -> None:
     monkeypatch.setattr(time, "sleep", sleep_a_few_times)
 
     with pytest.raises(EnoughError):
-        gh_run("gh", wait=True)
+        gh_run(MagicMock(), wait=True)
 
     assert len(sleeps) > 200
 
@@ -141,7 +141,7 @@ def test_gh_wait_returns_normally_when_checks_finish_before_the_deadline(monkeyp
     monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: next(polls))
     monkeypatch.setattr("bmsdna.devtools.gh_pr.deploy_run_hint", lambda gh, base: None)
 
-    gh_run("gh", wait=True, timeout=300)
+    gh_run(MagicMock(), wait=True, timeout=300)
 
     assert sleeps == [30]
     assert "Still running" not in capsys.readouterr().out
@@ -469,7 +469,7 @@ def test_gh_wait_reports_and_exits_4_on_sigterm(monkeypatch, sigterm_during_slee
     monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: _gh_pr([PASSED, PENDING]))
 
     with pytest.raises(SystemExit) as exc:
-        gh_run("gh", wait=True)
+        gh_run(MagicMock(), wait=True)
 
     out = capsys.readouterr().out
     assert exc.value.code == EXIT_WAIT_TIMEOUT
@@ -502,7 +502,7 @@ def test_status_without_wait_leaves_sigterm_alone(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.gh_pr.deploy_run_hint", lambda gh, base: None)
     before = signal.getsignal(STOP)
 
-    gh_run("gh", wait=False)
+    gh_run(MagicMock(), wait=False)
 
     assert seen == [before]
 
@@ -513,7 +513,7 @@ def test_gh_wait_stops_on_sigterm_while_mergeability_is_unknown(monkeypatch, sig
     )
 
     with pytest.raises(SystemExit) as exc:
-        gh_run("gh", wait=True)
+        gh_run(MagicMock(), wait=True)
 
     out = capsys.readouterr().out
     assert exc.value.code == EXIT_WAIT_TIMEOUT
@@ -530,7 +530,7 @@ def test_gh_wait_timeout_applies_while_mergeability_is_unknown(monkeypatch, slee
     )
 
     with pytest.raises(SystemExit) as exc:
-        gh_run("gh", wait=True, timeout=10)
+        gh_run(MagicMock(), wait=True, timeout=10)
 
     assert exc.value.code == EXIT_WAIT_TIMEOUT
     assert sleeps == [3, 3, 3, 1]

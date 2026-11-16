@@ -596,8 +596,8 @@ def test_get_pr_without_target_does_not_filter_on_it() -> None:
         def json(self):
             return {"value": [{"pullRequestId": 1, "targetRefName": "refs/heads/main", "mergeStatus": "succeeded"}]}
 
-    class Sess:
-        def get(self, url, params, timeout):
+    class Sess(requests.Session):
+        def get(self, url, params=None, **kwargs):
             seen.append(params)
             return Resp()
 

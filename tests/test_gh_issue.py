@@ -437,8 +437,8 @@ def test_create_web_opens_the_issue(monkeypatch) -> None:
 
 
 def test_create_with_board_adds_the_issue_to_the_project() -> None:
-    gh = FakeGitHub({CREATE: CREATED}, graphql=_projects_graphql([{"id": "PVT_1", "title": "Roadmap", "number": 7}]))
-    base = gh.graphql_handler
+    base = _projects_graphql([{"id": "PVT_1", "title": "Roadmap", "number": 7}])
+    gh = FakeGitHub({CREATE: CREATED}, graphql=base)
     gh.graphql_handler = lambda q, v: {} if "addProjectV2ItemById" in q else base(q, v)
 
     create(gh, "owner", "repo", "Bug title", "body text", [], [], [], board="Roadmap")

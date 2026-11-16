@@ -25,7 +25,7 @@ dependencies = [
     # (schema-apply machinery), which needs psycopg-pool/pydantic -- plain
     # `pgdevkit` alone fails to import pgdevkit.testdb. Possibly worth reporting
     # upstream, but harmless to depend on here either way.
-    "pgdevkit[db]>=0.7.1",
+    "pgdevkit[db]>=0.19.0",
 ]
 
 # `sqlglot` is already a transitive dependency of pgdevkit today, but `bdt lint`'s SQL rules
@@ -45,8 +45,8 @@ bdt = "bmsdna.devtools.cli:app"
 
 [dependency-groups]
 dev = [
-    "ty>=0.0.59",
-    "ruff>=0.14.0",
+    "ty>=0.0.100",
+    "ruff>=0.17.4",
 ]
 test = [
     "pytest>=9.1.0",
@@ -112,3 +112,7 @@ ban-relative-imports = "all"
 
 [tool.ty.src]
 exclude = [".worktrees", ".claude"]
+
+[tool.uv]
+exclude-newer = "5 days"
+exclude-newer-package = { pgdevkit = false }

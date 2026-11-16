@@ -1,6 +1,7 @@
 """`bdt pr info` (polled by status integrations) and `bdt issue take` (GitHub issue #68)."""
 
 import json
+from collections.abc import Collection
 
 import pytest
 import requests
@@ -218,12 +219,12 @@ def test_pr_info_passes_pr_id(monkeypatch) -> None:
     assert seen == {"pr_id": 5}
 
 
-def _two_open_prs(monkeypatch) -> list[tuple]:
+def _two_open_prs(monkeypatch) -> list[int | None]:
     """GitHub remote whose branch has PRs 69 and 70 open; returns the `(number, target)` lookups made."""
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.open_pr_numbers", lambda gh, target=None: [69, 70])
-    seen: list[tuple] = []
+    seen: list[int | None] = []
 
     def get_pr(gh, pr_id=None, fields=""):
         seen.append(pr_id)
@@ -425,7 +426,7 @@ def test_split_values_takes_repeated_and_comma_separated() -> None:
     assert pr_ref.split_values(["1, 2", "o/r#3", " ", "4,"]) == ["1", "2", "o/r#3", "4"]
 
 
-def _ref_cli(monkeypatch, missing: set[str] = frozenset()) -> list[tuple]:
+def _ref_cli(monkeypatch, missing: Collection[str] = ()) -> list[tuple]:
     """GitHub remote; PRs are answered per (owner/repo, number), those in `missing` fail like GitHub's 404 does."""
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli._current_remote_or_none", lambda: GITHUB_REMOTE)
