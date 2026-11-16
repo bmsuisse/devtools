@@ -50,6 +50,7 @@ from bmsdna.devtools import issue_watch as issue_watch_mod
 from bmsdna.devtools import lint as lint_mod
 from bmsdna.devtools import logs as logs_mod
 from bmsdna.devtools import pr_info as pr_info_mod
+from bmsdna.devtools import pr_list as pr_list_mod
 from bmsdna.devtools import pull as pull_mod
 from bmsdna.devtools import translate as translate_mod
 from bmsdna.devtools import worktree as worktree_mod
@@ -815,6 +816,38 @@ def pr_info(
         typer.echo(json.dumps(info.to_json_dict()))
         return
     typer.echo(_info_text(info))
+
+
+@pr_app.command("list")
+def pr_list(
+    state: str = typer.Option(
+        "open",
+        "--state",
+        "-s",
+        help="Which PRs: open (default), merged, closed (abandoned, i.e. not merged) or all",
+    ),
+    limit: int = typer.Option(30, "--limit", "-L", min=1, help="Show at most this many PRs, newest first"),
+    as_json: bool = typer.Option(False, "--json", help="Print machine-readable JSON (a list, [] when there is none)"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
+    ),
+) -> None:
+    """List the PRs of the current repo (Azure DevOps or GitHub, auto-detected): id, state, name and tags
+    (labels), newest first. Only open ones unless --state says otherwise."""
+    if state not in pr_list_mod.STATES:
+        raise typer.BadParameter(f"must be one of: {', '.join(pr_list_mod.STATES)}", param_hint="--state")
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        prs = pr_list_mod.github_list(require_gh(), state, limit)
+    else:
+        prs = pr_list_mod.ado_list(ado_session(pat), remote, state, limit)
+    if as_json:
+        typer.echo(json.dumps([p.to_json_dict() for p in prs]))
+    elif prs:
+        typer.echo("\n".join(pr_list_mod.summary_text(p) for p in prs))
 
 
 @pr_app.command("retry")
