@@ -137,17 +137,28 @@ def create(
     if path.exists():
         sys.exit(f"error: {path} already exists")
 
+    # Run from a sub-folder of a monorepo, the worktree still holds the whole repository: the env file and the install
+    # command belong in the same sub-folder of it (`<worktree>/app`), the project, not in the worktree's top level.
+    # Asked before the worktree exists, so a failure leaves nothing behind.
+    found = _run_capture(["git", "rev-parse", "--show-prefix"], cwd=root)
+    if found.returncode != 0:
+        sys.exit(f"error: {root} is not inside a git work tree: {found.stderr.strip()}")
+    prefix = found.stdout.removesuffix("\n")
+
     start, remote_start = _start_point(root, base)
     # --no-track: the new branch must not push to / compare against origin/<base>
     _run(["git", "worktree", "add", *(["--no-track"] if remote_start else []), str(path), "-b", name, start], cwd=root)
     _ensure_worktree_gitignore(root)
 
-    # Run from a sub-folder of a monorepo, the worktree still holds the whole repository: the env file and the install
-    # command belong in the same sub-folder of it (`<worktree>/app`), the project, not in the worktree's top level.
-    prefix = _run_capture(["git", "rev-parse", "--show-prefix"], cwd=root).stdout.removesuffix("\n")
     project = path / prefix if prefix else path
+    if not project.is_dir():
+        print(
+            f"warning: {base} has no {prefix}; the env file and the install command use the worktree root",
+            file=sys.stderr,
+        )
+        project = path
 
-    if submodules and (root / ".gitmodules").exists():
+    if submodules and (path / ".gitmodules").exists():
         _run(["git", "submodule", "update", "--init"], cwd=path)
 
     if env_file is None:
@@ -185,7 +196,7 @@ def create(
         )
     else:
         print("Hint: run `bdt pull` in it to pull the latest main/master and default branch.")
-    return path
+    return project
 
 
 # --- Discovery: repos and their worktrees -------------------------------
