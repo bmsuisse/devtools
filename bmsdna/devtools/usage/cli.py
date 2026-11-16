@@ -6,6 +6,7 @@ import os
 import sys
 from datetime import date
 from pathlib import Path
+from types import ModuleType
 
 import typer
 
@@ -29,7 +30,7 @@ def default_data_dir() -> Path:
     return cache / "bdt" / "usage"
 
 
-def require_duckdb():
+def require_duckdb() -> ModuleType:
     try:
         import duckdb
     except ImportError:

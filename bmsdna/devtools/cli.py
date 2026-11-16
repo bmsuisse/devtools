@@ -16,6 +16,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
+from typing import Any
 
 import requests
 import typer
@@ -104,7 +105,7 @@ ADO_TOKEN_REFRESH_SECS = 1800.0
 class _BdtTyper(typer.Typer):
     """Shows an `AdoAuthError` (which says by itself what to fix) as plain text, not a traceback."""
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
         try:
             return super().__call__(*args, **kwargs)
         except AdoAuthError as e:

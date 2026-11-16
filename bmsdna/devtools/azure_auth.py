@@ -5,12 +5,16 @@ from __future__ import annotations
 
 import functools
 import sys
+from typing import TYPE_CHECKING
 
 from bmsdna.devtools.cli_tools import CLI_TIMEOUT_SECS
 
+if TYPE_CHECKING:
+    from azure.identity import DefaultAzureCredential
+
 
 @functools.cache
-def _credential():
+def _credential() -> DefaultAzureCredential:
     """One credential chain per process (it caches tokens). `process_timeout` bounds the `az` subprocess
     `AzureCliCredential` runs -- a cold start can exceed azure-identity's 10s default."""
     from azure.identity import DefaultAzureCredential

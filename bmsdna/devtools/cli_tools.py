@@ -22,7 +22,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType, TracebackType
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
+
+if TYPE_CHECKING:
+    from bmsdna.devtools.github_api import GitHubClient
 
 PSQL_INSTALL_HINT = "Install the PostgreSQL client tools (psql): https://www.postgresql.org/download/"
 
@@ -438,7 +441,7 @@ def require_tool(name: str, install_hint: str) -> str:
     return path
 
 
-def require_gh():
+def require_gh() -> GitHubClient:
     """An authenticated raw-HTTP GitHub client (see `github_api`); exits with a hint when no token is found."""
     from bmsdna.devtools.github_api import get_client
 

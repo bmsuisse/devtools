@@ -26,7 +26,7 @@ BUILTIN_COMMIT_TYPES = {"feat", "fix", "docs", "style", "refactor", "perf", "tes
 _CONVENTIONAL_COMMIT_RE = re.compile(r"^(?P<type>[a-z]+)(?:\((?P<scope>[^)]+)\))?!?: .+")
 
 
-def allowed_commit_types(start=None) -> set[str]:
+def allowed_commit_types(start: Path | None = None) -> set[str]:
     """`BUILTIN_COMMIT_TYPES` plus whatever a repo adds under `[tool.bdt.commit]`:
 
         [tool.bdt.commit]
@@ -41,7 +41,7 @@ def allowed_commit_types(start=None) -> set[str]:
     return BUILTIN_COMMIT_TYPES | {t for t in extra if isinstance(t, str)}
 
 
-def allowed_commit_scopes(start=None) -> set[str]:
+def allowed_commit_scopes(start: Path | None = None) -> set[str]:
     """`[tool.bdt.commit] scopes = [...]` -- opt-in, like `[tool.bdt.pr.required_labels]`:
     unconfigured (the default, empty set) means any scope, or no scope at all, is
     accepted. Configuring it only restricts which scope a message *may* name; a

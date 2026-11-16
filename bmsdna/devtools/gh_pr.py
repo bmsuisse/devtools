@@ -100,7 +100,7 @@ _STATUS_CONTEXT_BUCKET = {
 _RUN_ID_RE = re.compile(r"/actions/runs/(\d+)")
 
 
-def _run(args: list[str], *, timeout: float = CLI_TIMEOUT_SECS, **kwargs) -> subprocess.CompletedProcess:
+def _run(args: list[str], *, timeout: float = CLI_TIMEOUT_SECS, **kwargs: Any) -> subprocess.CompletedProcess:
     """`subprocess.run` bounded by `timeout` (defaults to `CLI_TIMEOUT_SECS`) -- every `git` call
     in this module goes through this instead of calling `subprocess.run` directly, so a stalled
     network call or `git` blocking on an interactive prompt can't hang the caller forever.

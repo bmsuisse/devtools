@@ -28,9 +28,10 @@ import ast
 import itertools
 import re
 import sys
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from bmsdna.devtools.bdt_config import load_bdt_table
 from bmsdna.devtools.lint_findings import Finding
@@ -38,12 +39,16 @@ from bmsdna.devtools.lint_findings import Finding
 # This module must import cleanly without sqlglot installed -- require_sqlglot() is what gives
 # a clear error (with an install hint), not an ImportError at `bdt`'s own startup (cli.py
 # imports this unconditionally, for every `bdt` subcommand, not just `bdt lint`).
-try:
+if TYPE_CHECKING:
     import sqlglot
     from sqlglot import exp
-except ImportError:  # pragma: no cover - exercised via require_sqlglot()
-    sqlglot = None  # type: ignore
-    exp = None  # type: ignore
+else:
+    try:
+        import sqlglot
+        from sqlglot import exp
+    except ImportError:  # pragma: no cover - exercised via require_sqlglot()
+        sqlglot = None
+        exp = None
 
 SQLGLOT_INSTALL_HINT = (
     "Install it: `uv add sqlglot` (or `uv sync --extra lint` if this project depends on bmsdna-devtools[lint])."
@@ -85,6 +90,9 @@ _MAX_PROBE_SLOTS = 4
 
 _MAX_RESOLVE_HOPS = 5
 
+# Resolves a variable name to every expression assigned to it in the enclosing scope
+_Lookup = Callable[[str], Sequence[ast.expr]]
+
 
 def require_sqlglot() -> None:
     """Mirrors `cli_tools.require_tool`'s `sys.exit(message)` convention (a clear message +
@@ -105,7 +113,7 @@ def load_sql_functions(root: Path | None = None) -> frozenset[str]:
     return frozenset(name.strip().rpartition(".")[2] for name in configured)
 
 
-def parse_sql_text(text: str, dialect: str = "postgres") -> exp.Expression | None:
+def parse_sql_text(text: str, dialect: str = "postgres") -> exp.Expr | None:
     """`text` parsed as one statement, or None if it fails to parse or doesn't parse as one of
     `_ACCEPTED_STATEMENT_TYPES` -- the gate that makes every rule below "pretty sure it's really
     SQL" before applying (see module docstring)."""
@@ -286,7 +294,7 @@ def _file_trust(tree: ast.AST) -> _Trust:
     )
 
 
-def _resolve_single(expr: ast.expr, lookup) -> ast.expr:
+def _resolve_single(expr: ast.expr, lookup: _Lookup) -> ast.expr:
     """Follow a `Name` back through `lookup` up to `_MAX_RESOLVE_HOPS` times, taking the
     *first* candidate assignment at each hop. Used only for secondary/nested resolutions (the
     left side of a `%`-format, a `.format()` template, a concat operand) where collapsing
@@ -303,7 +311,7 @@ def _resolve_single(expr: ast.expr, lookup) -> ast.expr:
     return expr
 
 
-def _resolve_candidates(expr: ast.expr, lookup, _depth: int = 0) -> list[ast.expr]:
+def _resolve_candidates(expr: ast.expr, lookup: _Lookup, _depth: int = 0) -> list[ast.expr]:
     """Every value `expr` could resolve to, following `Name` -> assignment(s) through
     `lookup`. A name assigned more than once in its scope (e.g. once per `if`/`else` branch)
     yields one candidate per assignment -- deliberately not just the textually-last one: a
@@ -333,7 +341,7 @@ def _fstring_probe_text(node: ast.JoinedStr) -> str:
     return "".join(parts)
 
 
-def _concat_probe_text(node: ast.BinOp, lookup) -> str | None:
+def _concat_probe_text(node: ast.BinOp, lookup: _Lookup) -> str | None:
     """Flattens a chain of `+` string concatenation into probe text, substituting
     `_PROBE_PLACEHOLDER` for any non-literal operand. Returns None if no operand at all is a
     string literal (i.e. this is very unlikely to be SQL text -- e.g. plain numeric addition)."""
@@ -394,14 +402,14 @@ if exp is not None:
     }
 
 
-def _parse_any_dialect(text: str, databricks: bool) -> exp.Expression | None:
+def _parse_any_dialect(text: str, databricks: bool) -> exp.Expr | None:
     parsed = parse_sql_text(text)
     if parsed is None and databricks:
         parsed = parse_sql_text(text, "databricks")
     return parsed
 
 
-def _parse_probe_text(text: str, databricks: bool = False) -> exp.Expression | None:
+def _parse_probe_text(text: str, databricks: bool = False) -> exp.Expr | None:
     """`parse_sql_text` for text with `_PROBE_PLACEHOLDER` standing in for dynamic fragments: the placeholder
     as an identifier first, then (see `_PROBE_SLOT_VARIANTS`) every fragment as nothing/an assignment -- the
     latter only when the literal text carries the statement's own keyword (`_VARIANT_REQUIRED_KEYWORD`)."""
@@ -440,7 +448,7 @@ def _injection_finding(
     return [Finding(path, lineno, rule, f"SQL built with {how} -- injection risk. {fix}")]
 
 
-def _complexity_findings(parsed: exp.Expression, text: str, path: Path, lineno: int) -> list[Finding]:
+def _complexity_findings(parsed: exp.Expr, text: str, path: Path, lineno: int) -> list[Finding]:
     findings: list[Finding] = []
     line_count = len([line for line in text.splitlines() if line.strip()])
     has_complex_construct = (
@@ -509,7 +517,7 @@ def _literal_findings(
 
 def _check_resolved_candidate(
     resolved: ast.expr,
-    lookup,
+    lookup: _Lookup,
     path: Path,
     lineno: int,
     trust: _Trust = _NO_TRUST,
@@ -600,7 +608,7 @@ def _unverified_cast_finding(path: Path, lineno: int) -> Finding:
 
 def _check_query_arg(
     expr: ast.expr,
-    lookup,
+    lookup: _Lookup,
     path: Path,
     lineno: int,
     trust: _Trust = _NO_TRUST,
@@ -753,7 +761,7 @@ def _elements(node: ast.expr) -> list[ast.expr]:
 
 
 def _sqlglot_builder_findings(
-    call: ast.Call, path: Path, trust: _Trust, lookup, sqlglot_vars: set[str]
+    call: ast.Call, path: Path, trust: _Trust, lookup: _Lookup, sqlglot_vars: set[str]
 ) -> list[Finding]:
     if not trust.sqlglot_names:
         return []

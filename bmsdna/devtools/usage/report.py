@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import json
 from pathlib import Path
+from typing import Any
 
 import duckdb
 import plotly.graph_objects as go
@@ -62,7 +63,7 @@ def _srows(con: duckdb.DuckDBPyConnection, sql: str) -> list[dict]:
     return rows
 
 
-def _layout(fig: go.Figure, height: int, **kw) -> go.Figure:
+def _layout(fig: go.Figure, height: int, **kw: Any) -> go.Figure:
     light = INK["light"]
     fig.update_layout(
         height=height,
@@ -79,7 +80,7 @@ def _layout(fig: go.Figure, height: int, **kw) -> go.Figure:
     return fig
 
 
-def _bar(name: str, slot: int, **kw) -> go.Bar:
+def _bar(name: str, slot: int, **kw: Any) -> go.Bar:
     return go.Bar(
         name=name,
         meta={"slot": slot},
@@ -88,7 +89,7 @@ def _bar(name: str, slot: int, **kw) -> go.Bar:
     )
 
 
-def fig_cost_share(con) -> go.Figure:
+def fig_cost_share(con: duckdb.DuckDBPyConnection) -> go.Figure:
     steps = _srows(con, "SELECT label, pct_cost, cost FROM v_steps ORDER BY ord")
     by_actor = {
         (r["label"], r["actor_kind"]): r
@@ -128,7 +129,7 @@ def fig_cost_share(con) -> go.Figure:
     return _layout(fig, 430)
 
 
-def fig_metrics(con) -> go.Figure:
+def fig_metrics(con: duckdb.DuckDBPyConnection) -> go.Figure:
     steps = _srows(con, "SELECT label, pct_tokens, pct_fresh_tokens, pct_cost FROM v_steps ORDER BY ord")
     labels = [s["label"] for s in steps]
     fig = go.Figure()
@@ -153,7 +154,7 @@ def fig_metrics(con) -> go.Figure:
     return _layout(fig, 640)
 
 
-def fig_token_kinds(con) -> go.Figure:
+def fig_token_kinds(con: duckdb.DuckDBPyConnection) -> go.Figure:
     rows = _srows(con, "SELECT label, kind, cost FROM v_steps_token_kind ORDER BY ord")
     labels = list(dict.fromkeys(r["label"] for r in rows))
     totals = {lbl: sum(r["cost"] for r in rows if r["label"] == lbl) or 1 for lbl in labels}
@@ -177,7 +178,7 @@ def fig_token_kinds(con) -> go.Figure:
     return _layout(fig, 430)
 
 
-def fig_session_spread(con) -> go.Figure:
+def fig_session_spread(con: duckdb.DuckDBPyConnection) -> go.Figure:
     rows = _srows(con, "SELECT label, pct_of_session, title FROM v_session_steps ORDER BY ord")
     labels = list(dict.fromkeys(r["label"] for r in rows))
     all_sessions = {r["title"] for r in rows}
@@ -208,7 +209,7 @@ def fig_session_spread(con) -> go.Figure:
     return _layout(fig, 560)
 
 
-def fig_top_agents(con, n: int = 12) -> go.Figure:
+def fig_top_agents(con: duckdb.DuckDBPyConnection, n: int = 12) -> go.Figure:
     rows = _rows(
         con, f"SELECT description, agent_type, dominant_phase, msgs, cost FROM v_agents ORDER BY cost DESC LIMIT {n}"
     )
@@ -231,7 +232,7 @@ def fig_top_agents(con, n: int = 12) -> go.Figure:
     return _layout(fig, 400)
 
 
-def fig_images(con) -> go.Figure:
+def fig_images(con: duckdb.DuckDBPyConnection) -> go.Figure:
     rows = _srows(con, "SELECT label, img_carry_cost, pct_of_step_cost FROM v_images ORDER BY ord")
     fig = go.Figure(
         _bar(
@@ -251,7 +252,7 @@ def fig_images(con) -> go.Figure:
     return _layout(fig, 400)
 
 
-def findings(con) -> list[str]:
+def findings(con: duckdb.DuckDBPyConnection) -> list[str]:
     s = _rows(con, "SELECT * FROM v_summary")[0]
     steps = _rows(con, "SELECT * FROM v_steps ORDER BY pct_cost DESC")
     by_phase = {r["phase"]: r for r in steps}
@@ -293,7 +294,7 @@ def _unpriced_note(summary: dict) -> str:
     )
 
 
-def _table(con) -> str:
+def _table(con: duckdb.DuckDBPyConnection) -> str:
     rows = _rows(con, "SELECT * FROM v_steps ORDER BY ord")
     head = [
         "Step",
@@ -316,7 +317,7 @@ def _table(con) -> str:
     return "<table><thead><tr>" + "".join(f"<th>{h}</th>" for h in head) + f"</tr></thead><tbody>{body}</tbody></table>"
 
 
-def _agent_table(con) -> str:
+def _agent_table(con: duckdb.DuckDBPyConnection) -> str:
     rows = _rows(con, "SELECT * FROM v_agent_types ORDER BY cost DESC LIMIT 15")
     body = "".join(
         f"<tr><th scope=row>{html.escape(r['agent_type'])}</th><td>{html.escape(r['phase'] or '')}</td><td>{r['agents']}</td>"

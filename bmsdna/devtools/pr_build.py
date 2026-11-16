@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import NoReturn
 from urllib.parse import quote
@@ -55,7 +56,7 @@ def _base_url(remote: AdoRemote) -> str:
     return f"https://dev.azure.com/{remote.org}/{quote(remote.project, safe='')}"
 
 
-def _poll_or_exit(fn, *args, **kwargs):
+def _poll_or_exit[**P, R](fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
     """Calls `fn(*args, **kwargs)`, converting a network/timeout failure into a clear exit
     message instead of an uncaught `requests` traceback -- for the calls a `--wait` poll
     loop (`run`/`run_watch_deploy`) makes every 30s, where a bare `raise` would otherwise
@@ -1365,6 +1366,7 @@ def _status(
     baseline_completed_ids: dict[int, int] = {}
     if wait:
         pr = _poll_or_exit(fetch_pr)
+        assert source_branch is not None  # fetch_pr resolved it
         for b in _poll_or_exit(get_builds_for_pr, session, remote, source_branch, pr["pullRequestId"]):
             if b.get("status") != "completed":
                 continue
@@ -1410,6 +1412,7 @@ def _status(
 
         msg = f"\rPR #{pr_number}: {pr_title} ({pr_status})"
 
+        assert source_branch is not None  # fetch_pr resolved it
         builds = _poll_or_exit(get_builds_for_pr, session, remote, source_branch, pr_number)
         if builds:
             pipeline_builds = latest_per_pipeline(builds)

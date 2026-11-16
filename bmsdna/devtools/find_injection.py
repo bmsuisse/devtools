@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
@@ -237,7 +238,7 @@ def _is_minified(path: Path) -> bool:
     return path.name.endswith(".min.js")
 
 
-def _walk_repo_text_files(root: Path, scope: _ScanFilter):
+def _walk_repo_text_files(root: Path, scope: _ScanFilter) -> Iterator[Path]:
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in scope.dir_names]
         for name in filenames:

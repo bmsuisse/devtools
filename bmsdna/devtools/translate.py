@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import re
 import tomllib
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -145,7 +146,7 @@ def import_existing(cfg: Config, transls: Translations) -> int:
     return added
 
 
-def _iter_files(roots: list[Path], suffixes: set[str]):
+def _iter_files(roots: list[Path], suffixes: set[str]) -> Iterator[Path]:
     for root in roots:
         files = [root] if root.is_file() else sorted(root.rglob("*")) if root.is_dir() else []
         for f in files:

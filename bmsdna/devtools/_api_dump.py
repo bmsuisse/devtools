@@ -11,13 +11,14 @@ import importlib
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 HTTP_METHODS = ("get", "post", "put", "patch", "delete", "options", "head")
 
 
-def ops_from_doc(doc, mount=""):
+def ops_from_doc(doc: dict[str, Any], mount: str = "") -> list[dict[str, Any]]:
     """Operations of one OpenAPI document as dicts, with `mount` prepended to every path."""
-    ops = []
+    ops: list[dict[str, Any]] = []
     for path, item in (doc.get("paths") or {}).items():
         for method, op in item.items():
             if method in HTTP_METHODS and isinstance(op, dict):
@@ -33,7 +34,7 @@ def ops_from_doc(doc, mount=""):
     return ops
 
 
-def collect(app, mount=""):
+def collect(app: Any, mount: str = "") -> list[dict[str, Any]]:
     """Operations of `app` and, recursively, of every mounted sub-app. Uses only `app.openapi()` and the
     `.path`/`.app` attributes of mount routes -- not FastAPI internals, which change between releases (FastAPI 0.141 wraps
     included routers in lazy objects that `app.routes` no longer lists as plain routes)."""
@@ -52,7 +53,7 @@ def collect(app, mount=""):
     return ops
 
 
-def main(argv):
+def main(argv: list[str]) -> None:
     module_name, _, attr = argv[0].partition(":")
     app = getattr(importlib.import_module(module_name), attr)
     with Path(argv[1]).open("w", encoding="utf-8") as out:

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import re
+from collections.abc import Callable
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -154,8 +155,8 @@ def _is_sign_in_page(response: requests.Response) -> bool:
     return response.status_code == 200 and "text/html" in response.headers.get("Content-Type", "")
 
 
-def _check_auth_hook(pat_used: bool):
-    def hook(response: requests.Response, *args, **kwargs) -> requests.Response:
+def _check_auth_hook(pat_used: bool) -> Callable[..., requests.Response]:
+    def hook(response: requests.Response, *args: object, **kwargs: object) -> requests.Response:
         if _is_sign_in_page(response):
             # one status for "not signed in", however Azure DevOps phrased it, so callers' `>= 400` checks agree
             response.status_code = 401
