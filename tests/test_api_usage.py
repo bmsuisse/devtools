@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import textwrap
 import time
@@ -510,7 +511,7 @@ def test_baseline_stale_reason(tmp_path: Path, change: str, reason: str) -> None
     if change == "called":
         _write(tmp_path, "fe/src/b.ts", "fetch('/api/dead');\n")
     else:
-        config = au.AppConfig(**{**{f: getattr(config, f) for f in config.__slots__}, "exclude_tags": ["t"]})
+        config = dataclasses.replace(config, exclude_tags=["t"])
     findings = au.check_app(config, repo_root=tmp_path)
     assert [f.rule for f in findings] == ["api-route-baseline-stale"]
     assert reason in findings[0].message

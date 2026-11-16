@@ -187,14 +187,14 @@ def gh_list(monkeypatch):
 def test_gh_pr_id_is_used_as_is_without_looking_anything_up(gh_list, never_asks) -> None:
     client = gh_list([GH_INTO_MAIN, GH_INTO_DEV])
 
-    assert gh_pr.resolve_pr_id(client, 99) == 99  # ty: ignore[invalid-argument-type]
+    assert gh_pr.resolve_pr_id(client, 99) == 99
     assert client.calls == []
 
 
 def test_gh_single_open_pr_into_main_is_used_without_asking(gh_list, never_asks) -> None:
     client = gh_list([GH_INTO_MAIN])
 
-    assert gh_pr.resolve_pr_id(client, None) == 10  # ty: ignore[invalid-argument-type]
+    assert gh_pr.resolve_pr_id(client, None) == 10
     assert (
         client.calls[0]["head"] == "owner:feat" and client.calls[0]["state"] == "open"
     )  # only open PRs are candidates
@@ -205,13 +205,13 @@ def test_gh_no_open_pr_leaves_it_to_gh(gh_list, never_asks) -> None:
     """E.g. the PR was already merged: `gh pr view` without a number still finds it, as before."""
     client = gh_list([])
 
-    assert gh_pr.resolve_pr_id(client, None) is None  # ty: ignore[invalid-argument-type]
+    assert gh_pr.resolve_pr_id(client, None) is None
 
 
 def test_gh_target_narrows_the_search_to_that_base(gh_list, never_asks) -> None:
     client = gh_list([GH_INTO_DEV])
 
-    assert gh_pr.resolve_pr_id(client, None, "dev") == 11  # ty: ignore[invalid-argument-type]
+    assert gh_pr.resolve_pr_id(client, None, "dev") == 11
     assert client.calls[0]["base"] == "dev"
 
 
@@ -219,7 +219,7 @@ def test_gh_target_without_a_matching_open_pr_exits(gh_list, never_asks) -> None
     client = gh_list([])
 
     with pytest.raises(SystemExit) as exc_info:
-        gh_pr.resolve_pr_id(client, None, "release")  # ty: ignore[invalid-argument-type]
+        gh_pr.resolve_pr_id(client, None, "release")
 
     assert "'feat'" in str(exc_info.value) and "'release'" in str(exc_info.value)
 
@@ -230,7 +230,7 @@ def test_gh_several_open_prs_interactive_asks_and_uses_the_chosen_one(
     client = gh_list([GH_INTO_MAIN, GH_INTO_DEV])
     monkeypatch.setattr(pr_choice.typer, "prompt", lambda text, **k: 2)
 
-    assert gh_pr.resolve_pr_id(client, None) == 11  # ty: ignore[invalid-argument-type]
+    assert gh_pr.resolve_pr_id(client, None) == 11
     shown = capsys.readouterr().err
     assert "#10" in shown and "#11" in shown and "https://github.com/owner/repo/pull/11" in shown
 
@@ -239,7 +239,7 @@ def test_gh_several_open_prs_non_interactive_exits_listing_them(gh_list, non_int
     client = gh_list([GH_INTO_MAIN, GH_INTO_DEV])
 
     with pytest.raises(SystemExit) as exc_info:
-        gh_pr.resolve_pr_id(client, None)  # ty: ignore[invalid-argument-type]
+        gh_pr.resolve_pr_id(client, None)
 
     assert isinstance(exc_info.value.code, str)
     _assert_lists_both_and_says_how_to_choose(exc_info.value.code)

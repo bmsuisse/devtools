@@ -65,7 +65,7 @@ def test_run_capture_converts_timeout_into_a_failed_completed_process_instead_of
     covers it without special-casing."""
 
     def fake_run(*args, **kwargs):
-        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs.get("timeout"))
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs.get("timeout", 0))
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
@@ -267,7 +267,7 @@ def test_build_steps_does_not_add_default_strategy_when_pull_args_already_pick_o
     steps = build_steps("origin", no_default=True, pull_args=["--rebase"], cwd=checkout)
 
     assert steps[0].cmd == ["git", "pull", "--rebase"]
-    assert "--no-rebase" not in steps[0].cmd
+    assert steps[0].cmd is not None and "--no-rebase" not in steps[0].cmd
 
 
 def test_build_steps_passes_through_extra_pull_args(tmp_path) -> None:

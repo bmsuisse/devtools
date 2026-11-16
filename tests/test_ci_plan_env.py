@@ -38,22 +38,26 @@ class FakeResponse:
         return self.payload
 
 
-@pytest.fixture
-def api(monkeypatch):
+class _Api:
     """Records requests; `api.routes[url-suffix] = FakeResponse`."""
-    calls: list[tuple[str, tuple]] = []
-    routes: dict[str, FakeResponse] = {}
 
-    def fake_get(url, auth=None, timeout=None):
-        calls.append((url, auth))
-        for suffix, response in routes.items():
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple | None]] = []
+        self.routes: dict[str, FakeResponse] = {}
+
+    def __call__(self, url: str, auth: tuple | None = None, timeout: float | None = None) -> FakeResponse:
+        self.calls.append((url, auth))
+        for suffix, response in self.routes.items():
             if url.split("?")[0].endswith(suffix):
                 return response
         raise requests.ConnectionError("no route")
 
-    monkeypatch.setattr(ci_plan_env.requests, "get", fake_get)
-    fake_get.calls, fake_get.routes = calls, routes
-    return fake_get
+
+@pytest.fixture
+def api(monkeypatch: pytest.MonkeyPatch) -> _Api:
+    recorder = _Api()
+    monkeypatch.setattr(ci_plan_env.requests, "get", recorder)
+    return recorder
 
 
 # --- labels and context ------------------------------------------------------------------------------------------

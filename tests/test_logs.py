@@ -1,3 +1,5 @@
+from typing import Any
+
 import pytest
 
 from bmsdna.devtools import azure_arm, logs
@@ -20,7 +22,7 @@ def _table(columns, rows):
 @pytest.fixture
 def azure(monkeypatch):
     """Fake the ARM + query boundary; `state['queries']` records (url, scope, kql)."""
-    state = {"queries": [], "arm": [], "result": _table([], []), "components": [{"name": "ai-1"}]}
+    state: dict[str, Any] = {"queries": [], "arm": [], "result": _table([], []), "components": [{"name": "ai-1"}]}
 
     def fake_arm(method, path, api_version, **kw):
         state["arm"].append((method, path, api_version))
@@ -91,7 +93,7 @@ def test_query_roles_sums_and_sorts(azure):
 def test_query_roles_reports_missing_column(azure):
     azure["result"] = _table(["other"], [])
     roles, err = logs.query_roles("ai-1", "my-rg", 30)
-    assert roles is None and "cloud_RoleName" in err
+    assert roles is None and err is not None and "cloud_RoleName" in err
 
 
 def test_query_logs_parses_rows_and_filters(azure):
@@ -126,7 +128,7 @@ def test_query_error_is_returned_not_raised(azure, monkeypatch):
 
     monkeypatch.setattr(azure_arm, "arm", boom)
     rows, err = logs.query_logs("missing", "my-rg", 5, 0, "all")
-    assert rows is None and "component not found" in err
+    assert rows is None and err is not None and "component not found" in err
 
 
 def test_print_logs_falls_back_to_discovered_app_insights(azure, capsys, monkeypatch):

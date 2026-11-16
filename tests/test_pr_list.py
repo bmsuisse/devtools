@@ -57,7 +57,7 @@ def test_github_list_has_id_state_name_and_tags() -> None:
         }
     )
 
-    prs = pr_list.github_list(gh, "open", 10)  # ty: ignore[invalid-argument-type]
+    prs = pr_list.github_list(gh, "open", 10)
 
     assert [pr_list.summary_text(p) for p in prs] == [
         "#5  open  feat: widgets  [bug, test-full]",
@@ -76,14 +76,14 @@ def test_github_list_tells_merged_from_closed() -> None:
         }
     )
 
-    assert [p.state for p in pr_list.github_list(gh, "all")] == ["merged", "closed"]  # ty: ignore[invalid-argument-type]
+    assert [p.state for p in pr_list.github_list(gh, "all")] == ["merged", "closed"]
 
 
 def test_github_list_merged_goes_through_search() -> None:
     hit = _gh_pr(3, "merged one", "closed", pull_request={"merged_at": "2026-01-01T00:00:00Z"})
     gh = FakeGitHub({"GET search/issues": [hit]})
 
-    prs = pr_list.github_list(gh, "merged")  # ty: ignore[invalid-argument-type]
+    prs = pr_list.github_list(gh, "merged")
 
     assert [(p.number, p.state) for p in prs] == [(3, "merged")]
     query = gh.calls[0][2]["params"]["q"]

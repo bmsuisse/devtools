@@ -1,4 +1,5 @@
 import subprocess
+from collections.abc import Mapping
 
 import pytest
 import requests
@@ -21,6 +22,7 @@ from bmsdna.devtools.find_repo import (
     web_url,
     work_dir,
 )
+from bmsdna.devtools.github_api import GitHubClient
 
 runner = CliRunner()
 
@@ -106,7 +108,7 @@ class FakeResp:
         return self._body
 
 
-def _fake_ado(projects: list[dict], repos_by_project: dict[str, FakeResp | list[dict]], calls: list | None = None):
+def _fake_ado(projects: list[dict], repos_by_project: Mapping[str, FakeResp | list[dict]], calls: list | None = None):
     """Fake `requests.get` for the Azure DevOps REST API, dispatching on the URL (not call
     order) so it stays correct under find_remote's concurrent per-project fan-out."""
 
@@ -114,6 +116,7 @@ def _fake_ado(projects: list[dict], repos_by_project: dict[str, FakeResp | list[
         if calls is not None:
             calls.append((url, headers, params))
         if url.endswith("/_apis/projects"):
+            assert params is not None
             skip = params.get("$skip", 0)
             top = params.get("$top", 100)
             return FakeResp(body={"value": projects[skip : skip + top]})
@@ -234,10 +237,11 @@ def test_find_remote_skips_project_whose_repos_list_fails_but_keeps_searching(mo
 # --- find_github --------------------------------------------------------------
 
 
-class FakeGitHub:
+class FakeGitHub(GitHubClient):
     """Stands in for GitHubClient: `request` answers the org-vs-user probe, `paginate` the listing."""
 
-    def __init__(self, repos: list[dict], org_status: int = 200, login: str = "someone-else"):
+    def __init__(self, repos: list[dict], org_status: int = 200, login: str = "someone-else") -> None:
+        super().__init__("fake-token", "owner", "repo")
         self.repos = repos
         self.org_status = org_status
         self.login = login
@@ -268,7 +272,7 @@ def test_find_github_prefers_exact_match() -> None:
         ]
     )
 
-    result = find_github(client, "org", "widgets")  # type: ignore[arg-type]
+    result = find_github(client, "org", "widgets")
 
     assert result == [RemoteRepo("org", "widgets", "https://github.com/org/widgets", source="github")]
     assert client.paginated == ["orgs/org/repos"]
@@ -277,7 +281,7 @@ def test_find_github_prefers_exact_match() -> None:
 def test_find_github_falls_back_to_substring_match() -> None:
     client = FakeGitHub([{"name": "widgets-extra", "html_url": "https://github.com/org/widgets-extra"}])
 
-    result = find_github(client, "org", "widgets")  # type: ignore[arg-type]
+    result = find_github(client, "org", "widgets")
 
     assert result == [RemoteRepo("org", "widgets-extra", "https://github.com/org/widgets-extra", source="github")]
 
@@ -285,13 +289,13 @@ def test_find_github_falls_back_to_substring_match() -> None:
 def test_find_github_no_match() -> None:
     client = FakeGitHub([{"name": "other", "html_url": "https://github.com/org/other"}])
 
-    assert find_github(client, "org", "widgets") == []  # type: ignore[arg-type]
+    assert find_github(client, "org", "widgets") == []
 
 
 def test_find_github_falls_back_to_user_repos_on_404() -> None:
     client = FakeGitHub([{"name": "widgets", "html_url": "https://github.com/me/widgets"}], org_status=404)
 
-    result = find_github(client, "me", "widgets")  # type: ignore[arg-type]
+    result = find_github(client, "me", "widgets")
 
     assert client.paginated == ["users/me/repos"]
     assert result == [RemoteRepo("me", "widgets", "https://github.com/me/widgets", source="github")]
@@ -300,7 +304,7 @@ def test_find_github_falls_back_to_user_repos_on_404() -> None:
 def test_find_github_lists_private_repos_for_the_authenticated_users_own_account() -> None:
     client = FakeGitHub([{"name": "secret", "html_url": "https://github.com/Me/secret"}], org_status=404, login="me")
 
-    result = find_github(client, "Me", "secret")  # type: ignore[arg-type]
+    result = find_github(client, "Me", "secret")
 
     assert (client.paginated, client.params) == (["user/repos"], [{"affiliation": "owner"}])
     assert result == [RemoteRepo("Me", "secret", "https://github.com/Me/secret", source="github")]
@@ -309,7 +313,7 @@ def test_find_github_lists_private_repos_for_the_authenticated_users_own_account
 def test_find_github_quotes_the_org_into_a_single_path_segment() -> None:
     client = FakeGitHub([], org_status=404)
 
-    find_github(client, "../../user", "x")  # type: ignore[arg-type]
+    find_github(client, "../../user", "x")
 
     assert client.requested == ["orgs/..%2F..%2Fuser/repos"]
     assert client.paginated == ["users/..%2F..%2Fuser/repos"]
@@ -321,7 +325,7 @@ def test_find_github_propagates_client_errors() -> None:
             raise SystemExit("GitHub GET failed (HTTP 401): Bad credentials")
 
     with pytest.raises(SystemExit) as exc_info:
-        find_github(Failing([]), "org", "widgets")  # type: ignore[arg-type]
+        find_github(Failing([]), "org", "widgets")
 
     assert "Bad credentials" in str(exc_info.value)
 
@@ -940,6 +944,7 @@ def test_list_remote_ado_tries_other_readme_names(monkeypatch) -> None:
         if url.endswith("/_apis/projects"):
             return FakeResp(body={"value": [{"name": "A"}]})
         if url.endswith("/items"):
+            assert params is not None
             content = readmes.get(params["path"])
             return FakeResp(body={"content": content}) if content else FakeResp(404, {"message": "nope"})
         if url.endswith("/commits"):
@@ -1259,6 +1264,7 @@ def test_list_remote_ado_failing_commit_request_still_looks_up_the_readme(monkey
         if url.endswith("/commits"):
             return FakeResp(503, {"message": "try later"})
         if url.endswith("/items"):
+            assert params is not None
             return (
                 FakeResp(body={"content": "Readable README."}) if params["path"] == "/README.md" else FakeResp(404, {})
             )

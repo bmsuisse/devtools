@@ -1,6 +1,7 @@
 import pytest
 
 from bmsdna.devtools.deps.versions import (
+    Ecosystem,
     VersionError,
     normalize_name,
     npm_range_satisfied,
@@ -33,8 +34,8 @@ def test_pypi_names_are_normalised_npm_names_are_not() -> None:
         ("Maven", "<1.10", "1.10.0", False),
     ],
 )
-def test_spec_matches(ecosystem: str, spec: str, version: str, expected: bool) -> None:
-    assert spec_matches(ecosystem, spec, version) is expected  # type: ignore[arg-type]
+def test_spec_matches(ecosystem: Ecosystem, spec: str, version: str, expected: bool) -> None:
+    assert spec_matches(ecosystem, spec, version) is expected
 
 
 def test_semver_prerelease_ordering() -> None:

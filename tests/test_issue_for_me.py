@@ -175,6 +175,7 @@ def test_ado_search_keeps_only_items_whose_last_comment_matches(capsys) -> None:
             work_item_id = int(url.split("/workItems/")[1].split("/")[0])
             resp.json.return_value = {"comments": [{"id": 1, "text": last[work_item_id]}]}
         else:
+            assert params is not None
             resp.json.return_value = {"value": [work_items[int(i)] for i in params["ids"].split(",")]}
         return resp
 

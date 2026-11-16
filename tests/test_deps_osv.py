@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any
 
 import pytest
@@ -19,19 +20,26 @@ class FakeResponse:
         return self._payload
 
 
-class FakeSession:
+class FakeSession(requests.Session):
     def __init__(self, responses: list[FakeResponse | Exception]) -> None:
-        self.responses, self.calls = responses, []
+        super().__init__()
+        self.responses = responses
+        self.calls: list[tuple[str | bytes, str | bytes, dict[str, Any]]] = []
 
-    def request(self, method: str, url: str, **kwargs: Any) -> FakeResponse:
+    def request(self, method: str | bytes, url: str | bytes, *args: Any, **kwargs: Any) -> Any:
         self.calls.append((method, url, kwargs))
         item = self.responses.pop(0)
         if isinstance(item, Exception):
             raise item
         return item
 
-    def head(self, url: str, **kwargs: Any) -> FakeResponse:
+    def head(self, url: str | bytes, *args: Any, **kwargs: Any) -> Any:
         return self.request("HEAD", url, **kwargs)
+
+
+def _day(released: datetime | None) -> int:
+    assert released is not None
+    return released.day
 
 
 @pytest.fixture(autouse=True)
@@ -46,7 +54,7 @@ def test_query_batch_follows_next_page_tokens() -> None:
             FakeResponse({"results": [{"vulns": [{"id": "B"}]}]}),
         ]
     )
-    result = OsvClient(session).query_batch([("PyPI", "x", "1.0"), ("npm", "y", "2.0.0"), ("PyPI", "x", "1.0")])  # type: ignore[arg-type]
+    result = OsvClient(session).query_batch([("PyPI", "x", "1.0"), ("npm", "y", "2.0.0"), ("PyPI", "x", "1.0")])
 
     assert result == {("PyPI", "x", "1.0"): ["A", "B"], ("npm", "y", "2.0.0"): []}
     assert session.calls[1][2]["json"]["queries"] == [
@@ -56,35 +64,35 @@ def test_query_batch_follows_next_page_tokens() -> None:
 
 def test_a_short_batch_answer_is_an_error_not_a_clean_result() -> None:
     with pytest.raises(DataError):
-        OsvClient(FakeSession([FakeResponse({"results": []})])).query_batch([("PyPI", "x", "1.0")])  # type: ignore[arg-type]
+        OsvClient(FakeSession([FakeResponse({"results": []})])).query_batch([("PyPI", "x", "1.0")])
 
 
 def test_transient_failures_are_retried_then_raised() -> None:
     session = FakeSession([FakeResponse(status=503), requests.ConnectionError("boom"), FakeResponse({"id": "A"})])
-    assert OsvClient(session).vuln("A") == {"id": "A"}  # type: ignore[arg-type]
+    assert OsvClient(session).vuln("A") == {"id": "A"}
 
     with pytest.raises(DataError):
-        OsvClient(FakeSession([FakeResponse(status=503)] * 3)).vuln("A")  # type: ignore[arg-type]
+        OsvClient(FakeSession([FakeResponse(status=503)] * 3)).vuln("A")
     with pytest.raises(DataError):
-        OsvClient(FakeSession([FakeResponse({"id": "other"})])).vuln("A")  # type: ignore[arg-type]
+        OsvClient(FakeSession([FakeResponse({"id": "other"})])).vuln("A")
 
 
 def test_kev_is_read_by_cve_id_and_a_bad_feed_is_an_error() -> None:
     assert OsvClient(FakeSession([FakeResponse({"vulnerabilities": [{"cveID": "cve-2026-1"}]})])).kev_cves() == {
         "CVE-2026-1"
-    }  # type: ignore[arg-type]
+    }
     with pytest.raises(DataError):
-        OsvClient(FakeSession([FakeResponse({"unexpected": []})])).kev_cves()  # type: ignore[arg-type]
+        OsvClient(FakeSession([FakeResponse({"unexpected": []})])).kev_cves()
 
 
 def test_release_time_uses_the_youngest_pypi_file_and_npm_time_map_and_none_for_private_packages() -> None:
     pypi = FakeResponse(
         {"urls": [{"upload_time_iso_8601": "2026-11-01T00:00:00.1Z"}, {"upload_time_iso_8601": "2026-11-03T00:00:00Z"}]}
     )
-    assert OsvClient(FakeSession([pypi])).release_time("PyPI", "x", "1.0").day == 3  # type: ignore[arg-type, union-attr]
+    assert _day(OsvClient(FakeSession([pypi])).release_time("PyPI", "x", "1.0")) == 3
     npm = FakeResponse({"time": {"1.0.0": "2026-11-05T01:00:00.000Z"}})
-    assert OsvClient(FakeSession([npm])).release_time("npm", "@s/p", "1.0.0").day == 5  # type: ignore[arg-type, union-attr]
-    assert OsvClient(FakeSession([FakeResponse(status=404)])).release_time("PyPI", "internal-only", "1.0") is None  # type: ignore[arg-type]
+    assert _day(OsvClient(FakeSession([npm])).release_time("npm", "@s/p", "1.0.0")) == 5
+    assert OsvClient(FakeSession([FakeResponse(status=404)])).release_time("PyPI", "internal-only", "1.0") is None
 
 
 def test_a_repeating_page_token_is_an_error_not_an_endless_loop() -> None:
@@ -92,14 +100,14 @@ def test_a_repeating_page_token_is_an_error_not_an_endless_loop() -> None:
     session = FakeSession([FakeResponse(page), FakeResponse(page), FakeResponse(page)])
 
     with pytest.raises(DataError, match="does not terminate"):
-        OsvClient(session).query_batch([("PyPI", "x", "1.0")])  # type: ignore[arg-type]
+        OsvClient(session).query_batch([("PyPI", "x", "1.0")])
 
 
 def test_maven_release_time_is_the_pom_last_modified_of_the_first_repository_that_has_it() -> None:
     session = FakeSession(
         [FakeResponse(status=404), FakeResponse(headers={"Last-Modified": "Wed, 13 Aug 2025 20:29:43 GMT"})]
     )
-    released = OsvClient(session).release_time("Maven", "androidx.core:core-ktx", "1.17.0")  # type: ignore[arg-type]
+    released = OsvClient(session).release_time("Maven", "androidx.core:core-ktx", "1.17.0")
 
     assert released is not None and (released.year, released.month, released.day, released.hour) == (2025, 8, 13, 20)
     assert [call[1] for call in session.calls] == [
@@ -109,13 +117,13 @@ def test_maven_release_time_is_the_pom_last_modified_of_the_first_repository_tha
 
 
 def test_maven_release_time_is_none_when_no_repository_has_it_and_an_error_when_one_is_down() -> None:
-    assert OsvClient(FakeSession([FakeResponse(status=404)] * 3)).release_time("Maven", "internal:lib", "1") is None  # type: ignore[arg-type]
+    assert OsvClient(FakeSession([FakeResponse(status=404)] * 3)).release_time("Maven", "internal:lib", "1") is None
     with pytest.raises(DataError):
-        OsvClient(FakeSession([FakeResponse(status=503)] * 3)).release_time("Maven", "a:b", "1")  # type: ignore[arg-type]
+        OsvClient(FakeSession([FakeResponse(status=503)] * 3)).release_time("Maven", "a:b", "1")
     with pytest.raises(DataError):
-        OsvClient(FakeSession([FakeResponse(headers={"Last-Modified": "garbage"})])).release_time("Maven", "a:b", "1")  # type: ignore[arg-type]
+        OsvClient(FakeSession([FakeResponse(headers={"Last-Modified": "garbage"})])).release_time("Maven", "a:b", "1")
 
 
 def test_a_maven_pom_without_last_modified_is_an_error_not_an_unknown_age() -> None:
     with pytest.raises(DataError, match="Last-Modified"):
-        OsvClient(FakeSession([FakeResponse(headers={})])).release_time("Maven", "a:b", "1")  # type: ignore[arg-type]
+        OsvClient(FakeSession([FakeResponse(headers={})])).release_time("Maven", "a:b", "1")
