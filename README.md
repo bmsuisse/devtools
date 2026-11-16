@@ -1015,6 +1015,27 @@ list of test files either way. A moved file counts as changed under both its old
 Dry run locally: `uv run bdt ci plan --pr-source feat/x --pr-target dev --label test-orders` (or without `--label` to
 see what the changed files select).
 
+### Monorepo: the project in a sub-folder
+
+When the repo holds several projects (`onesales/`, `ccmt/`, ...) next to shared folders (`infra/`, `database/`), run
+`bdt ci plan` in the project's folder, the one with its `pyproject.toml` (`workingDirectory: onesales` in a pipeline).
+The tiers' `dir`, `paths`, `non_code` and the printed `<tier>Paths` are relative to that folder, and so are the changed
+files: a file of the project is `backend/app.py`, one outside it keeps its place as a `../` path. Own or ignore those
+with the tables you already have; any other file outside the project (a shared folder such as `../database/**`)
+still selects everything, like any file no area owns:
+
+```toml
+# onesales/pyproject.toml
+[tool.bdt.ci.plan]
+non_code = ["docs/**", "*.md", "../ccmt/**"]   # another project's files cannot affect this one's tests
+
+[tool.bdt.ci.plan.paths]
+infra = ["../infra/**"]                          # the shared Bicep folder is the area `infra` (label `test-infra`)
+```
+
+The built-in `infra` default only looks for an `infra/` folder inside the project, so a shared one is listed explicitly.
+Nothing changes for a project at the repository root.
+
 ## `bdt lint`
 
 Static checks (implementing [bmsuisse/skills#52](https://github.com/bmsuisse/skills/issues/52))

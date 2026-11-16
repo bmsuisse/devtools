@@ -111,15 +111,30 @@ def _git(
     return done
 
 
-def changed_files(target: str, *, merge_checkout: bool) -> list[str]:
+def relative_to_root(files: list[str], root: Path) -> list[str]:
+    """Git lists paths relative to the repository root, the plan config (`dir`, `paths`, `non_code`) and the paths it
+    outputs are relative to the folder of the pyproject.toml. They are the same thing unless the project lives in a
+    sub-folder of a monorepo: then a file of the project is listed relative to it (`backend/app.py`) and one outside it
+    keeps its place as a `../` path (`../infra/main.bicep`), which the config can match like any other path."""
+    top = Path(_git("rev-parse", "--show-toplevel").stdout.strip()).resolve()
+    base = root.resolve()
+    if base == top:
+        return files
+    return [Path(os.path.relpath(top / name, base)).as_posix() for name in files]
+
+
+def changed_files(target: str, *, merge_checkout: bool, root: Path | None = None) -> list[str]:
     """Files the PR changes: in CI HEAD is the synthetic PR merge commit, compared with its first parent (the target);
     for a local dry run the branch is compared with `origin/<target>` (it may contain ordinary merges).
+    With `root` (the project folder, when it is not the repository root) the paths are relative to it, see
+    `relative_to_root`.
     `--no-renames` lists a moved file under its old path too: rename detection would hide the old path, so code moved
     into a `non_code` folder (or a test moved between areas) would look like nothing happened to the old place.
     `-z` keeps non-ASCII and other unusual names unquoted (git's default quoting would defeat every glob)."""
     diff = ("HEAD^1", "HEAD") if merge_checkout else (f"origin/{target}...HEAD",)
     out = _git("diff", "--name-only", "--no-renames", "-z", *diff).stdout
-    return [path for path in out.split("\0") if path]  # -z: git would quote names like test_\303\274ber.py
+    files = [path for path in out.split("\0") if path]  # -z: git would quote names like test_\303\274ber.py
+    return files if root is None else relative_to_root(files, root)
 
 
 def verify_fix_base(env: Mapping[str, str]) -> None:
@@ -214,7 +229,7 @@ def run(
         ctx,
         config,
         labels=label_provider,
-        changed_files=lambda: changed_files(ctx.target, merge_checkout=not dry_run),
+        changed_files=lambda: changed_files(ctx.target, merge_checkout=not dry_run, root=config.root),
         verify_fix_base=lambda: verify_fix_base(env),
     )
     for warning in plan.warnings:

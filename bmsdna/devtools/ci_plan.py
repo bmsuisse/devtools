@@ -16,6 +16,10 @@ Configured under `[tool.bdt.ci.plan]` in pyproject.toml (the table must exist, e
     [tool.bdt.ci.plan.paths]        # non-test files an area owns: changing them infers that area, not everything
     infra = ["infra/**"]            # built-in default when the repo has an infra/ folder (areas may have no tests)
 
+Monorepo: run the command in the project's folder (the one with the pyproject.toml). Changed files are matched relative
+to that folder, so a file outside it is a `../` path: own it with `paths` (`infra = ["../infra/**"]`) or ignore it with
+`non_code` (`["../other-app/**"]`); any other file outside it (a shared folder) still selects everything.
+
 Labels: `test-<area>`, `test-full` (everything), `test-none` (no tests; lint and build still run). The legacy
 `e2e-<area>` labels count as `test-<area>`. Order of decision (the reason is always reported):
 

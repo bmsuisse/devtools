@@ -369,3 +369,82 @@ def test_changed_files_keeps_non_ascii_names_unquoted(clone, monkeypatch) -> Non
     git(clone, "add", "-A")
     git(clone, "commit", "-q", "-m", "umlaut")
     assert ci_plan_env.changed_files("main", merge_checkout=False) == ["tests/test_über.py"]
+
+
+# --- a project in a sub-folder of a monorepo ----------------------------------------------------------------------
+
+
+def test_changed_files_are_relative_to_the_project_folder(clone, monkeypatch) -> None:
+    """The project lives in app/: its files are listed relative to it, all others keep their place as `../` paths."""
+    git(clone, "checkout", "-q", "-b", "feat")
+    for name in ("app/code.py", "infra/main.bicep", "other/x.txt"):
+        (clone / name).parent.mkdir(exist_ok=True)
+        (clone / name).write_text(name)
+    git(clone, "add", "-A")
+    git(clone, "commit", "-q", "-m", "mono")
+    monkeypatch.chdir(clone / "app")
+
+    inside = ci_plan_env.changed_files("main", merge_checkout=False, root=clone / "app")
+    assert sorted(inside) == ["../infra/main.bicep", "../other/x.txt", "code.py"]
+    at_top = ci_plan_env.changed_files("main", merge_checkout=False, root=clone)
+    assert sorted(at_top) == ["app/code.py", "infra/main.bicep", "other/x.txt"]  # root == repository root: unchanged
+    assert sorted(ci_plan_env.changed_files("main", merge_checkout=False)) == sorted(at_top)  # no root: unchanged
+
+
+@pytest.fixture
+def monorepo(clone, monkeypatch):
+    """dev holds a project in app/ (config: shared infra/ owned by `infra`, other-app/ ignored) next to infra/,
+    other-app/ and a shared database/; HEAD is a feature branch cut from it, the cwd is the project folder."""
+    git(clone, "checkout", "-q", "dev")
+    files = {
+        "app/pyproject.toml": (
+            '[tool.bdt.ci.plan]\nnon_code = ["../other-app/**"]\n\n[tool.bdt.ci.plan.paths]\ninfra = ["../infra/**"]\n'
+        ),
+        "app/tests/unit/orders/test_a.py": "",
+        "infra/main.bicep": "a",
+        "other-app/x.py": "a",
+        "database/a.sql": "a",
+    }
+    for name, content in files.items():
+        (clone / name).parent.mkdir(parents=True, exist_ok=True)
+        (clone / name).write_text(content)
+    git(clone, "add", "-A")
+    git(clone, "commit", "-q", "-m", "monorepo")
+    git(clone, "push", "-q", "origin", "dev")
+    git(clone, "checkout", "-q", "-b", "feat")
+    for key in (*PR_ENV, "BUILD_REASON"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.chdir(clone / "app")
+    return clone
+
+
+def _dry_run_changing(monorepo, name: str) -> str:
+    (monorepo / name).write_text("changed")
+    git(monorepo, "add", "-A")
+    git(monorepo, "commit", "-q", "-m", "change")
+    result = CliRunner().invoke(app, ["ci", "plan", "--pr-source", "feat", "--pr-target", "dev"])
+    assert result.exit_code == 0, result.output
+    return result.output
+
+
+def test_monorepo_shared_infra_selects_the_infra_area_only(monorepo) -> None:
+    output = _dry_run_changing(monorepo, "infra/main.bicep")
+    assert "test plan: areas (changed area tests: infra)" in output
+    assert "runTests=true" in output and "unitRun=false" in output
+
+
+def test_monorepo_other_app_changes_run_no_tests(monorepo) -> None:
+    output = _dry_run_changing(monorepo, "other-app/x.py")
+    assert "test plan: none" in output and "runTests=false" in output
+
+
+def test_monorepo_shared_folder_changes_run_everything(monorepo) -> None:
+    output = _dry_run_changing(monorepo, "database/a.sql")
+    assert "test plan: full (../database/a.sql is not owned by an area" in output
+    assert "unitPaths=tests/unit" in output
+
+
+def test_monorepo_own_test_file_selects_its_area(monorepo) -> None:
+    output = _dry_run_changing(monorepo, "app/tests/unit/orders/test_a.py")
+    assert "test plan: areas (changed area tests: orders)" in output
+    assert "unitPaths=tests/unit/orders" in output
