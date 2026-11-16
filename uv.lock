@@ -93,7 +93,7 @@ requires-dist = [
     { name = "azure-identity", specifier = ">=1.19.0" },
     { name = "duckdb", marker = "extra == 'usage'", specifier = ">=1.3.0" },
     { name = "packaging", specifier = ">=24.0" },
-    { name = "pgdevkit", extras = ["db"], specifier = ">=0.7.1" },
+    { name = "pgdevkit", extras = ["db"], specifier = ">=0.19.0" },
     { name = "plotly", marker = "extra == 'usage'", specifier = ">=5.24.0" },
     { name = "requests", specifier = ">=2.32.0" },
     { name = "rich", specifier = ">=13.0.0" },
@@ -105,8 +105,8 @@ provides-extras = ["lint", "usage"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "ruff", specifier = ">=0.14.0" },
-    { name = "ty", specifier = ">=0.0.59" },
+    { name = "ruff", specifier = ">=0.17.4" },
+    { name = "ty", specifier = ">=0.0.100" },
 ]
 test = [{ name = "pytest", specifier = ">=9.1.0" }]
 
@@ -399,16 +399,16 @@ wheels = [
 
 [[package]]
 name = "pgdevkit"
-version = "0.7.1"
+version = "0.19.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "docker" },
     { name = "psycopg", extra = ["binary"] },
     { name = "sqlglot" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6e/9a/df3f1db747280150496b42226b8b2a5312b091eb0bc2487a2f037611f042/pgdevkit-0.7.1.tar.gz", hash = "sha256:eebcffbd65e0747728ed5299af474f6e21551d1f4237e9f7743a894efe3edf64", size = 141700, upload-time = "2026-09-14T18:40:05.642Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d9/f3/53ce0fd55108f3931df4939c46b29d67617cd3dab368a450e4beec725ffe/pgdevkit-0.19.0.tar.gz", hash = "sha256:5c5b0ba906f803fc4f37ce2154f35d52dd28cc8e9db119c967da03f2240f40ca", size = 246620, upload-time = "2026-10-31T06:41:18.472Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2e/b5/4cf4576c1ee096222ba108de9ab5d5c18d4e3f55d69aa04b9dbbf97a6f25/pgdevkit-0.7.1-py3-none-any.whl", hash = "sha256:c1b6b049d7f0ed72c0e94193dc82a729db57ab6d0556353fbb946d88354a44c5", size = 97534, upload-time = "2026-09-14T18:40:04.256Z" },
+    { url = "https://files.pythonhosted.org/packages/25/9c/02c9fd6340c8cdade5f143039ac55300b39c1c301ced4f39340a9cf617b5/pgdevkit-0.19.0-py3-none-any.whl", hash = "sha256:53670995c6ada3b957d615005c50119fce77eeec876c0b9d27a77606c1776c63", size = 151658, upload-time = "2026-10-31T06:41:16.741Z" },
 ]
 
 [package.optional-dependencies]
