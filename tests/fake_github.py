@@ -6,6 +6,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+import requests
+
+from bmsdna.devtools.github_api import GitHubClient
+
 NOT_FOUND = object()
 
 
@@ -16,24 +20,22 @@ class NotFound:
         self.message = message
 
 
-class FakeResponse:
+class FakeResponse(requests.Response):
     def __init__(self, status_code: int, data: Any) -> None:
+        super().__init__()
         self.status_code = status_code
         self._data = data
-        self.content = b"" if data is None else b"x"
+        self._content = b"" if data is None else b"x"
 
-    def json(self) -> Any:
+    def json(self, **kwargs: Any) -> Any:
         return self._data
 
 
-class FakeGitHub:
-    owner = "owner"
-    repo = "repo"
-    repo_path = "repos/owner/repo"
-
+class FakeGitHub(GitHubClient):
     def __init__(
         self, routes: dict[str, Any] | None = None, graphql: Callable[[str, dict], dict] | None = None
     ) -> None:
+        super().__init__("fake-token", "owner", "repo")
         self.routes = routes or {}
         self.graphql_handler = graphql
         self.calls: list[tuple[str, str, Any]] = []
@@ -43,7 +45,9 @@ class FakeGitHub:
         value = self.routes.get(f"{method} {path}")
         return value(payload) if callable(value) else value
 
-    def request(self, method: str, path: str, *, ok: tuple[int, ...] = (), **kwargs: Any) -> FakeResponse:
+    def request(
+        self, method: str, path: str, *, ok: tuple[int, ...] = (), retry: bool | None = None, **kwargs: Any
+    ) -> requests.Response:
         value = self._answer(method, path, kwargs.get("json", kwargs.get("params")))
         if value is NOT_FOUND or isinstance(value, NotFound):
             if 404 not in ok:

@@ -1,3 +1,4 @@
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -34,6 +35,7 @@ from bmsdna.devtools.gh_pr import (
     set_draft,
     update,
 )
+from bmsdna.devtools.github_api import GitHubClient
 
 PULLS = "repos/owner/repo/pulls"
 
@@ -44,18 +46,15 @@ class FakeResponse:
         self.status_code = status_code
 
 
-class FakeGH:
+class FakeGH(GitHubClient):
     """Stands in for `GitHubClient`: records `(method, path, payload)` and answers from `routes`
     (`(method, path)` -> value, or a callable taking the payload). A route value that is a
     `SystemExit` is raised, like the real client does on an HTTP error."""
 
-    owner = "owner"
-    repo = "repo"
-    repo_path = "repos/owner/repo"
-
     def __init__(self, routes: dict | None = None) -> None:
+        super().__init__("fake-token", "owner", "repo")
         self.routes = routes or {}
-        self.calls: list[tuple[str, str, object]] = []
+        self.calls: list[tuple[str, str, Any]] = []
 
     def _answer(self, method: str, path: str, payload: object) -> object:
         self.calls.append((method, path, payload))
@@ -99,7 +98,7 @@ class FakeGH:
     def paginate(self, path, params=None, **kwargs):
         return self._answer("GET", path, params)
 
-    def sent(self, method: str, path: str | None = None) -> list[object]:
+    def sent(self, method: str, path: str | None = None) -> list[Any]:
         return [p for m, pa, p in self.calls if m == method and (path is None or pa == path)]
 
 
@@ -251,7 +250,7 @@ def test_run_wait_exits_1_not_2_when_a_check_already_failed_and_another_needs_ap
     monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: pr)
 
     with pytest.raises(SystemExit) as exc_info:
-        run("gh", wait=True)
+        run(FakeGH(), wait=True)
 
     assert exc_info.value.code == 1
 
@@ -285,7 +284,7 @@ def test_run_wait_does_not_hang_when_a_stuck_pending_check_also_exists(monkeypat
     )
 
     with pytest.raises(SystemExit) as exc_info:
-        run("gh", wait=True)
+        run(FakeGH(), wait=True)
 
     assert exc_info.value.code == 1
 
@@ -1290,13 +1289,13 @@ def test_latest_per_workflow_keeps_highest_id_per_workflow() -> None:
 
 def test_deploy_run_hint_none_when_no_runs_on_target(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.gh_pr.get_workflow_runs_for_branch", lambda gh, branch, limit=5: [])
-    assert deploy_run_hint("gh", "main") is None
+    assert deploy_run_hint(FakeGH(), "main") is None
 
 
 def test_deploy_run_hint_mentions_branch_and_run_when_found(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.gh_pr.get_workflow_runs_for_branch", lambda gh, branch, limit=5: [DEPLOY_RUN])
 
-    hint = deploy_run_hint("gh", "main")
+    hint = deploy_run_hint(FakeGH(), "main")
 
     assert hint is not None
     assert "main" in hint
@@ -1310,7 +1309,7 @@ def test_deploy_run_hint_fails_open_on_error(monkeypatch) -> None:
 
     monkeypatch.setattr("bmsdna.devtools.gh_pr.get_workflow_runs_for_branch", raise_exit)
 
-    assert deploy_run_hint("gh", "main") is None
+    assert deploy_run_hint(FakeGH(), "main") is None
 
 
 def test_push_assets_bounds_fetch_and_push_with_a_longer_upload_timeout(monkeypatch) -> None:
