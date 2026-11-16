@@ -447,3 +447,53 @@ def test_status_without_wait_leaves_sigterm_alone(monkeypatch) -> None:
     gh_run("gh", wait=False)
 
     assert seen == [before]
+
+
+def test_gh_wait_stops_on_sigterm_while_mergeability_is_unknown(monkeypatch, sigterm_during_sleep, capsys) -> None:
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: {**_gh_pr([PENDING]), "mergeable": "UNKNOWN"})
+
+    with pytest.raises(SystemExit) as exc:
+        gh_run("gh", wait=True)
+
+    out = capsys.readouterr().out
+    assert exc.value.code == EXIT_WAIT_TIMEOUT
+    assert sigterm_during_sleep == [3]
+    assert "mergeability not computed yet" in out
+    assert out.rstrip().endswith("Terminated while still running. Re-run `bdt pr status --pr-id 42 --wait` to keep waiting.")
+
+
+def test_gh_wait_timeout_applies_while_mergeability_is_unknown(monkeypatch, sleeps, capsys) -> None:
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: {**_gh_pr([PENDING]), "mergeable": "UNKNOWN"})
+
+    with pytest.raises(SystemExit) as exc:
+        gh_run("gh", wait=True, timeout=10)
+
+    assert exc.value.code == EXIT_WAIT_TIMEOUT
+    assert sleeps == [3, 3, 3, 1]
+
+
+def test_windows_sleeps_in_slices_so_a_signal_is_answered_promptly(monkeypatch) -> None:
+    now = [0.0]
+    slept: list[float] = []
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(time, "sleep", lambda secs: (slept.append(secs), now.__setitem__(0, now[0] + secs))[0])
+
+    WaitDeadline(0).sleep(2.5)
+
+    assert slept == [1.0, 1.0, 0.5]
+
+
+def test_windows_stops_slicing_once_signalled(monkeypatch) -> None:
+    slept: list[float] = []
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    def sleep(secs: float) -> None:
+        slept.append(secs)
+        signal.raise_signal(STOP)  # the handler runs once the sleep returns
+
+    monkeypatch.setattr(time, "sleep", sleep)
+    with WaitDeadline(0, stop_on_signal=True) as deadline:
+        deadline.sleep(30)
+
+    assert slept == [1.0]

@@ -566,7 +566,11 @@ def _status(gh: GitHubClient, wait: bool, pr_id: int | None, timeout: float, dea
         # isn't safe (could spin forever if it never resolves) — only retry
         # when the caller already opted into waiting.
         if pr.get("mergeable") == UNKNOWN_MERGEABLE and wait:
-            time.sleep(3)
+            if deadline.expired():
+                exit_wait_timeout(
+                    f"PR #{pr.get('number')}: {pr.get('title', '?')} | mergeability not computed yet", lambda: None, deadline, status_rerun_cmd(pr.get("number"), timeout)
+                )
+            deadline.sleep(3)
             continue
 
         conflict = merge_conflict_message(pr)

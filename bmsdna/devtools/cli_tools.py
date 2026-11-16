@@ -88,6 +88,9 @@ class PollHeartbeat:
         self._last_print = now
 
 
+# Windows: how long `WaitDeadline.sleep` sleeps at a time, so a stop signal is answered within about that long.
+WINDOWS_SLEEP_SLICE_SECS = 1.0
+
 # What asks a `--wait` loop to stop and report: SIGTERM (what `timeout`, `kill`, `docker stop` and most agent harnesses
 # send first) and, on Windows, where SIGTERM is never delivered by the OS, Ctrl+Break. Windows lacks the rest.
 _STOP_SIGNALS = tuple(sig for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGBREAK", None)) if sig is not None)
@@ -151,15 +154,27 @@ class WaitDeadline:
 
     def sleep(self, secs: float) -> None:
         """`time.sleep(secs)`, cut short so the loop wakes up right at the deadline (or when a stop signal arrives).
-        `_sleeping` goes up before the signal check, so a signal landing anywhere in between still ends the sleep."""
-        self._sleeping = True
+        `_sleeping` goes up before the signal check, so a signal landing anywhere in between still ends the sleep;
+        the outer `try` also covers one landing in the `finally` that puts it back down."""
         try:
-            if not self.stopped_by_signal:
-                time.sleep(secs if self._end is None else max(0.0, min(secs, self._end - time.monotonic())))
+            self._sleeping = True
+            try:
+                if not self.stopped_by_signal:
+                    self._sleep(secs if self._end is None else max(0.0, min(secs, self._end - time.monotonic())))
+            finally:
+                self._sleeping = False
         except _WaitStopped:
             pass
-        finally:
-            self._sleeping = False
+
+    def _sleep(self, secs: float) -> None:
+        if sys.platform != "win32":
+            time.sleep(secs)
+            return
+        # Windows only runs a signal handler once `time.sleep` returns (it is woken by Ctrl+C alone): in slices, so
+        # a Ctrl+Break is answered within a second instead of after the full sleep
+        end = time.monotonic() + secs
+        while not self.stopped_by_signal and (left := end - time.monotonic()) > 0:
+            time.sleep(min(left, WINDOWS_SLEEP_SLICE_SECS))
 
 
 def status_rerun_cmd(pr_id: int | None, timeout_secs: float) -> str:
