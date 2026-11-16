@@ -1,14 +1,20 @@
 install:
-    uv sync --all-groups
+    uv sync --all-extras --all-groups
 
 lint:
     uv run ruff check bmsdna tests
+    uv run ruff format --check bmsdna tests
 
 fmt:
+    uv run ruff check --fix bmsdna tests
     uv run ruff format bmsdna tests
 
 check:
     uv run ty check bmsdna
+
+# Run every pre-commit hook (prek.toml) on all files; install the git hook once with `prek install`.
+hooks:
+    prek run --all-files
 
 test:
     uv run -m pytest -q

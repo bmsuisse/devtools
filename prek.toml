@@ -1,0 +1,31 @@
+# prek.toml — pre-commit hooks
+# Install git hook: prek install
+# Run on all files: prek run --all-files
+
+[[repos]]
+repo = "builtin"
+hooks = [
+    { id = "check-yaml" },
+]
+
+[[repos]]
+repo = "https://github.com/astral-sh/ruff-pre-commit"
+rev = "v0.17.5"  # keep equal to the ruff version in uv.lock
+hooks = [
+    { id = "ruff-check", args = ["--fix"] },
+    { id = "ruff-format" },
+]
+
+# warning only, never blocks: ANN401 is ignored in pyproject.toml, this surfaces typing.Any usage
+[[repos]]
+repo = "local"
+hooks = [
+    { id = "ruff-warn-any", name = "ruff warn: typing.Any (ANN401)", language = "system", entry = "uv run ruff check --select ANN401 --exit-zero --output-format concise", types = ["python"], verbose = true },
+]
+
+# same scope as CI and `just check`
+[[repos]]
+repo = "local"
+hooks = [
+    { id = "ty", name = "ty check", language = "system", entry = "uv run ty check bmsdna", types = ["python"], pass_filenames = false },
+]

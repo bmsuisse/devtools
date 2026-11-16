@@ -30,6 +30,8 @@ jobs:
         run: uv sync --all-extras --all-groups
       - name: Lint (ruff)
         run: uv run ruff check bmsdna tests
+      - name: Format check (ruff)
+        run: uv run ruff format --check bmsdna tests
       - name: Type check (ty)
         run: uv run ty check bmsdna
       - name: Test with pytest
