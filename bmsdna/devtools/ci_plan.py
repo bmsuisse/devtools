@@ -104,7 +104,7 @@ class Tier:
         )
 
     def area_of(self, root: Path, path: str, areas: Collection[str]) -> frozenset[str] | None:
-        """Areas owning a repo-relative file, or None when the file is not an area file of this tier (a helper
+        """Areas owning a file (a path relative to the pyproject.toml folder), or None when the file is not an area file of this tier (a helper
         folder, a file directly in the tier folder): changing it can affect any test, so the plan runs everything.
         In folder mode a file of an area folder counts, helpers like conftest.py included. A test file whose
         whole folder was removed still names its (now gone) area. `areas` is `self.areas(root)`, computed once per
