@@ -139,11 +139,13 @@ def changed_files(target: str, *, merge_checkout: bool, root: Path | None = None
     `relative_to_root`.
     `--no-renames` lists a moved file under its old path too: rename detection would hide the old path, so code moved
     into a `non_code` folder (or a test moved between areas) would look like nothing happened to the old place.
-    `--no-relative` keeps the paths relative to the repository root whatever `diff.relative` is configured (the plan
-    normalises them itself, see `relative_to_root`). `-z` keeps non-ASCII and other unusual names unquoted (git's default
+    `-c diff.relative=false` keeps the paths relative to the repository root whatever the user configured (the plan
+    normalises them itself, see `relative_to_root`; unlike `--no-relative` it works on any git version). `-z` keeps non-ASCII and other unusual names unquoted (git's default
     quoting would defeat every glob)."""
     diff = ("HEAD^1", "HEAD") if merge_checkout else (f"origin/{target}...HEAD",)
-    out = _git("diff", "--name-only", "--no-renames", "--no-relative", "-z", *diff).stdout
+    # `-C root`: the same repository the prefix is taken from, whatever the process cwd is.
+    where = ["-C", str(root)] if root is not None else []
+    out = _git(*where, "-c", "diff.relative=false", "diff", "--name-only", "--no-renames", "-z", *diff).stdout
     files = [path for path in out.split("\0") if path]  # -z: git would quote names like test_\303\274ber.py
     return files if root is None else relative_to_root(files, root)
 

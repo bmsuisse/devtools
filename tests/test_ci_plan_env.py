@@ -493,3 +493,46 @@ def test_changed_files_for_a_repository_folder_ending_in_a_space(tmp_path, monke
     monkeypatch.chdir(work / "app")
     assert ci_plan_env.changed_files("main", merge_checkout=False, root=work / "app") == ["code.py"]
     assert ci_plan_env.changed_files("main", merge_checkout=False, root=work) == ["app/code.py"]
+
+
+def test_changed_files_of_the_merge_commit_in_ci_for_a_sub_folder_project(clone, monkeypatch) -> None:
+    """The CI path (HEAD is the PR merge commit, compared with its first parent), with the project in a sub-folder."""
+    git(clone, "checkout", "-q", "-b", "feat")
+    for name in ("app/code.py", "infra/main.bicep"):
+        (clone / name).parent.mkdir(exist_ok=True)
+        (clone / name).write_text(name)
+    git(clone, "add", "-A")
+    git(clone, "commit", "-q", "-m", "mono")
+    git(clone, "checkout", "-q", "main")
+    git(clone, "merge", "-q", "--no-ff", "-m", "merge", "feat")
+    monkeypatch.chdir(clone)
+    files = ci_plan_env.changed_files("main", merge_checkout=True, root=clone / "app")
+    assert sorted(files) == ["../infra/main.bicep", "code.py"]
+
+
+def test_a_sibling_folder_sharing_the_project_folder_name_as_a_prefix_stays_outside(clone, monkeypatch) -> None:
+    git(clone, "checkout", "-q", "-b", "feat")
+    for name in ("app/code.py", "app2/code.py"):
+        (clone / name).parent.mkdir(exist_ok=True)
+        (clone / name).write_text(name)
+    git(clone, "add", "-A")
+    git(clone, "commit", "-q", "-m", "mono")
+    monkeypatch.chdir(clone / "app")
+    assert sorted(ci_plan_env.changed_files("main", merge_checkout=False, root=clone / "app")) == [
+        "../app2/code.py",
+        "code.py",
+    ]
+
+
+def test_the_diff_runs_in_the_project_repository_not_the_process_cwd(clone, tmp_path, monkeypatch) -> None:
+    """cwd is another repository: the prefix and the diff must both come from the project's."""
+    git(clone, "checkout", "-q", "-b", "feat")
+    (clone / "app").mkdir()
+    (clone / "app/code.py").write_text("x")
+    git(clone, "add", "-A")
+    git(clone, "commit", "-q", "-m", "app")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    git(elsewhere, "init", "-q", "-b", "main")
+    monkeypatch.chdir(elsewhere)
+    assert ci_plan_env.changed_files("main", merge_checkout=False, root=clone / "app") == ["code.py"]
