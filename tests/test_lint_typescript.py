@@ -168,7 +168,9 @@ def test_json_cast_to_unknown_is_not_a_model_finding() -> None:
 
 
 def test_json_cast_inside_flagged_fetch_is_reported_once() -> None:
-    src = "async function api<T>(url: string) {\n  const res = await fetch(url);\n  return res.json() as Promise<T>;\n}\n"
+    src = (
+        "async function api<T>(url: string) {\n  const res = await fetch(url);\n  return res.json() as Promise<T>;\n}\n"
+    )
     assert _check(src) == [(2, RULE_HTTP)]
 
 
@@ -214,7 +216,9 @@ def test_run_flags_only_packages_with_a_generator(tmp_path: Path) -> None:
 
     result = lint.run([], root=tmp_path, skip_tooling_check=True)
 
-    assert [(f.path.relative_to(tmp_path).as_posix(), f.rule) for f in result.findings] == [("withgen/src/api.ts", RULE_HTTP)]
+    assert [(f.path.relative_to(tmp_path).as_posix(), f.rule) for f in result.findings] == [
+        ("withgen/src/api.ts", RULE_HTTP)
+    ]
 
 
 def test_run_honours_ts_exclude_globs_and_extra_markers(tmp_path: Path) -> None:
@@ -224,7 +228,9 @@ def test_run_honours_ts_exclude_globs_and_extra_markers(tmp_path: Path) -> None:
     (tmp_path / "src/legacy").mkdir(parents=True)
     (tmp_path / "package.json").write_text(json.dumps({"dependencies": {"orval": "^7"}}))
     (tmp_path / "src/legacy/old.ts").write_text("fetch('/a');\n")
-    (tmp_path / "src/ws.ts").write_text("function f() {\n  const w = new WebSocket('/ws');\n  w.send(1);\n  fetch('/a');\n}\n")
+    (tmp_path / "src/ws.ts").write_text(
+        "function f() {\n  const w = new WebSocket('/ws');\n  w.send(1);\n  fetch('/a');\n}\n"
+    )
 
     assert lint.run([], root=tmp_path, skip_tooling_check=True).ok
 

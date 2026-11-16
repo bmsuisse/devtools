@@ -14,24 +14,20 @@ from __future__ import annotations
 
 import os
 import re
-from fnmatch import fnmatch
 import subprocess
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path
 
-from .bdt_config import load_bdt_table
-from .injection_frontend import (
-    FRONTEND_SUFFIXES,
-    check_frontend_file,
-    find_csp_weakening,
-    has_csp,
-)
-from .injection_python import check_python_sinks
-from .lint import _DEFAULT_EXCLUDE_DIR_NAMES, _iter_files
-from .lint_findings import Finding, render_findings
-from .lint_sql import check_sql_file, load_sql_functions, require_sqlglot
-from .lint_typescript import DEFAULT_TS_EXCLUDE_DIR_NAMES, is_excluded_ts_file
+from bmsdna.devtools.bdt_config import load_bdt_table
+from bmsdna.devtools.injection_frontend import FRONTEND_SUFFIXES, check_frontend_file, find_csp_weakening, has_csp
+from bmsdna.devtools.injection_python import check_python_sinks
+from bmsdna.devtools.lint import _DEFAULT_EXCLUDE_DIR_NAMES, _iter_files
+from bmsdna.devtools.lint_findings import Finding, render_findings
+from bmsdna.devtools.lint_sql import check_sql_file, load_sql_functions, require_sqlglot
+from bmsdna.devtools.lint_typescript import DEFAULT_TS_EXCLUDE_DIR_NAMES, is_excluded_ts_file
 
 SQL_INJECTION_RULES = frozenset(
     {
@@ -74,7 +70,9 @@ _CONFIG_NAMES = frozenset(
     }
 )
 _EXCLUDE_TEST_DIR_NAMES = DEFAULT_TS_EXCLUDE_DIR_NAMES - {"generated", "__generated__"}
-_SKIP_NAMES = frozenset({"package-lock.json", "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock", "npm-shrinkwrap.json"})
+_SKIP_NAMES = frozenset(
+    {"package-lock.json", "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock", "npm-shrinkwrap.json"}
+)
 _MAX_CSP_FILE_BYTES = 1_000_000
 _TS_LIKE = (".ts", ".tsx", ".mts", ".js", ".jsx", ".mjs")
 
@@ -118,15 +116,26 @@ def diff_files(root: Path, base: str | None = None) -> list[Path]:
             cwd=root,
             capture_output=True,
             encoding="utf-8",
+            check=False,
         )
         candidates += [head.stdout.strip()] if head.returncode == 0 and head.stdout.strip() else []
         candidates += ["origin/main", "main", "origin/master", "master"]
     chosen = next(
-        (c for c in candidates if c and subprocess.run(["git", "rev-parse", "--verify", "-q", c], cwd=root, capture_output=True).returncode == 0),
+        (
+            c
+            for c in candidates
+            if c
+            and subprocess.run(
+                ["git", "rev-parse", "--verify", "-q", c], cwd=root, capture_output=True, check=False
+            ).returncode
+            == 0
+        ),
         None,
     )
     if chosen is None:
-        sys.exit(f"Couldn't find a base branch to diff against (tried {', '.join(c for c in candidates if c)}); pass --base.")
+        sys.exit(
+            f"Couldn't find a base branch to diff against (tried {', '.join(c for c in candidates if c)}); pass --base."
+        )
     names: set[str] = set()
     names.update(_git(["diff", "--name-only", "-z", "--diff-filter=ACMR", f"{chosen}...HEAD"], root).split("\0"))
     names.update(_git(["diff", "--name-only", "-z", "--diff-filter=ACMR", "HEAD"], root).split("\0"))
@@ -164,7 +173,11 @@ def _filter_ignored(findings: list[Finding]) -> list[Finding]:
 
 
 def _scan_python(path: Path, sql_functions: frozenset[str] = frozenset()) -> list[Finding]:
-    sql = [f for f in check_sql_file(path, review=True, sql_functions=sql_functions) if f.rule in SQL_INJECTION_RULES or f.rule in ("sql-unverified-call", "sql-unverified-cast")]
+    sql = [
+        f
+        for f in check_sql_file(path, review=True, sql_functions=sql_functions)
+        if f.rule in SQL_INJECTION_RULES or f.rule in ("sql-unverified-call", "sql-unverified-cast")
+    ]
     return sql + check_python_sinks(path)
 
 
@@ -181,15 +194,13 @@ class _ScanFilter:
         self.dir_names = _DEFAULT_EXCLUDE_DIR_NAMES | {".next", "coverage", "storybook-static"}
         self._patterns: list[str] = []
         for entry in exclude:
-            entry = entry.replace("\\", "/").strip().strip("/")
-            if entry.startswith("./"):
-                entry = entry[2:]
-            if not entry:
+            cleaned = entry.replace("\\", "/").strip().strip("/").removeprefix("./")
+            if not cleaned:
                 continue
-            if "/" not in entry and not _GLOB_CHARS & set(entry):
-                self.dir_names = self.dir_names | {entry}
+            if "/" not in cleaned and not _GLOB_CHARS & set(cleaned):
+                self.dir_names = self.dir_names | {cleaned}
             else:
-                self._patterns.append(entry)
+                self._patterns.append(cleaned)
         self._visible = _git_visible_files(root) if respect_gitignore else None
 
     def allows(self, path: Path) -> bool:
@@ -214,6 +225,7 @@ def _git_visible_files(root: Path) -> set[Path] | None:
             cwd=root,
             capture_output=True,
             encoding="utf-8",
+            check=False,
         )
     except FileNotFoundError:
         return None
@@ -226,11 +238,15 @@ def _is_minified(path: Path) -> bool:
     return path.name.endswith(".min.js")
 
 
-def _walk_repo_text_files(root: Path, scope: _ScanFilter):
+def _walk_repo_text_files(root: Path, scope: _ScanFilter) -> Iterator[Path]:
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in scope.dir_names]
         for name in filenames:
-            if name in _SKIP_NAMES or name.endswith(".min.js") or not (name in _CONFIG_NAMES or name.endswith(_CONFIG_SUFFIXES)):
+            if (
+                name in _SKIP_NAMES
+                or name.endswith(".min.js")
+                or not (name in _CONFIG_NAMES or name.endswith(_CONFIG_SUFFIXES))
+            ):
                 continue
             candidate = Path(dirpath, name)
             try:
@@ -311,7 +327,9 @@ def run(
         fe_files, _ = _iter_files(targets, scope.dir_names, FRONTEND_SUFFIXES)
         py_files = [p for p in py_files if scope.allows(p)]
         fe_files = [p for p in fe_files if scope.allows(p)]
-        findings.extend(Finding(p, 0, "path-not-found", f"'{p}' doesn't exist -- nothing was scanned for it.") for p in missing)
+        findings.extend(
+            Finding(p, 0, "path-not-found", f"'{p}' doesn't exist -- nothing was scanned for it.") for p in missing
+        )
 
     py_files = [p for p in py_files if not _is_test_file(p, root)]
     fe_files = [p for p in fe_files if not _is_test_file(p, root) and not _is_minified(p)]

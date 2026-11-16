@@ -9,14 +9,15 @@ which touches neither the working tree nor any ref. GitHub recomputes `mergeable
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .cli_tools import CLI_TIMEOUT_SECS
-from .gitrepo import AdoRemote, UnknownRemoteError, current_remote
+from bmsdna.devtools.cli_tools import CLI_TIMEOUT_SECS
+from bmsdna.devtools.gitrepo import AdoRemote, UnknownRemoteError, current_remote
 
 # Fetching objects over the network is slower than the metadata calls `CLI_TIMEOUT_SECS` is meant for.
 FETCH_TIMEOUT_SECS = CLI_TIMEOUT_SECS * 4
@@ -34,7 +35,9 @@ class Drift:
 
     target: str
     behind: int | None  # commits the target gained since then; None if they couldn't be counted
-    conflicts: tuple[str, ...] | None  # paths that conflict with the target's tip; () = merges cleanly, None = couldn't tell
+    conflicts: (
+        tuple[str, ...] | None
+    )  # paths that conflict with the target's tip; () = merges cleanly, None = couldn't tell
 
     @property
     def conflicting(self) -> bool:
@@ -43,8 +46,13 @@ class Drift:
 
 def _git(args: list[str], cwd: str | None, timeout: float = CLI_TIMEOUT_SECS) -> subprocess.CompletedProcess[str]:
     try:
-        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, encoding="utf-8", timeout=timeout)
-    except (OSError, subprocess.TimeoutExpired) as e:  # no git, or a fetch that hangs: "couldn't tell", like any other failure
+        return subprocess.run(
+            ["git", *args], cwd=cwd, capture_output=True, encoding="utf-8", timeout=timeout, check=False
+        )
+    except (
+        OSError,
+        subprocess.TimeoutExpired,
+    ) as e:  # no git, or a fetch that hangs: "couldn't tell", like any other failure
         return subprocess.CompletedProcess(["git", *args], 255, "", str(e))
 
 
@@ -56,17 +64,16 @@ def _cache_path(cwd: str | None) -> Path | None:
 def _cache_read(path: Path | None) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8")) if path else {}
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return {}
 
 
 def _cache_write(path: Path | None, cache: dict) -> None:
     if path is None:
         return
-    try:
+    # a cache that can't be written only costs the next run a fetch
+    with contextlib.suppress(OSError):
         path.write_text(json.dumps(dict(list(cache.items())[-_CACHE_ENTRIES:])), encoding="utf-8")
-    except OSError:
-        pass  # a cache that can't be written only costs the next run a fetch
 
 
 def merge_conflicts(source: str, target: str, cwd: str | None = None) -> tuple[str, ...] | None:
@@ -85,7 +92,7 @@ def merge_conflicts(source: str, target: str, cwd: str | None = None) -> tuple[s
 def _is_this_repo(remote: AdoRemote, cwd: str | None) -> bool:
     try:
         return current_remote(cwd) == remote
-    except (SystemExit, UnknownRemoteError):
+    except SystemExit, UnknownRemoteError:
         return False
 
 
@@ -122,7 +129,9 @@ def check(remote: AdoRemote, pr: dict, tip: str | None, cwd: str | None = None) 
         return Drift(target, behind, None if conflicts is None else tuple(conflicts))
 
     # by commit id: the PR's source branch may be one this checkout never fetched
-    fetched = _git(["fetch", "--quiet", "--no-write-fetch-head", "origin", last_target, tip, source], cwd, FETCH_TIMEOUT_SECS)
+    fetched = _git(
+        ["fetch", "--quiet", "--no-write-fetch-head", "origin", last_target, tip, source], cwd, FETCH_TIMEOUT_SECS
+    )
     if fetched.returncode != 0:
         return Drift(target, None, None)  # not cached: a later run may manage to fetch
     count = _git(["rev-list", "--count", f"{last_target}..{tip}"], cwd)
@@ -134,7 +143,9 @@ def check(remote: AdoRemote, pr: dict, tip: str | None, cwd: str | None = None) 
 
 
 def _moved(drift: Drift) -> str:
-    return f"'{drift.target}' has moved on" + (f" by {drift.behind} commit{'s' * (drift.behind != 1)}" if drift.behind else "")
+    return f"'{drift.target}' has moved on" + (
+        f" by {drift.behind} commit{'s' * (drift.behind != 1)}" if drift.behind else ""
+    )
 
 
 def conflict_message(pr: dict, drift: Drift) -> str:

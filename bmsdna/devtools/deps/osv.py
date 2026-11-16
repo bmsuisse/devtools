@@ -13,8 +13,8 @@ from urllib.parse import quote
 
 import requests
 
-from ..cli_tools import HTTP_TIMEOUT_SECS
-from .versions import Ecosystem
+from bmsdna.devtools.cli_tools import HTTP_TIMEOUT_SECS
+from bmsdna.devtools.deps.versions import Ecosystem
 
 OSV_URL = "https://api.osv.dev"
 KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
@@ -53,7 +53,7 @@ def _chunks(items: Sequence[Any], size: int) -> Iterator[Sequence[Any]]:
 
 
 def _parse_time(text: str) -> datetime:
-    parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    parsed = datetime.fromisoformat(text)
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 

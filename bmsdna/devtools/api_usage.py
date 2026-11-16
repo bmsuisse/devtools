@@ -44,10 +44,10 @@ from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
 
-from . import _api_dump
-from .lint import _DEFAULT_EXCLUDE_DIR_NAMES, _iter_files
-from .lint_findings import Finding
-from .lint_typescript import _mask, is_excluded_ts_file
+from bmsdna.devtools import _api_dump
+from bmsdna.devtools.lint import _DEFAULT_EXCLUDE_DIR_NAMES, _iter_files
+from bmsdna.devtools.lint_findings import Finding
+from bmsdna.devtools.lint_typescript import _mask, is_excluded_ts_file
 
 RULE = "api-route-uncalled"
 RULE_STALE_BASELINE = "api-route-baseline-stale"
@@ -63,7 +63,9 @@ _TEST_DIR_NAMES = frozenset({"tests", "test", "__tests__"})
 _TEST_FILE_RE = re.compile(r"^(?:test_.*|.*_test|conftest)\.py$")
 DEFAULT_URL_FOR_FUNCTIONS = ("url_for", "url_path_for")
 _APP_IMPORT_TIMEOUT_SECONDS = 300
-_MAX_TEMPLATE_CHARS = 4000  # a URL template longer than this is not a URL; also bounds the rescan of an unclosed backtick
+_MAX_TEMPLATE_CHARS = (
+    4000  # a URL template longer than this is not a URL; also bounds the rescan of an unclosed backtick
+)
 _MAX_TEMPLATE_DEPTH = 20
 
 # Bounded character classes keep these linear on garbage input (a lone `'${` must not scan to end of file).
@@ -72,7 +74,9 @@ _TEMPLATE_START_RE = re.compile(r"`(?=(?:\$\{[^}`\n]*\})*/)")
 _FETCH_METHOD_RE = re.compile(r"\.(GET|POST|PUT|PATCH|DELETE)\s*(?:<[^()]*?>)?\(\s*$")
 _IDENT_RE = re.compile(r"[A-Za-z_$][\w$]*")
 _SDK_FN_RE = re.compile(r"export const (\w+) = ")
-_SDK_URL_RE = re.compile(r"""\.(get|post|put|patch|delete|head|options)\b[^;]{0,4000}?url:\s*["']([^"']+)["']""", re.S)
+_SDK_URL_RE = re.compile(
+    r"""\.(get|post|put|patch|delete|head|options)\b[^;]{0,4000}?url:\s*["']([^"']+)["']""", re.DOTALL
+)
 
 
 class ApiUsageError(Exception):
@@ -119,9 +123,12 @@ def load_app_operations(app_spec: str, *, cwd: Path, env: dict[str, str] | None 
                 text=True,
                 encoding="utf-8",
                 timeout=_APP_IMPORT_TIMEOUT_SECONDS,
+                check=False,
             )
         except subprocess.TimeoutExpired as exc:
-            raise ApiUsageError(f"importing '{app_spec}' took longer than {_APP_IMPORT_TIMEOUT_SECONDS}s (cwd {cwd})") from exc
+            raise ApiUsageError(
+                f"importing '{app_spec}' took longer than {_APP_IMPORT_TIMEOUT_SECONDS}s (cwd {cwd})"
+            ) from exc
         if proc.returncode != 0 or not out.is_file():
             tail = "\n".join((proc.stderr or proc.stdout).strip().splitlines()[-15:])
             raise ApiUsageError(f"could not load operations from '{app_spec}' (cwd {cwd}):\n{tail}")
@@ -194,7 +201,9 @@ class FrontendUsage:
     identifiers: set[str] = field(default_factory=set)
     fetch_calls: set[tuple[str, str]] = field(default_factory=set)  # (METHOD, normalized path) from `.GET("/x"`
     literals: set[str] = field(default_factory=set)  # normalized path-like string/template literals
-    suffix_literals: set[str] = field(default_factory=set)  # literals usable for url-sfx matching (derived, see scan_frontend)
+    suffix_literals: set[str] = field(
+        default_factory=set
+    )  # literals usable for url-sfx matching (derived, see scan_frontend)
 
 
 @dataclass(slots=True)
@@ -226,8 +235,10 @@ def scan_frontend(files: list[Path]) -> FrontendUsage:
         usage.files += 1
         usage.identifiers.update(_IDENT_RE.findall(text))
         found: list[tuple[int, str]] = [(m.start(), m.group("body")) for m in _QUOTED_PATH_RE.finditer(text)]
-        for m in _TEMPLATE_START_RE.finditer(text):
-            found.append((m.start(), _read_template(text, m.start(), min(len(text), m.start() + _MAX_TEMPLATE_CHARS))[0]))
+        found.extend(
+            (m.start(), _read_template(text, m.start(), min(len(text), m.start() + _MAX_TEMPLATE_CHARS))[0])
+            for m in _TEMPLATE_START_RE.finditer(text)
+        )
         for pos, body in found:
             normalized = normalize_path(body)
             call = _FETCH_METHOD_RE.search(text[max(0, pos - 40) : pos])
@@ -253,7 +264,7 @@ def read_sdk_functions(directory: Path) -> dict[str, tuple[str, str]]:
         if "sdk.gen.ts" not in filenames:
             continue
         text = Path(dirpath, "sdk.gen.ts").read_text(encoding="utf-8", errors="ignore")
-        for chunk in re.split(r"(?=^export const \w+ = )", text, flags=re.M):
+        for chunk in re.split(r"(?=^export const \w+ = )", text, flags=re.MULTILINE):
             name, url = _SDK_FN_RE.match(chunk), _SDK_URL_RE.search(chunk)
             if name and url:
                 functions[name.group(1)] = (url.group(1).upper(), normalize_path(url.group(2)))
@@ -272,7 +283,9 @@ def read_referenced_route_names(directory: Path, functions: tuple[str, ...] = DE
     """Route names passed as a string literal to one of `functions` (`request.url_for("x")`, `app.url_path_for(name="x")`,
     `{{ url_for('x', id=1) }}`) in the non-test Python files and templates under `directory`. A mounted sub-app's
     `"mount:x"` yields `x`. Regex based, so a call in a comment counts too (that only ever hides a dead route, never invents one)."""
-    pattern = re.compile(r"\b(?:" + "|".join(map(re.escape, functions)) + r")\(\s*(?:\w+\s*=\s*)?(['\"])(?P<name>[^'\"\n]+)\1")
+    pattern = re.compile(
+        r"\b(?:" + "|".join(map(re.escape, functions)) + r")\(\s*(?:\w+\s*=\s*)?(['\"])(?P<name>[^'\"\n]+)\1"
+    )
     files, _ = _iter_files([directory], _EXCLUDE_DIR_NAMES | _TEST_DIR_NAMES, _NAME_SOURCE_SUFFIXES)
     names: set[str] = set()
     for path in files:
@@ -291,7 +304,8 @@ def is_named_by(op: Operation, names: set[str]) -> bool:
         return False
     path = op.path[len(op.mount) :] if op.mount and op.path.startswith(op.mount) else op.path
     return any(
-        op.operation_id in (n, re.sub(r"\W", "_", n + path) + "_" + op.method.lower()) or op.operation_id.endswith("-" + n)
+        op.operation_id in (n, re.sub(r"\W", "_", n + path) + "_" + op.method.lower())
+        or op.operation_id.endswith("-" + n)
         for n in names
     )
 
@@ -371,7 +385,9 @@ def parse_config(table: dict) -> list[AppConfig]:
     for i, raw in enumerate(apps):
         name = str(raw.get("name") or raw.get("app") or raw.get("openapi") or f"app{i}")
         if bool(raw.get("app")) == bool(raw.get("openapi")):
-            raise ApiUsageError(f"dead_code app '{name}': set exactly one of `app` (module:attr) and `openapi` (path to openapi.json)")
+            raise ApiUsageError(
+                f"dead_code app '{name}': set exactly one of `app` (module:attr) and `openapi` (path to openapi.json)"
+            )
         frontends = _str_list(raw, "frontends", name)
         if not frontends:
             raise ApiUsageError(f"dead_code app '{name}': `frontends` (list of frontend source dirs/globs) is required")
@@ -415,11 +431,17 @@ def _resolve_frontend_dirs(repo_root: Path, patterns: list[str]) -> list[Path]:
 def read_baseline(path: Path) -> set[str]:
     if not path.is_file():
         return set()
-    return {line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip() and not line.lstrip().startswith("#")}
+    return {
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
 
 
 def write_baseline(path: Path, keys: list[str]) -> None:
-    header = "# Backend operations known to be unused (bdt dead-code). Remove a line once the route is deleted or called.\n"
+    header = (
+        "# Backend operations known to be unused (bdt dead-code). Remove a line once the route is deleted or called.\n"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(header + "".join(f"{k}\n" for k in sorted(keys)), encoding="utf-8")
 
@@ -445,11 +467,17 @@ def check_app(config: AppConfig, *, repo_root: Path, update_baseline: bool = Fal
     ]
 
     def excluded(op: Operation) -> bool:
-        return is_excluded(op, prefixes=config.exclude_prefixes, tags=config.exclude_tags, path_globs=config.exclude_paths)
+        return is_excluded(
+            op, prefixes=config.exclude_prefixes, tags=config.exclude_tags, path_globs=config.exclude_paths
+        )
 
     names = read_referenced_route_names(repo_root / config.app_dir, tuple(config.url_for_functions))
     by_key = {op.key: op for op in operations}
-    uncalled = [op for op in operations if not excluded(op) and call_evidence(op, frontends) is None and not is_named_by(op, names)]
+    uncalled = [
+        op
+        for op in operations
+        if not excluded(op) and call_evidence(op, frontends) is None and not is_named_by(op, names)
+    ]
     where = Path(config.name)
 
     if not config.baseline:
@@ -488,13 +516,17 @@ def _finding(where: Path, op: Operation) -> Finding:
 
 def run(table: dict, *, repo_root: Path, update_baseline: bool = False) -> list[Finding]:
     configs = parse_config(table)
-    if update_baseline:  # validate everything first so a late failure can't leave some baselines rewritten and others not
+    if (
+        update_baseline
+    ):  # validate everything first so a late failure can't leave some baselines rewritten and others not
         paths = [c.baseline for c in configs]
         if not all(paths):
             missing = ", ".join(c.name for c in configs if not c.baseline)
             raise ApiUsageError(f"--update-baseline needs a `baseline` for every app; missing for: {missing}")
         if len(set(paths)) != len(paths):
-            raise ApiUsageError("--update-baseline: two apps share the same `baseline` file, each would overwrite the other")
+            raise ApiUsageError(
+                "--update-baseline: two apps share the same `baseline` file, each would overwrite the other"
+            )
     findings: list[Finding] = []
     for config in configs:
         findings.extend(check_app(config, repo_root=repo_root, update_baseline=update_baseline))

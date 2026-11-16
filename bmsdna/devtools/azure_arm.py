@@ -10,8 +10,8 @@ from typing import Any
 
 import requests
 
-from .azure_auth import get_azure_token
-from .cli_tools import HTTP_TIMEOUT_SECS
+from bmsdna.devtools.azure_auth import get_azure_token
+from bmsdna.devtools.cli_tools import HTTP_TIMEOUT_SECS
 
 ARM_URL = "https://management.azure.com"
 ARM_SCOPE = f"{ARM_URL}/.default"
@@ -57,7 +57,9 @@ def request(
 
 def arm(method: str, path: str, api_version: str, *, json: Any = None, params: dict[str, Any] | None = None) -> Any:
     """JSON result of an ARM call; `path` is relative to the ARM root, e.g. `/subscriptions/...`."""
-    r = request(method, f"{ARM_URL}/{path.lstrip('/')}", params={"api-version": api_version, **(params or {})}, json=json)
+    r = request(
+        method, f"{ARM_URL}/{path.lstrip('/')}", params={"api-version": api_version, **(params or {})}, json=json
+    )
     return r.json() if r.content else None
 
 
@@ -67,7 +69,7 @@ def _az_profile_default_subscription() -> str | None:
     try:
         profile = json.loads(path.read_text(encoding="utf-8-sig"))
         return next((s["id"] for s in profile["subscriptions"] if s.get("isDefault")), None)
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+    except OSError, ValueError, KeyError, TypeError, AttributeError:
         return None
 
 

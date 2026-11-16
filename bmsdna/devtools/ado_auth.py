@@ -5,13 +5,14 @@ from __future__ import annotations
 
 import base64
 import re
+from collections.abc import Callable
 from urllib.parse import parse_qs, urlparse
 
 import requests
 
-from .azure_auth import get_azure_token
-from .pr_cancel import one_line
-from .gitrepo import AdoRemote, current_remote
+from bmsdna.devtools.azure_auth import get_azure_token
+from bmsdna.devtools.gitrepo import AdoRemote, current_remote
+from bmsdna.devtools.pr_cancel import one_line
 
 # Well-known Azure DevOps resource ID; `<id>/.default` is its AAD scope.
 ADO_RESOURCE_ID = "499b84ac-1321-427f-aa17-267ca6975798"
@@ -49,7 +50,7 @@ def _remote_org() -> str | None:
     outside a checkout)."""
     try:
         remote = current_remote()
-    except Exception:  # noqa: BLE001 -- not a git checkout / unknown remote: just no org to name
+    except Exception:
         return None
     return remote.org if isinstance(remote, AdoRemote) else None
 
@@ -83,7 +84,7 @@ def auth_header(pat: str | None) -> dict[str, str]:
 def _ado_message(response: requests.Response) -> str | None:
     try:
         message = response.json().get("message")
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         return None
     return one_line(message) if isinstance(message, str) and message.strip() else None
 
@@ -124,7 +125,10 @@ def auth_failure_message(response: requests.Response, pat_used: bool) -> str:
         lines.append(f"Credentials: the PAT from {PAT_SOURCES}.")
         causes: list[str] = ["it lacks the scope this call needs" + (f" ({scope})" if scope else "")]
         if response.status_code != 403:
-            causes += ["it has expired or was revoked", "it was created for a different organization" + (f" than '{org}'" if org else "")]
+            causes += [
+                "it has expired or was revoked",
+                "it was created for a different organization" + (f" than '{org}'" if org else ""),
+            ]
         else:
             causes += ["your account itself lacks the permission"]
         lines.append("Most likely " + ", or ".join(causes) + ".")
@@ -132,7 +136,8 @@ def auth_failure_message(response: requests.Response, pat_used: bool) -> str:
     else:
         lines.append("Credentials: your `az login` token (no PAT given).")
         lines.append(
-            "Run `az login` as a user with access to " + (f"organization '{org}'" if org else "the organization")
+            "Run `az login` as a user with access to "
+            + (f"organization '{org}'" if org else "the organization")
             + f", or use a PAT instead: create one at {pat_settings_url(org)} (scopes: {BDT_PAT_SCOPES}) and set AZURE_DEVOPS_EXT_PAT / pass --pat."
         )
     return "\n".join(lines)
@@ -150,8 +155,8 @@ def _is_sign_in_page(response: requests.Response) -> bool:
     return response.status_code == 200 and "text/html" in response.headers.get("Content-Type", "")
 
 
-def _check_auth_hook(pat_used: bool):
-    def hook(response: requests.Response, *args, **kwargs) -> requests.Response:
+def _check_auth_hook(pat_used: bool) -> Callable[..., requests.Response]:
+    def hook(response: requests.Response, *args: object, **kwargs: object) -> requests.Response:
         if _is_sign_in_page(response):
             # one status for "not signed in", however Azure DevOps phrased it, so callers' `>= 400` checks agree
             response.status_code = 401
@@ -162,7 +167,7 @@ def _check_auth_hook(pat_used: bool):
                 raise error
 
             # replaces the generic "401 Client Error: Unauthorized for url" `raise_for_status` would raise
-            setattr(response, "raise_for_status", raise_for_status)
+            response.raise_for_status = raise_for_status
         return response
 
     return hook

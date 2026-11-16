@@ -65,7 +65,9 @@ def test_cleanup_worktrees_cli_falls_back_to_pgdevkits_own_user_when_no_pg_user_
     assert captured["pg_user"] == pgdevkit_constants.USER
 
 
-def test_cleanup_worktrees_cli_falls_back_to_pgdevkits_own_user_even_when_shell_user_env_is_set(monkeypatch, tmp_path) -> None:
+def test_cleanup_worktrees_cli_falls_back_to_pgdevkits_own_user_even_when_shell_user_env_is_set(
+    monkeypatch, tmp_path
+) -> None:
     # $USER/$LOGNAME are set by the OS shell on virtually every real
     # session -- unlike PGUSER, they must NOT feed the --pg-user fallback,
     # or the intended default (pgdevkit's own test-container user) would

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
 
-from .lint_findings import Finding
+from bmsdna.devtools.lint_findings import Finding
 
 RULE_HTTP = "ts-handwired-http"
 RULE_MODEL = "ts-handwired-model"
@@ -27,7 +27,18 @@ RULE_MODEL = "ts-handwired-model"
 TS_SUFFIXES = (".ts", ".tsx", ".mts")
 
 DEFAULT_TS_EXCLUDE_DIR_NAMES = frozenset(
-    {"generated", "__generated__", "__tests__", "__mocks__", "tests", "test", "e2e", "coverage", ".next", "storybook-static"}
+    {
+        "generated",
+        "__generated__",
+        "__tests__",
+        "__mocks__",
+        "tests",
+        "test",
+        "e2e",
+        "coverage",
+        ".next",
+        "storybook-static",
+    }
 )
 _EXCLUDE_FILE_RE = re.compile(r"\.(?:gen|generated|test|spec)\.m?tsx?$|\.d\.m?ts$")
 _EXCLUDE_FILE_NAMES = frozenset({"api-types.ts", "openapi-ts.config.ts"})
@@ -295,7 +306,7 @@ def find_generator(path: Path, *, repo_root: Path, cache: dict[Path, str | None]
 def _read_generator(package_json: Path) -> str | None:
     try:
         data = json.loads(package_json.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+    except OSError, UnicodeDecodeError, json.JSONDecodeError:
         return None
     if not isinstance(data, dict):
         return None
@@ -327,7 +338,7 @@ def check_typescript_file(
     else:
         try:
             text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        except OSError, UnicodeDecodeError:
             return []
 
     masked = _mask(text)

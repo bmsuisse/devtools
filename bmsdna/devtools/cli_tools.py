@@ -9,6 +9,7 @@ concerns for arguments that come from user input, e.g. PR titles).
 
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 import re
@@ -19,8 +20,12 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from types import FrameType, TracebackType
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
+
+if TYPE_CHECKING:
+    from bmsdna.devtools.github_api import GitHubClient
 
 PSQL_INSTALL_HINT = "Install the PostgreSQL client tools (psql): https://www.postgresql.org/download/"
 
@@ -93,13 +98,15 @@ WINDOWS_SLEEP_SLICE_SECS = 1.0
 
 # What asks a `--wait` loop to stop and report: SIGTERM (what `timeout`, `kill`, `docker stop` and most agent harnesses
 # send first) and, on Windows, where SIGTERM is never delivered by the OS, Ctrl+Break. Windows lacks the rest.
-_STOP_SIGNALS = tuple(sig for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGBREAK", None)) if sig is not None)
+_STOP_SIGNALS = tuple(
+    sig for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGBREAK", None)) if sig is not None
+)
 
 
 _SignalHandler = Callable[[int, FrameType | None], object] | int | None  # what `signal.getsignal` returns
 
 
-class _WaitStopped(Exception):
+class _WaitStoppedError(Exception):
     """Raised by the stop-signal handler inside `WaitDeadline.sleep` to cut the sleep short."""
 
 
@@ -124,30 +131,29 @@ class WaitDeadline:
         self._previous_handlers: dict[int, _SignalHandler] = {}
         if stop_on_signal:
             for sig in _STOP_SIGNALS:
-                try:
+                # not the main thread (ValueError), or the OS refuses this signal
+                with contextlib.suppress(ValueError, OSError):
                     self._previous_handlers[sig] = signal.signal(sig, self._on_stop_signal)
-                except (ValueError, OSError):  # not the main thread (ValueError), or the OS refuses this signal
-                    pass
 
     def __enter__(self) -> WaitDeadline:
         return self
 
-    def __exit__(self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None) -> None:
+    def __exit__(
+        self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
+    ) -> None:
         self._restore_handlers()
 
     def _restore_handlers(self) -> None:
         for sig, previous in self._previous_handlers.items():
-            try:
+            with contextlib.suppress(ValueError, OSError):
                 signal.signal(sig, previous if previous is not None else signal.SIG_DFL)
-            except (ValueError, OSError):
-                pass
         self._previous_handlers.clear()
 
     def _on_stop_signal(self, signum: int, frame: FrameType | None) -> None:
         self.stopped_by_signal = True
         self._restore_handlers()
         if self._sleeping:
-            raise _WaitStopped
+            raise _WaitStoppedError
 
     def expired(self) -> bool:
         return self.stopped_by_signal or (self._end is not None and time.monotonic() >= self._end)
@@ -163,7 +169,7 @@ class WaitDeadline:
                     self._sleep(secs if self._end is None else max(0.0, min(secs, self._end - time.monotonic())))
             finally:
                 self._sleeping = False
-        except _WaitStopped:
+        except _WaitStoppedError:
             pass
 
     def _sleep(self, secs: float) -> None:
@@ -184,7 +190,9 @@ def status_rerun_cmd(pr_id: int | None, timeout_secs: float) -> str:
     return f"{cmd} --timeout {timeout_secs:g}" if timeout_secs else cmd
 
 
-def exit_wait_timeout(msg: str, print_details: Callable[[], object], deadline: WaitDeadline, rerun_cmd: str) -> NoReturn:
+def exit_wait_timeout(
+    msg: str, print_details: Callable[[], object], deadline: WaitDeadline, rerun_cmd: str
+) -> NoReturn:
     """Report where a `--wait` loop stands when its `deadline` ran out (status line, per-item details), then
     exit `EXIT_WAIT_TIMEOUT`. The last line tells the caller what to run to keep waiting."""
     print(msg)
@@ -208,18 +216,18 @@ def parse_timeout_command(args: list[str]) -> float | None:
     """The duration (seconds) of a `timeout [OPTION]... DURATION COMMAND...` command line, or None if `args` isn't
     one, the duration is 0 / infinite (= no limit) or the options can't be read with confidence: not detecting a
     limit is harmless, a wrong one would cut the wait short."""
-    if not args or os.path.basename(args[0]) not in _TIMEOUT_COMMANDS:
+    if not args or Path(args[0]).name not in _TIMEOUT_COMMANDS:
         return None
     rest = iter(args[1:])
     for arg in rest:
         if arg == "--":
-            arg = next(rest, "")
-        elif arg.startswith("--"):
+            return _parse_duration(next(rest, ""))
+        if arg.startswith("--"):
             # getopt accepts any unambiguous prefix of a long option (`--kill 5`)
             if "=" not in arg and len(arg) > 2 and any(opt.startswith(arg) for opt in _TIMEOUT_LONG_OPTIONS_WITH_VALUE):
                 next(rest, None)
             continue
-        elif arg.startswith("-") and arg != "-":
+        if arg.startswith("-") and arg != "-":
             for pos, flag in enumerate(arg[1:], start=1):
                 if flag in "ks":  # the value is the rest of the cluster (`-k5`), else the next argument
                     if pos == len(arg) - 1:
@@ -253,8 +261,14 @@ def _process_info(pid: int) -> tuple[int, float, list[str]] | None:
     """(parent pid, seconds since it started, command line) of process `pid`, via `ps` (Linux and macOS; None
     anywhere it isn't available, e.g. Windows)."""
     try:
-        r = subprocess.run(["ps", "-o", "ppid=,etime=,args=", "-p", str(pid)], capture_output=True, encoding="utf-8", timeout=CLI_TIMEOUT_SECS, check=False)
-    except (OSError, subprocess.SubprocessError):
+        r = subprocess.run(
+            ["ps", "-o", "ppid=,etime=,args=", "-p", str(pid)],
+            capture_output=True,
+            encoding="utf-8",
+            timeout=CLI_TIMEOUT_SECS,
+            check=False,
+        )
+    except OSError, subprocess.SubprocessError:
         return None
     parts = r.stdout.split(None, 2)
     if r.returncode != 0 or len(parts) < 3 or not parts[0].isdigit():
@@ -291,7 +305,10 @@ def limit_by_enclosing_timeout(timeout_secs: float) -> float:
     limit = max(remaining - ENCLOSING_TIMEOUT_MARGIN_SECS, 1.0)
     if timeout_secs and timeout_secs <= limit:
         return timeout_secs
-    print(f"Enclosing `timeout` ends in {remaining:.0f} s: giving up waiting after {limit:.0f} s so the status gets printed first.", file=sys.stderr)
+    print(
+        f"Enclosing `timeout` ends in {remaining:.0f} s: giving up waiting after {limit:.0f} s so the status gets printed first.",
+        file=sys.stderr,
+    )
     return limit
 
 
@@ -424,9 +441,9 @@ def require_tool(name: str, install_hint: str) -> str:
     return path
 
 
-def require_gh():
+def require_gh() -> GitHubClient:
     """An authenticated raw-HTTP GitHub client (see `github_api`); exits with a hint when no token is found."""
-    from .github_api import get_client
+    from bmsdna.devtools.github_api import get_client
 
     return get_client()
 

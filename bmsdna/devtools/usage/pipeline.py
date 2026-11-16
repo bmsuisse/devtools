@@ -10,7 +10,7 @@ from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import pricing
+from bmsdna.devtools.usage import pricing
 
 if TYPE_CHECKING:
     import duckdb
@@ -74,13 +74,16 @@ def assign_phases(con: duckdb.DuckDBPyConnection, scope: str) -> None:
     for mid, phase, kind in con.execute("SELECT mid, phase, kind FROM tool_markers ORDER BY tool_use_id").fetchall():
         markers[mid].append((phase, kind))
 
-    meta = {r[0]: (r[1], r[2] or "") for r in con.execute("SELECT thread_id, parent_mid, agent_type FROM threads").fetchall()}
+    meta = {
+        r[0]: (r[1], r[2] or "")
+        for r in con.execute("SELECT thread_id, parent_mid, agent_type FROM threads").fetchall()
+    }
 
-    start_ts: dict[str, datetime] = {}
-    for tid, ts in con.execute(
-        "SELECT m.thread_id, min(m.ts) FROM msgs m JOIN tool_markers k USING (mid) WHERE k.kind = 'start' GROUP BY 1"
-    ).fetchall():
-        start_ts[tid] = ts
+    start_ts: dict[str, datetime] = dict(
+        con.execute(
+            "SELECT m.thread_id, min(m.ts) FROM msgs m JOIN tool_markers k USING (mid) WHERE k.kind = 'start' GROUP BY 1"
+        ).fetchall()
+    )
     for tid, ts in con.execute("SELECT thread_id, ts FROM workflow_commands").fetchall():
         if tid in msgs_by_thread:
             start_ts[tid] = min(start_ts.get(tid, ts), ts)
@@ -125,13 +128,12 @@ def assign_phases(con: duckdb.DuckDBPyConnection, scope: str) -> None:
                 phase, started = "setup", True
             once = None
             for ph, kind in sorted(markers.get(mid, []), key=lambda m: KIND_RANK[m[1]]):
-                if kind == "skill" and phase not in INACTIVE_PHASES:
-                    phase = ph
-                elif kind == "review_agent" and phase not in INACTIVE_PHASES and phase not in REVIEW_PHASES:
-                    phase = ph
-                elif kind in ("cmd", "edit") and started:
-                    phase = ph
-                elif kind == "soft" and started and phase != "design_review":
+                if (
+                    (kind == "skill" and phase not in INACTIVE_PHASES)
+                    or (kind == "review_agent" and phase not in INACTIVE_PHASES and phase not in REVIEW_PHASES)
+                    or (kind in ("cmd", "edit") and started)
+                    or (kind == "soft" and started and phase != "design_review")
+                ):
                     phase = ph
                 elif kind == "once" and started:
                     once = ph
@@ -158,9 +160,7 @@ def assign_phases(con: duckdb.DuckDBPyConnection, scope: str) -> None:
     con.execute("INSERT INTO msg_phase SELECT unnest(?), unnest(?)", [list(phase_of), list(phase_of.values())])
 
 
-def ingest(
-    con: duckdb.DuckDBPyConnection, sources: dict[str, Path], rebuild: bool = False
-) -> BuildStats:
+def ingest(con: duckdb.DuckDBPyConnection, sources: dict[str, Path], rebuild: bool = False) -> BuildStats:
     """Bring the rec_* cache tables up to date, parsing only new or changed log files.
 
     `sources` maps a provider ("claude", "codex") to the directory holding its logs; a provider that is not
@@ -208,8 +208,13 @@ def ingest(
     return BuildStats(files=files, ingested=ingested, removed=removed)
 
 
-_META_COLUMNS = {"agentType": "VARCHAR", "description": "VARCHAR", "toolUseId": "VARCHAR",
-                 "spawnDepth": "INTEGER", "model": "VARCHAR"}
+_META_COLUMNS = {
+    "agentType": "VARCHAR",
+    "description": "VARCHAR",
+    "toolUseId": "VARCHAR",
+    "spawnDepth": "INTEGER",
+    "model": "VARCHAR",
+}
 
 
 def _meta_source(claude_dir: Path | None) -> str:
@@ -217,8 +222,10 @@ def _meta_source(claude_dir: Path | None) -> str:
     cols = ", ".join(f"{k}: '{v}'" for k, v in _META_COLUMNS.items())
     files = sorted(str(p) for p in claude_dir.rglob("subagents/*.meta.json")) if claude_dir else []
     if files:
-        return (f"read_json({_sql_list(files)}, union_by_name = true, ignore_errors = true, filename = true, "
-                f"columns = {{{cols}}})")
+        return (
+            f"read_json({_sql_list(files)}, union_by_name = true, ignore_errors = true, filename = true, "
+            f"columns = {{{cols}}})"
+        )
     empty = ", ".join(f"NULL::{v} AS {k}" for k, v in _META_COLUMNS.items())
     return f"(SELECT NULL::VARCHAR AS filename, {empty} WHERE false)"
 
@@ -242,22 +249,26 @@ def build(
     # many-core machine that is gigabytes for no gain, since the log files are read in a few seconds anyway.
     con.execute(f"SET threads = {min(os.cpu_count() or 4, 8)}")
     stats = ingest(con, sources, rebuild=rebuild)
-    con.execute(_sql(
-        "02_messages.sql",
-        META_SOURCE=_meta_source(sources.get("claude")),
-        SINCE=_quote(since),
-        PROVIDERS=", ".join(f"'{p}'" for p in sources) or "''",
-    ))
+    con.execute(
+        _sql(
+            "02_messages.sql",
+            META_SOURCE=_meta_source(sources.get("claude")),
+            SINCE=_quote(since),
+            PROVIDERS=", ".join(f"'{p}'" for p in sources) or "''",
+        )
+    )
     con.execute(_sql("03_markers.sql"))
     assign_phases(con, scope)
     rows = ", ".join(f"('{_quote(m)}', {i}, {o}, {c})" for m, i, o, c in pricing.price_rows(prices))
-    con.execute(_sql(
-        "04_facts.sql",
-        SINCE=_quote(since),
-        PRICE_ROWS=rows,
-        FALLBACK_MODEL=pricing.FALLBACK_MODEL,
-        CW5=str(pricing.CACHE_WRITE_5M_FACTOR),
-        CW1H=str(pricing.CACHE_WRITE_1H_FACTOR),
-    ))
+    con.execute(
+        _sql(
+            "04_facts.sql",
+            SINCE=_quote(since),
+            PRICE_ROWS=rows,
+            FALLBACK_MODEL=pricing.FALLBACK_MODEL,
+            CW5=str(pricing.CACHE_WRITE_5M_FACTOR),
+            CW1H=str(pricing.CACHE_WRITE_1H_FACTOR),
+        )
+    )
     con.execute(_sql("05_views.sql"))
     return stats

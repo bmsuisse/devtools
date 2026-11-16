@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
-from .bdt_config import find_pyproject, load_bdt_table
+from bmsdna.devtools.bdt_config import find_pyproject, load_bdt_table
 
 Kind = Literal["full", "none", "areas", "error"]
 OnMissing = Literal["infer", "fail"]
@@ -50,13 +50,9 @@ UNMATCHED_AREA = "shared"
 LONG_LIVED = frozenset({"dev", "test", "main"})
 PROMOTIONS = frozenset({("dev", "test"), ("test", "main"), ("main", "dev")})
 FIX_PREFIXES = ("fix/", "hotfix/")
-PUSH_REASONS = frozenset(
-    {"IndividualCI", "BatchedCI"}
-)  # a merge landed on the branch: deploy only
+PUSH_REASONS = frozenset({"IndividualCI", "BatchedCI"})  # a merge landed on the branch: deploy only
 INFRA_AREA = "infra"  # owns `infra/**` by default when the repo has an infra/ folder; usually has no tests
-RESERVED_AREAS = frozenset(
-    {"full", "none"}
-)  # test-full / test-none are the control labels
+RESERVED_AREAS = frozenset({"full", "none"})  # test-full / test-none are the control labels
 
 
 class BranchFlowError(Exception):
@@ -69,9 +65,7 @@ def _is_test_file(name: str) -> bool:
 
 def _has_tests(folder: Path) -> bool:
     return any(
-        p.is_file()
-        and _is_test_file(p.name)
-        and "__pycache__" not in p.relative_to(folder).parts
+        p.is_file() and _is_test_file(p.name) and "__pycache__" not in p.relative_to(folder).parts
         for p in folder.rglob("*.py")
     )
 
@@ -88,19 +82,11 @@ class Tier:
 
     def _files(self, root: Path) -> list[str]:
         base = root / self.dir
-        return sorted(
-            p.relative_to(root).as_posix()
-            for p in base.glob(TEST_FILE_GLOB)
-            if p.is_file()
-        )
+        return sorted(p.relative_to(root).as_posix() for p in base.glob(TEST_FILE_GLOB) if p.is_file())
 
     def _owners(self, path: str) -> frozenset[str]:
         name = PurePosixPath(path).name
-        owned = {
-            area
-            for area, globs in self.globs.items()
-            if any(PurePosixPath(name).full_match(g) for g in globs)
-        }
+        owned = {area for area, globs in self.globs.items() if any(PurePosixPath(name).full_match(g) for g in globs)}
         return frozenset(owned or {UNMATCHED_AREA})
 
     def areas(self, root: Path) -> list[str]:
@@ -108,19 +94,12 @@ class Tier:
         if not base.is_dir():
             return []
         if self.globs:
-            return sorted(
-                {a for f in self._files(root) for a in self._owners(f)}
-                | set(self.globs)
-            )
+            return sorted({a for f in self._files(root) for a in self._owners(f)} | set(self.globs))
         return sorted(
-            d.name
-            for d in base.iterdir()
-            if d.is_dir() and not d.name.startswith(("_", ".")) and _has_tests(d)
+            d.name for d in base.iterdir() if d.is_dir() and not d.name.startswith(("_", ".")) and _has_tests(d)
         )
 
-    def area_of(
-        self, root: Path, path: str, areas: Collection[str]
-    ) -> frozenset[str] | None:
+    def area_of(self, root: Path, path: str, areas: Collection[str]) -> frozenset[str] | None:
         """Areas owning a repo-relative file, or None when the file is not an area file of this tier (a helper
         folder, a file directly in the tier folder): changing it can affect any test, so the plan runs everything.
         In folder mode a file of an area folder counts, helpers like conftest.py included. A test file whose
@@ -131,11 +110,7 @@ class Tier:
             return None
         parts = pure.relative_to(self.dir).parts
         if self.globs:
-            return (
-                self._owners(path)
-                if len(parts) == 1 and pure.match(TEST_FILE_GLOB)
-                else None
-            )
+            return self._owners(path) if len(parts) == 1 and pure.match(TEST_FILE_GLOB) else None
         if len(parts) < 2 or parts[0].startswith(("_", ".")):
             return None
         removed = not (root / self.dir / parts[0]).exists() and _is_test_file(pure.name)
@@ -146,11 +121,7 @@ class Tier:
         if not (root / self.dir).is_dir():
             return []
         if self.globs:
-            return [
-                f
-                for f in self._files(root)
-                if selected is None or self._owners(f) & set(selected)
-            ]
+            return [f for f in self._files(root) if selected is None or self._owners(f) & set(selected)]
         if selected is None:
             return [self.dir]
         return [f"{self.dir}/{a}" for a in self.areas(root) if a in selected]
@@ -166,15 +137,11 @@ class PlanConfig:
 
     def all_areas(self) -> set[str]:
         """Areas with tests in a tier, plus areas that only own paths (such as `infra`, which may have no tests)."""
-        return {a for tier in self.tiers for a in tier.areas(self.root)} | set(
-            self.paths
-        )
+        return {a for tier in self.tiers for a in tier.areas(self.root)} | set(self.paths)
 
     def path_owners(self, path: str) -> frozenset[str]:
         return frozenset(
-            area
-            for area, globs in self.paths.items()
-            if any(PurePosixPath(path).full_match(g) for g in globs)
+            area for area, globs in self.paths.items() if any(PurePosixPath(path).full_match(g) for g in globs)
         )
 
     def is_non_code(self, path: str) -> bool:
@@ -182,9 +149,7 @@ class PlanConfig:
 
 
 def _strings(value: object, where: str) -> tuple[str, ...]:
-    items = (
-        tuple(v for v in value if isinstance(v, str)) if isinstance(value, list) else ()
-    )
+    items = tuple(v for v in value if isinstance(v, str)) if isinstance(value, list) else ()
     if not isinstance(value, list) or len(items) != len(value):
         raise ValueError(f"[tool.bdt.ci.plan] {where} must be a list of strings")
     return items
@@ -197,13 +162,8 @@ def _tier(name: str, raw: object) -> Tier:
     if not isinstance(directory, str):
         raise ValueError(f"[tool.bdt.ci.plan.tiers.{name}] needs a string `dir`")
     if not isinstance(areas, dict):
-        raise ValueError(
-            f"[tool.bdt.ci.plan.tiers.{name}] areas must be a table of glob lists"
-        )
-    globs = {
-        str(area): _strings(g, f"tiers.{name}.areas.{area}")
-        for area, g in areas.items()
-    }
+        raise ValueError(f"[tool.bdt.ci.plan.tiers.{name}] areas must be a table of glob lists")
+    globs = {str(area): _strings(g, f"tiers.{name}.areas.{area}") for area, g in areas.items()}
     return Tier(name, directory.strip("/"), globs)
 
 
@@ -222,9 +182,7 @@ def load_plan_config(start: Path | None = None) -> PlanConfig | None:
     paths_raw = raw.get("paths", {})
     if not isinstance(paths_raw, dict):
         raise ValueError("[tool.bdt.ci.plan.paths] must be a table of glob lists")
-    paths = {
-        str(area): _strings(globs, f"paths.{area}") for area, globs in paths_raw.items()
-    }
+    paths = {str(area): _strings(globs, f"paths.{area}") for area, globs in paths_raw.items()}
     if (pyproject.parent / "infra").is_dir():
         paths.setdefault(INFRA_AREA, ("infra/**",))
     config = PlanConfig(
@@ -262,10 +220,7 @@ def normalize_labels(labels: Iterable[str]) -> set[str]:
     """Lowercase (`bdt pr create` matches case-insensitively) and map legacy `e2e-*` to `test-*`."""
     lowered = {label.lower() for label in labels}
     return {
-        LABEL_PREFIX + x.removeprefix(LEGACY_LABEL_PREFIX)
-        if x.startswith(LEGACY_LABEL_PREFIX)
-        else x
-        for x in lowered
+        LABEL_PREFIX + x.removeprefix(LEGACY_LABEL_PREFIX) if x.startswith(LEGACY_LABEL_PREFIX) else x for x in lowered
     }
 
 
@@ -289,9 +244,7 @@ class Plan:
     warnings: tuple[str, ...] = ()
 
 
-def classify_pr(
-    source: str, target: str
-) -> tuple[Literal["promotion", "tested", "rejected"], str]:
+def classify_pr(source: str, target: str) -> tuple[Literal["promotion", "tested", "rejected"], str]:
     """How a PR from `source` into `target` (branch names, no `refs/heads/`) is treated."""
     if source in LONG_LIVED and target in LONG_LIVED:
         if (source, target) in PROMOTIONS:
@@ -319,19 +272,14 @@ def _full(config: PlanConfig, reason: str, warnings: Iterable[str] = ()) -> Plan
     return Plan("full", reason, frozenset(config.all_areas()), tuple(warnings))
 
 
-def _from_labels(
-    labels: Iterable[str], config: PlanConfig, warnings: list[str]
-) -> Plan | None:
+def _from_labels(labels: Iterable[str], config: PlanConfig, warnings: list[str]) -> Plan | None:
     normalized = normalize_labels(labels)
     known = config.all_areas()
     if FULL_LABEL in normalized:
         return _full(config, f"PR has the {FULL_LABEL} label", warnings)
     areas = frozenset(a for a in known if area_label(a) in normalized)
     unknown = sorted(
-        x
-        for x in normalized
-        if x.startswith(LABEL_PREFIX)
-        and x not in {NONE_LABEL} | {area_label(a) for a in known}
+        x for x in normalized if x.startswith(LABEL_PREFIX) and x not in {NONE_LABEL} | {area_label(a) for a in known}
     )
     if unknown:
         warnings.append(f"unknown test label(s) ignored: {', '.join(unknown)}")
@@ -357,11 +305,7 @@ def _from_files(files: list[str], config: PlanConfig, warnings: list[str]) -> Pl
     for path in files:
         if config.is_non_code(path):
             continue
-        owners = [
-            owned
-            for tier in config.tiers
-            if (owned := tier.area_of(config.root, path, known[tier.name]))
-        ]
+        owners = [owned for tier in config.tiers if (owned := tier.area_of(config.root, path, known[tier.name]))]
         if owned_paths := config.path_owners(path):
             owners.append(owned_paths)
         if not owners:
@@ -377,9 +321,7 @@ def _from_files(files: list[str], config: PlanConfig, warnings: list[str]) -> Pl
             f"all {len(files)} changed file(s) are non-code",
             warnings=tuple(warnings),
         )
-    areas &= frozenset().union(
-        *known.values(), config.paths
-    )  # a removed area has nothing left to run
+    areas &= frozenset().union(*known.values(), config.paths)  # a removed area has nothing left to run
     if not areas:
         return Plan(
             "none",
@@ -450,9 +392,7 @@ def make_plan(
             f"no test label and the changed files could not be listed ({error})",
             warnings,
         )
-    warnings.append(
-        f"PR has no test label: areas inferred from the changed files (add a {LABEL_PREFIX}<area> label)"
-    )
+    warnings.append(f"PR has no test label: areas inferred from the changed files (add a {LABEL_PREFIX}<area> label)")
     return _from_files(files, config, warnings)
 
 
@@ -464,11 +404,7 @@ def outputs(plan: Plan, config: PlanConfig) -> dict[str, str]:
     result = {"runTests": str(run).lower()}
     for tier in config.tiers:
         paths = tier.paths(config.root, selected) if run else []
-        areas = (
-            [a for a in tier.areas(config.root) if selected is None or a in selected]
-            if run
-            else []
-        )
+        areas = [a for a in tier.areas(config.root) if selected is None or a in selected] if run else []
         result[f"{tier.name}Run"] = str(bool(paths)).lower()
         result[f"{tier.name}Areas"] = " ".join(areas)
         result[f"{tier.name}Paths"] = shlex.join(paths)

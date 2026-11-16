@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 
-from .gitrepo import AdoRemote, GitHubRemote
+from bmsdna.devtools.gitrepo import AdoRemote, GitHubRemote
 
 PR_AVAILABLE_LABEL = "pr-available"
 
@@ -34,7 +34,9 @@ _GITHUB_ISSUE_URL_RE = re.compile(r"(?<![\w-])github\.com/([^/\s]+)/([^/\s]+)/is
 # `_GITHUB_ISSUE_URL_RE` for the "dev.azure.com" branch; the "*.visualstudio.com" branch's
 # `[^./\s]+` group already only captures a single dot-delimited label, so it can't be fooled the
 # same way.
-_ADO_WORK_ITEM_URL_RE = re.compile(r"(?:(?<![\w-])dev\.azure\.com/([^/\s]+)|([^./\s]+)\.visualstudio\.com)/\S*_workitems/edit/(\d+)")
+_ADO_WORK_ITEM_URL_RE = re.compile(
+    r"(?:(?<![\w-])dev\.azure\.com/([^/\s]+)|([^./\s]+)\.visualstudio\.com)/\S*_workitems/edit/(\d+)"
+)
 
 
 def parse_issue_ref(ref: str, remote: AdoRemote | GitHubRemote) -> int:
@@ -49,16 +51,24 @@ def parse_issue_ref(ref: str, remote: AdoRemote | GitHubRemote) -> int:
 
     if isinstance(remote, GitHubRemote):
         match = _GITHUB_ISSUE_URL_RE.search(ref)
-        if match and match.group(1).casefold() == remote.owner.casefold() and match.group(2).casefold() == remote.repo.casefold():
+        if (
+            match
+            and match.group(1).casefold() == remote.owner.casefold()
+            and match.group(2).casefold() == remote.repo.casefold()
+        ):
             return int(match.group(3))
-        raise ValueError(f"'{ref}' isn't a bare issue number or a github.com/{remote.owner}/{remote.repo}/issues/<N> URL")
+        raise ValueError(
+            f"'{ref}' isn't a bare issue number or a github.com/{remote.owner}/{remote.repo}/issues/<N> URL"
+        )
 
     match = _ADO_WORK_ITEM_URL_RE.search(ref)
     if match:
         org = match.group(1) or match.group(2)
         if org and org.casefold() == remote.org.casefold():
             return int(match.group(3))
-    raise ValueError(f"'{ref}' isn't a bare work item number or a dev.azure.com/{remote.org}/.../_workitems/edit/<N> URL")
+    raise ValueError(
+        f"'{ref}' isn't a bare work item number or a dev.azure.com/{remote.org}/.../_workitems/edit/<N> URL"
+    )
 
 
 def github_body_already_closes(body: str, issue_number: int) -> bool:
@@ -97,7 +107,10 @@ def find_issue_refs_in_body(body: str | None, remote: AdoRemote | GitHubRemote) 
         for match in _GITHUB_KEYWORD_RE.finditer(body):
             _add(int(match.group(1)))
         for match in _GITHUB_ISSUE_URL_RE.finditer(body):
-            if match.group(1).casefold() == remote.owner.casefold() and match.group(2).casefold() == remote.repo.casefold():
+            if (
+                match.group(1).casefold() == remote.owner.casefold()
+                and match.group(2).casefold() == remote.repo.casefold()
+            ):
                 _add(int(match.group(3)))
     else:
         for match in _ADO_WORK_ITEM_URL_RE.finditer(body):

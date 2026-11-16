@@ -25,8 +25,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from . import pr_cancel, pr_issue_link
-from .cli_tools import (
+from bmsdna.devtools import pr_cancel, pr_issue_link
+from bmsdna.devtools.cli_tools import (
     CLI_TIMEOUT_SECS,
     EXIT_NEEDS_APPROVAL,
     PollHeartbeat,
@@ -37,12 +37,18 @@ from .cli_tools import (
     is_claude_code,
     status_rerun_cmd,
 )
-from .gh_args import open_in_browser
-from .github_api import GitHubClient
-from .gitrepo import current_branch
-from .pr_choice import PrCandidate, choose_pr
-from .pr_create_args import PrCreateArgsError, PrCreateOptions, parse_pr_create_args, resolve_body, unsupported_notes
-from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
+from bmsdna.devtools.gh_args import open_in_browser
+from bmsdna.devtools.github_api import GitHubClient
+from bmsdna.devtools.gitrepo import current_branch
+from bmsdna.devtools.pr_choice import PrCandidate, choose_pr
+from bmsdna.devtools.pr_create_args import (
+    PrCreateArgsError,
+    PrCreateOptions,
+    parse_pr_create_args,
+    resolve_body,
+    unsupported_notes,
+)
+from bmsdna.devtools.pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 # `get_pr(fields=...)` selects keys of the dict one GraphQL query returns (see `_PR_QUERY`); `id` is the node id
 # (needed for the draft mutations), `body` the PR description.
@@ -94,7 +100,7 @@ _STATUS_CONTEXT_BUCKET = {
 _RUN_ID_RE = re.compile(r"/actions/runs/(\d+)")
 
 
-def _run(args: list[str], *, timeout: float = CLI_TIMEOUT_SECS, **kwargs) -> subprocess.CompletedProcess:
+def _run(args: list[str], *, timeout: float = CLI_TIMEOUT_SECS, **kwargs: Any) -> subprocess.CompletedProcess:
     """`subprocess.run` bounded by `timeout` (defaults to `CLI_TIMEOUT_SECS`) -- every `git` call
     in this module goes through this instead of calling `subprocess.run` directly, so a stalled
     network call or `git` blocking on an interactive prompt can't hang the caller forever.
@@ -105,9 +111,11 @@ def _run(args: list[str], *, timeout: float = CLI_TIMEOUT_SECS, **kwargs) -> sub
     pass a longer `timeout` -- see `CLI_UPLOAD_TIMEOUT_SECS`.
     """
     try:
-        return subprocess.run(args, timeout=timeout, **kwargs)
+        return subprocess.run(args, timeout=timeout, **kwargs, check=False)
     except subprocess.TimeoutExpired:
-        sys.exit(f"`{' '.join(args)}` timed out after {timeout:.0f}s -- stalled network, or needs an interactive login?")
+        sys.exit(
+            f"`{' '.join(args)}` timed out after {timeout:.0f}s -- stalled network, or needs an interactive login?"
+        )
 
 
 def _branch_prs(gh: GitHubClient, branch: str, state: str = "all", base: str | None = None) -> list[dict]:
@@ -127,7 +135,7 @@ def _pr_number(gh: GitHubClient, pr_id: int | None) -> int:
     branch = current_branch()
     prs = _branch_prs(gh, branch)
     if not prs:
-        sys.exit(f"no pull requests found for branch \"{branch}\"")
+        sys.exit(f'no pull requests found for branch "{branch}"')
     return prs[0]["number"]
 
 
@@ -183,7 +191,8 @@ fragment ContextFields on StatusCheckRollupContext {
 }
 """
 
-_PR_QUERY = """
+_PR_QUERY = (
+    """
 query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $number) {
@@ -198,10 +207,13 @@ query($owner: String!, $repo: String!, $number: Int!) {
     }
   }
 }
-""" + _CONTEXT_FIELDS
+"""
+    + _CONTEXT_FIELDS
+)
 
 # The rest of a rollup with more than 100 contexts (matrix builds + legacy statuses), 100 at a time.
-_CONTEXTS_QUERY = """
+_CONTEXTS_QUERY = (
+    """
 query ContextsPage($owner: String!, $repo: String!, $number: Int!, $after: String!) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $number) {
@@ -214,7 +226,9 @@ query ContextsPage($owner: String!, $repo: String!, $number: Int!, $after: Strin
     }
   }
 }
-""" + _CONTEXT_FIELDS
+"""
+    + _CONTEXT_FIELDS
+)
 
 
 def _check_entry(node: dict) -> dict:
@@ -245,8 +259,12 @@ def get_pr(gh: GitHubClient, pr_id: int | None = None, fields: str = PR_VIEW_FIE
     contexts = (pr.get("statusCheckRollup") or {}).get("contexts") or {}
     nodes = list(contexts.get("nodes") or [])
     while (contexts.get("pageInfo") or {}).get("hasNextPage"):
-        page = gh.graphql(_CONTEXTS_QUERY, owner=gh.owner, repo=gh.repo, number=number, after=contexts["pageInfo"]["endCursor"])
-        contexts = (((page.get("repository") or {}).get("pullRequest") or {}).get("statusCheckRollup") or {}).get("contexts") or {}
+        page = gh.graphql(
+            _CONTEXTS_QUERY, owner=gh.owner, repo=gh.repo, number=number, after=contexts["pageInfo"]["endCursor"]
+        )
+        contexts = (((page.get("repository") or {}).get("pullRequest") or {}).get("statusCheckRollup") or {}).get(
+            "contexts"
+        ) or {}
         nodes += contexts.get("nodes") or []
     pr["statusCheckRollup"] = [_check_entry(n) for n in nodes if n]
     pr["closingIssuesReferences"] = [n for n in (pr.get("closingIssuesReferences") or {}).get("nodes") or [] if n]
@@ -400,7 +418,7 @@ def cancel(gh: GitHubClient, reason: str, pr_id: int | None = None, session_id: 
         except SystemExit as e:
             errors.append(
                 f"the runs are cancelled, but the '{pr_cancel.PREFIX}' comment could not be posted: {e.code or 'failed'} -- "
-                f"post it yourself (`bdt pr comment --message \"{pr_cancel.PREFIX} <reason>\"`), or `pr info`/`pr status` won't show the cancellation"
+                f'post it yourself (`bdt pr comment --message "{pr_cancel.PREFIX} <reason>"`), or `pr info`/`pr status` won\'t show the cancellation'
             )
         else:
             print(f"Added a '{pr_cancel.PREFIX}' comment to PR #{pr['number']}")
@@ -468,7 +486,7 @@ def abandon(gh: GitHubClient, reason: str, pr_id: int | None = None, session_id:
     except SystemExit as e:
         sys.exit(
             f"The PR is closed, but the '{pr_cancel.ABANDON_PREFIX}' comment could not be posted: {e.code or 'failed'} -- post it "
-            f"yourself (`bdt pr comment --message \"{pr_cancel.ABANDON_PREFIX} <reason>\"`), or `pr info`/`pr status` won't show why"
+            f'yourself (`bdt pr comment --message "{pr_cancel.ABANDON_PREFIX} <reason>"`), or `pr info`/`pr status` won\'t show why'
         )
     print(f"Added an '{pr_cancel.ABANDON_PREFIX}' comment to PR #{number}")
 
@@ -517,7 +535,7 @@ def deploy_run_hint(gh: GitHubClient, target_branch: str) -> str | None:
     """
     try:
         runs = get_workflow_runs_for_branch(gh, target_branch, limit=1)
-    except (SystemExit, KeyError, ValueError, AttributeError):
+    except SystemExit, KeyError, ValueError, AttributeError:
         return None
     if not runs:
         return None
@@ -568,7 +586,10 @@ def _status(gh: GitHubClient, wait: bool, pr_id: int | None, timeout: float, dea
         if pr.get("mergeable") == UNKNOWN_MERGEABLE and wait:
             if deadline.expired():
                 exit_wait_timeout(
-                    f"PR #{pr.get('number')}: {pr.get('title', '?')} | mergeability not computed yet", lambda: None, deadline, status_rerun_cmd(pr.get("number"), timeout)
+                    f"PR #{pr.get('number')}: {pr.get('title', '?')} | mergeability not computed yet",
+                    lambda: None,
+                    deadline,
+                    status_rerun_cmd(pr.get("number"), timeout),
                 )
             deadline.sleep(3)
             continue
@@ -610,7 +631,7 @@ def _status(gh: GitHubClient, wait: bool, pr_id: int | None, timeout: float, dea
         buckets = [check_bucket(c) for c in checks]
         msg += " | " + ", ".join(f"{check_label(c)}: {check_bucket(c)}" for c in checks)
 
-        waiting_approval = [c for c, b in zip(checks, buckets) if b == "waiting_approval"]
+        waiting_approval = [c for c, b in zip(checks, buckets, strict=True) if b == "waiting_approval"]
         # A failed check anywhere in the PR is reported as such even when another check is
         # separately waiting on approval — a human shouldn't be sent to go approve a
         # deployment gate while staying unaware that CI has already failed elsewhere.
@@ -628,7 +649,12 @@ def _status(gh: GitHubClient, wait: bool, pr_id: int | None, timeout: float, dea
         if "pending" in buckets and wait and not waiting_approval:
             heartbeat.show(msg)
             if deadline.expired():
-                exit_wait_timeout(msg, lambda: [print_check(c) for c in checks], deadline, status_rerun_cmd(pr_number, timeout))
+                exit_wait_timeout(
+                    msg,
+                    lambda checks=checks: [print_check(c) for c in checks],
+                    deadline,
+                    status_rerun_cmd(pr_number, timeout),
+                )
             deadline.sleep(30)
             continue
 
@@ -768,7 +794,9 @@ def run_watch_deploy(gh: GitHubClient, target_branch: str, wait: bool) -> None:
 def _branch_commits(target: str) -> list[tuple[str, str]]:
     """(subject, body) of each commit on HEAD not yet in `target`, oldest first; [] if unknown."""
     for base in (f"origin/{target}", target):
-        r = _run(["git", "log", "--reverse", "--format=%s%x1f%b%x1e", f"{base}..HEAD"], capture_output=True, encoding="utf-8")
+        r = _run(
+            ["git", "log", "--reverse", "--format=%s%x1f%b%x1e", f"{base}..HEAD"], capture_output=True, encoding="utf-8"
+        )
         if r.returncode == 0:
             commits = []
             for rec in r.stdout.split("\x1e"):
@@ -886,7 +914,7 @@ def create(
                 print(f"  {key}: {value}")
         return 0, None
 
-    from . import gh_issue  # lazy: gh_issue imports this module
+    from bmsdna.devtools import gh_issue  # lazy: gh_issue imports this module
 
     try:
         assignees = gh_issue.resolve_assignees(gh, opts.assignees) if opts.assignees else []
@@ -929,10 +957,18 @@ def create(
         try:
             body = link_issue_to_pr(gh, number, body, int(item))
         except (SystemExit, ValueError) as e:
-            _warn(f"linking work item {item}", e if isinstance(e, SystemExit) else SystemExit(f"not an issue number: {item!r}"))
+            _warn(
+                f"linking work item {item}",
+                e if isinstance(e, SystemExit) else SystemExit(f"not an issue number: {item!r}"),
+            )
     if opts.auto_complete:
         try:
-            gh.graphql(_AUTO_MERGE_MUTATION, pr=pr["node_id"], method="SQUASH" if opts.squash else "MERGE", headline=opts.merge_commit_message)
+            gh.graphql(
+                _AUTO_MERGE_MUTATION,
+                pr=pr["node_id"],
+                method="SQUASH" if opts.squash else "MERGE",
+                headline=opts.merge_commit_message,
+            )
         except SystemExit as e:
             _warn("enabling auto-merge (needs 'Allow auto-merge' on the repo and a protected base branch)", e)
     ensure_session_note(gh, number)
@@ -963,7 +999,7 @@ def ensure_session_note(gh: GitHubClient, pr_number: int | None = None) -> None:
         noted = ensure_agent_session_note(body, also_check=pr["title"])
         if noted != body:
             gh.patch(f"{gh.repo_path}/pulls/{pr['number']}", {"body": noted or ""})
-    except (SystemExit, KeyError, ValueError, OSError):
+    except SystemExit, KeyError, ValueError, OSError:
         pass
 
 
@@ -1002,7 +1038,9 @@ def link_issue_to_pr(gh: GitHubClient, pr_number: int, body: str, issue_number: 
     return new_body
 
 
-_READY_MUTATION = "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { id } } }"
+_READY_MUTATION = (
+    "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { id } } }"
+)
 _DRAFT_MUTATION = "mutation($id: ID!) { convertPullRequestToDraft(input: {pullRequestId: $id}) { pullRequest { id } } }"
 
 
@@ -1094,12 +1132,12 @@ def push_assets(owner: str, repo: str, branch: str, paths: list[str], max_attemp
 
 def _screenshot_images(owner: str, repo: str, branch: str, screenshot_paths: list[str]) -> list[tuple[str, str]]:
     urls = push_assets(owner, repo, branch, screenshot_paths)
-    return list(zip((Path(p).name for p in screenshot_paths), urls))
+    return list(zip((Path(p).name for p in screenshot_paths), urls, strict=True))
 
 
 def _file_links(owner: str, repo: str, branch: str, file_paths: list[str]) -> list[tuple[str, str]]:
     urls = push_assets(owner, repo, branch, file_paths)
-    return list(zip((Path(p).name for p in file_paths), urls))
+    return list(zip((Path(p).name for p in file_paths), urls, strict=True))
 
 
 def add_attachments(
@@ -1211,6 +1249,6 @@ def has_build_policy(gh: GitHubClient, branch: str) -> bool:
     """
     try:
         data = gh.get(f"{gh.repo_path}/branches/{quote(branch, safe='/')}/protection")
-    except (SystemExit, ValueError):
+    except SystemExit, ValueError:
         return False
     return isinstance(data, dict) and protection_requires_status_checks(data)

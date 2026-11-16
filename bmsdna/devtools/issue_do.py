@@ -15,9 +15,9 @@ import sys
 
 import requests
 
-from .ado_issue import _base_url
-from .github_api import GitHubClient
-from .gitrepo import AdoRemote
+from bmsdna.devtools.ado_issue import _base_url
+from bmsdna.devtools.github_api import GitHubClient
+from bmsdna.devtools.gitrepo import AdoRemote
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 TAKEN_PREFIX = "Taken by"
@@ -36,7 +36,9 @@ def fetch_ado(session: requests.Session, remote: AdoRemote, number: int) -> tupl
     r.raise_for_status()
     fields = r.json()["fields"]
     # ADO descriptions are HTML; the agent only needs the text.
-    description = _HTML_TAG_RE.sub("", (fields.get("System.Description") or "").replace("<br>", "\n").replace("</div>", "\n"))
+    description = _HTML_TAG_RE.sub(
+        "", (fields.get("System.Description") or "").replace("<br>", "\n").replace("</div>", "\n")
+    )
     return fields["System.Title"], description.strip()
 
 
@@ -79,7 +81,9 @@ def take_message(user: str, agent: str, session_id: str | None) -> str:
     return f"{TAKEN_PREFIX} {user}\n\nClaude Session: {session_id} (resume with `claude --resume {session_id}`)"
 
 
-def build_command(agent: str, number: int, title: str, body: str, extra: list[str], session_id: str | None = None) -> list[str]:
+def build_command(
+    agent: str, number: int, title: str, body: str, extra: list[str], session_id: str | None = None
+) -> list[str]:
     prompt = build_prompt(number, title, body)
     if agent == "claude":
         session = ["--session-id", session_id] if session_id else []
@@ -88,7 +92,9 @@ def build_command(agent: str, number: int, title: str, body: str, extra: list[st
     return [agent, *extra, prompt]
 
 
-def run(number: int, title: str, body: str, *, agent: str, extra: list[str], dry_run: bool, session_id: str | None = None) -> None:
+def run(
+    number: int, title: str, body: str, *, agent: str, extra: list[str], dry_run: bool, session_id: str | None = None
+) -> None:
     cmd = build_command(agent, number, title, body, extra, session_id)
     if dry_run:
         print(" ".join(json.dumps(c) if " " in c or "\n" in c else c for c in cmd))

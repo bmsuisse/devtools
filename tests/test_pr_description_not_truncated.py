@@ -50,7 +50,10 @@ def _ado_cli(monkeypatch, *, stub_create: bool = True) -> list[dict]:
     monkeypatch.setattr("bmsdna.devtools.cli.current_branch", lambda: "feature-x")
     monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.pr_build.has_build_policy", lambda session, remote, target: False)
-    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda session, remote, source_branch, target: {"pullRequestId": 9, "title": "t", "description": ""})
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_pr",
+        lambda session, remote, source_branch, target: {"pullRequestId": 9, "title": "t", "description": ""},
+    )
     created: list[dict] = []
 
     def fake_create(session, remote, source, target, **kwargs):
@@ -105,7 +108,7 @@ def test_create_pr_network_failure_hints_that_the_pr_may_exist() -> None:
 
     session = MagicMock()
     session.post.side_effect = requests.ReadTimeout("slow")
-    with pytest.raises(SystemExit, match="may have been created.*bdt pr info"):
+    with pytest.raises(SystemExit, match=r"may have been created.*bdt pr info"):
         pr_build.create_pr(session, REMOTE, "f", "dev", title="t")
 
 
@@ -162,9 +165,35 @@ def test_ado_pr_create_applies_az_flags_and_overrides(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.pr_build.create_pr", fake_create)
     result = runner.invoke(
         app,
-        ["pr", "create", "--target", "dev", "--", "--org", "https://dev.azure.com/other", "-p", "P2", "-r", "R2",
-         "-s", "refs/heads/topic", "--target-branch", "main", "--draft", "false", "--labels", "x", "y",
-         "--work-items", "5", "--reviewers", "a@x.com", "--squash", "--auto-complete", "--open"],
+        [
+            "pr",
+            "create",
+            "--target",
+            "dev",
+            "--",
+            "--org",
+            "https://dev.azure.com/other",
+            "-p",
+            "P2",
+            "-r",
+            "R2",
+            "-s",
+            "refs/heads/topic",
+            "--target-branch",
+            "main",
+            "--draft",
+            "false",
+            "--labels",
+            "x",
+            "y",
+            "--work-items",
+            "5",
+            "--reviewers",
+            "a@x.com",
+            "--squash",
+            "--auto-complete",
+            "--open",
+        ],
     )
     assert result.exit_code == 0, result.output
     assert (seen["remote"].org, seen["remote"].project, seen["remote"].repo) == ("other", "P2", "R2")

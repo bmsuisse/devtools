@@ -5,19 +5,30 @@ from __future__ import annotations
 import re
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import NoReturn
 from urllib.parse import quote
 
 import requests
 
-from .ado_auth import AdoAuthError, ado_session
-from .cli_tools import EXIT_NEEDS_APPROVAL, HTTP_TIMEOUT_SECS, PollHeartbeat, WaitDeadline, detect_agent_session, ensure_agent_session_note, exit_wait_timeout, is_claude_code, status_rerun_cmd
-from .gitrepo import AdoRemote, current_branch, head_commit_subject
-from .pr_create_args import PrCreateOptions
-from . import pr_cancel, pr_drift
-from .pr_choice import PrCandidate, choose_pr
-from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
+from bmsdna.devtools import pr_cancel, pr_drift
+from bmsdna.devtools.ado_auth import AdoAuthError, ado_session
+from bmsdna.devtools.cli_tools import (
+    EXIT_NEEDS_APPROVAL,
+    HTTP_TIMEOUT_SECS,
+    PollHeartbeat,
+    WaitDeadline,
+    detect_agent_session,
+    ensure_agent_session_note,
+    exit_wait_timeout,
+    is_claude_code,
+    status_rerun_cmd,
+)
+from bmsdna.devtools.gitrepo import AdoRemote, current_branch, head_commit_subject
+from bmsdna.devtools.pr_choice import PrCandidate, choose_pr
+from bmsdna.devtools.pr_create_args import PrCreateOptions
+from bmsdna.devtools.pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 # Matches an ISO 8601 timestamp at the start of a log line, e.g. 2024-03-21T15:01:23.1234567Z
 TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*")
@@ -45,7 +56,7 @@ def _base_url(remote: AdoRemote) -> str:
     return f"https://dev.azure.com/{remote.org}/{quote(remote.project, safe='')}"
 
 
-def _poll_or_exit(fn, *args, **kwargs):
+def _poll_or_exit[**P, R](fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
     """Calls `fn(*args, **kwargs)`, converting a network/timeout failure into a clear exit
     message instead of an uncaught `requests` traceback -- for the calls a `--wait` poll
     loop (`run`/`run_watch_deploy`) makes every 30s, where a bare `raise` would otherwise
@@ -108,7 +119,9 @@ def _build_policy_lookup(session: requests.Session, remote: AdoRemote, branch: s
     r.raise_for_status()
     repo = r.json()
 
-    r = session.get(f"{_base_url(remote)}/_apis/policy/configurations", params={"api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS)
+    r = session.get(
+        f"{_base_url(remote)}/_apis/policy/configurations", params={"api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS
+    )
     r.raise_for_status()
     configs = r.json().get("value", [])
 
@@ -124,7 +137,7 @@ def has_build_policy(session: requests.Session, remote: AdoRemote, branch: str) 
     """
     try:
         return _build_policy_lookup(session, remote, branch)
-    except (requests.RequestException, SystemExit):
+    except requests.RequestException, SystemExit:
         return False
 
 
@@ -137,7 +150,7 @@ def lacks_build_policy(session: requests.Session, remote: AdoRemote, branch: str
     """
     try:
         return not _build_policy_lookup(session, remote, branch)
-    except (requests.RequestException, SystemExit):
+    except requests.RequestException, SystemExit:
         return False
 
 
@@ -160,7 +173,9 @@ def target_tip(session: requests.Session, remote: AdoRemote, target: str) -> str
         timeout=HTTP_TIMEOUT_SECS,
     )
     r.raise_for_status()
-    return next((ref["objectId"] for ref in r.json().get("value", []) if ref.get("name") == f"refs/heads/{target}"), None)
+    return next(
+        (ref["objectId"] for ref in r.json().get("value", []) if ref.get("name") == f"refs/heads/{target}"), None
+    )
 
 
 def target_drift(session: requests.Session, remote: AdoRemote, pr: dict) -> pr_drift.Drift | None:
@@ -193,7 +208,7 @@ def draft_notice(pr: dict) -> str | None:
 
 
 def no_builds_message(session: requests.Session, remote: AdoRemote, pr: dict, nothing_to: str) -> str:
-    """"No builds found for PR #N -- nothing to <nothing_to>.", plus the likely reason when the PR's target branch has no
+    """ "No builds found for PR #N -- nothing to <nothing_to>.", plus the likely reason when the PR's target branch has no
     build policy: then no PR build was ever queued (and `lacks_build_policy` fails open, so this never claims it wrongly)."""
     target = (pr.get("targetRefName") or "").removeprefix("refs/heads/")
     message = f"No builds found for PR #{pr['pullRequestId']} -- nothing to {nothing_to}."
@@ -235,7 +250,12 @@ def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, tar
             items = sorted(items, key=lambda i: i["pullRequestId"], reverse=True)[:1]
         if items:
             candidates = [
-                PrCandidate(i["pullRequestId"], i.get("title", "?"), i["targetRefName"].removeprefix("refs/heads/"), pr_web_url(remote, i["pullRequestId"]))
+                PrCandidate(
+                    i["pullRequestId"],
+                    i.get("title", "?"),
+                    i["targetRefName"].removeprefix("refs/heads/"),
+                    pr_web_url(remote, i["pullRequestId"]),
+                )
                 for i in items
             ]
             pr = items[choose_pr(source_branch, candidates)]
@@ -248,7 +268,9 @@ def get_pr(session: requests.Session, remote: AdoRemote, source_branch: str, tar
     sys.exit(1)
 
 
-def get_active_prs(session: requests.Session, remote: AdoRemote, source_branch: str, target_branch: str | None) -> list[dict]:
+def get_active_prs(
+    session: requests.Session, remote: AdoRemote, source_branch: str, target_branch: str | None
+) -> list[dict]:
     """Every active PR from `source_branch` (into `target_branch` if given); `[]` if there is none.
 
     Unlike `get_pr` nothing is asked about and merge conflicts aren't an error: the caller wants the whole list.
@@ -285,7 +307,9 @@ def get_pr_by_id(session: requests.Session, remote: AdoRemote, pr_id: int) -> di
     return pr
 
 
-def upload_attachment(session: requests.Session, remote: AdoRemote, pr_id: int, attachment_name: str, file_path: str) -> str:
+def upload_attachment(
+    session: requests.Session, remote: AdoRemote, pr_id: int, attachment_name: str, file_path: str
+) -> str:
     """Upload `file_path` as a pull request attachment named `attachment_name`; returns its download URL.
 
     Embedding that URL in the PR description works because the browser
@@ -304,7 +328,9 @@ def upload_attachment(session: requests.Session, remote: AdoRemote, pr_id: int, 
     return r.json()["url"]
 
 
-def _upload_attachments(session: requests.Session, remote: AdoRemote, pr_id: int, paths: list[str]) -> list[tuple[str, str]]:
+def _upload_attachments(
+    session: requests.Session, remote: AdoRemote, pr_id: int, paths: list[str]
+) -> list[tuple[str, str]]:
     """Upload each path as a PR attachment (screenshot or arbitrary file); returns (display name, url) pairs.
 
     Attachment names are index-prefixed so two paths sharing a basename (e.g. two 'before.png'
@@ -345,7 +371,10 @@ def _patch_pr(session: requests.Session, remote: AdoRemote, pr_id: int, fields: 
     for name in ("title", "description"):
         sent, got = fields.get(name), stored.get(name)
         if isinstance(sent, str) and isinstance(got, str) and len(got) < len(sent):
-            print(f"Warning: Azure DevOps stored the PR {name} cut short ({len(got)} of {len(sent)} characters).", file=sys.stderr)
+            print(
+                f"Warning: Azure DevOps stored the PR {name} cut short ({len(got)} of {len(sent)} characters).",
+                file=sys.stderr,
+            )
     return stored
 
 
@@ -384,7 +413,11 @@ def resolve_identity(session: requests.Session, remote: AdoRemote, query: str) -
         def names(identity: dict) -> set[str]:
             mail = (identity.get("properties") or {}).get("Mail", {})
             mail = mail.get("$value") if isinstance(mail, dict) else mail
-            return {str(v).casefold() for v in (identity.get("providerDisplayName"), identity.get("customDisplayName"), mail) if v}
+            return {
+                str(v).casefold()
+                for v in (identity.get("providerDisplayName"), identity.get("customDisplayName"), mail)
+                if v
+            }
 
         exact = [i for i in found if wanted in names(i)]
         if len(exact) == 1:
@@ -400,7 +433,11 @@ def resolve_identity(session: requests.Session, remote: AdoRemote, query: str) -
 def current_user_id(session: requests.Session, remote: AdoRemote) -> str:
     """The Azure DevOps identity ID of whoever the credentials belong to (needed to set auto-complete)."""
     try:
-        r = session.get(f"https://dev.azure.com/{quote(remote.org, safe='')}/_apis/connectionData", params={"api-version": "7.1-preview.1"}, timeout=HTTP_TIMEOUT_SECS)
+        r = session.get(
+            f"https://dev.azure.com/{quote(remote.org, safe='')}/_apis/connectionData",
+            params={"api-version": "7.1-preview.1"},
+            timeout=HTTP_TIMEOUT_SECS,
+        )
         r.raise_for_status()
         return r.json()["authenticatedUser"]["id"]
     except (requests.RequestException, ValueError, KeyError) as e:
@@ -425,7 +462,9 @@ def build_create_body(
     (`options.work_items` plus `work_item_ids`, de-duplicated)."""
     options = options or PrCreateOptions()
     if description is not None and len(description) > ADO_PR_DESCRIPTION_MAX:
-        sys.exit(f"PR description is {len(description)} characters; Azure DevOps allows at most {ADO_PR_DESCRIPTION_MAX}.")
+        sys.exit(
+            f"PR description is {len(description)} characters; Azure DevOps allows at most {ADO_PR_DESCRIPTION_MAX}."
+        )
     body: dict = {
         "sourceRefName": f"refs/heads/{source_branch}",
         "targetRefName": f"refs/heads/{target_branch}",
@@ -469,8 +508,16 @@ def create_pr(
     """
     options = options or PrCreateOptions()
     body = build_create_body(
-        session, remote, source_branch, target_branch,
-        draft=draft, labels=labels, title=title, description=description, options=options, work_item_ids=work_item_ids,
+        session,
+        remote,
+        source_branch,
+        target_branch,
+        draft=draft,
+        labels=labels,
+        title=title,
+        description=description,
+        options=options,
+        work_item_ids=work_item_ids,
     )
     try:
         r = session.post(
@@ -480,7 +527,9 @@ def create_pr(
             timeout=HTTP_TIMEOUT_SECS,
         )
     except requests.RequestException as e:
-        sys.exit(f"Azure DevOps request failed or timed out: {e}; the PR may have been created -- check with `bdt pr info` before retrying")
+        sys.exit(
+            f"Azure DevOps request failed or timed out: {e}; the PR may have been created -- check with `bdt pr info` before retrying"
+        )
     if r.status_code in (401, 403):
         r.raise_for_status()  # an AdoAuthError saying which PAT scope / login is missing
     if r.status_code >= 400:
@@ -488,12 +537,16 @@ def create_pr(
             message = r.json().get("message")
         except ValueError:
             message = None
-        sys.exit(f"Azure DevOps could not create the PR (HTTP {r.status_code}): {message or r.text.strip() or r.reason}")
+        sys.exit(
+            f"Azure DevOps could not create the PR (HTTP {r.status_code}): {message or r.text.strip() or r.reason}"
+        )
     try:
         pr = r.json()
     except ValueError:
         # Azure DevOps answers 200/203 with an HTML sign-in page when the credentials are rejected.
-        sys.exit("Azure DevOps did not return JSON (credentials rejected? pass --pat / set AZURE_DEVOPS_EXT_PAT, or `az login`)")
+        sys.exit(
+            "Azure DevOps did not return JSON (credentials rejected? pass --pat / set AZURE_DEVOPS_EXT_PAT, or `az login`)"
+        )
 
     try:
         # Inside the handler: the identity lookup of --auto-complete can fail too, with the PR already created.
@@ -508,7 +561,17 @@ def create_pr(
 def completion_update(session: requests.Session, remote: AdoRemote, options: PrCreateOptions) -> dict:
     """The PATCH fields for the auto-complete / merge completion flags (empty when none was given)."""
     update: dict = {}
-    if any(v is not None for v in (options.squash, options.delete_source_branch, options.bypass_policy, options.transition_work_items, options.merge_commit_message, options.bypass_policy_reason)):
+    if any(
+        v is not None
+        for v in (
+            options.squash,
+            options.delete_source_branch,
+            options.bypass_policy,
+            options.transition_work_items,
+            options.merge_commit_message,
+            options.bypass_policy_reason,
+        )
+    ):
         completion = {
             key: value
             for key, value in (
@@ -551,9 +614,13 @@ def add_attachments(
     pr_id = pr["pullRequestId"]
     new_description = pr.get("description")
     if screenshot_paths:
-        new_description = build_screenshots_section(new_description, _upload_attachments(session, remote, pr_id, screenshot_paths))
+        new_description = build_screenshots_section(
+            new_description, _upload_attachments(session, remote, pr_id, screenshot_paths)
+        )
     if file_paths:
-        new_description = build_attachments_section(new_description, _upload_attachments(session, remote, pr_id, file_paths))
+        new_description = build_attachments_section(
+            new_description, _upload_attachments(session, remote, pr_id, file_paths)
+        )
     _patch_pr(session, remote, pr_id, {"description": new_description})
     print(f"Attached {len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s) to PR #{pr_id}")
     return {**pr, "description": new_description}
@@ -579,7 +646,7 @@ def ensure_session_note(session: requests.Session, remote: AdoRemote, pr: dict) 
         noted = ensure_agent_session_note(body, also_check=pr.get("title"))
         if noted != body:
             _patch_pr(session, remote, pr_id, {"description": noted})
-    except (requests.RequestException, SystemExit, KeyError):
+    except requests.RequestException, SystemExit, KeyError:
         pass
 
 
@@ -610,9 +677,13 @@ def update(
     if description is not None or screenshot_paths or file_paths:
         new_description = description if description is not None else pr.get("description")
         if screenshot_paths:
-            new_description = build_screenshots_section(new_description, _upload_attachments(session, remote, pr_id, screenshot_paths))
+            new_description = build_screenshots_section(
+                new_description, _upload_attachments(session, remote, pr_id, screenshot_paths)
+            )
         if file_paths:
-            new_description = build_attachments_section(new_description, _upload_attachments(session, remote, pr_id, file_paths))
+            new_description = build_attachments_section(
+                new_description, _upload_attachments(session, remote, pr_id, file_paths)
+            )
         fields["description"] = ensure_agent_session_note(new_description, also_check=title or pr.get("title"))
     if not fields:
         return
@@ -643,7 +714,9 @@ def link_work_item(session: requests.Session, remote: AdoRemote, pr_id: int, wor
     r = session.get(work_item_url, params={"$expand": "relations", "api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS)
     r.raise_for_status()
     existing = r.json().get("relations") or []
-    if any(rel.get("rel") == "ArtifactLink" and str(rel.get("url", "")).lower() == artifact_url.lower() for rel in existing):
+    if any(
+        rel.get("rel") == "ArtifactLink" and str(rel.get("url", "")).lower() == artifact_url.lower() for rel in existing
+    ):
         return
 
     r = session.patch(
@@ -703,7 +776,10 @@ def list_comment_texts(session: requests.Session, remote: AdoRemote, pr_id: int)
     )
     r.raise_for_status()
     comments = [
-        c for thread in r.json().get("value", []) for c in thread.get("comments", []) if c.get("commentType") != "system" and not c.get("isDeleted")
+        c
+        for thread in r.json().get("value", [])
+        for c in thread.get("comments", [])
+        if c.get("commentType") != "system" and not c.get("isDeleted")
     ]
     comments.sort(key=lambda c: c.get("publishedDate") or "")
     return [c.get("content") or "" for c in comments]
@@ -748,7 +824,11 @@ def abandon(
         sys.exit("A reason is required: say why the PR is abandoned (--reason).")
     agent_session = pr_cancel.resolve_session(session_id)
     session = ado_session(pat)
-    pr = get_pr_by_id(session, remote, pr_id) if pr_id is not None else get_pr(session, remote, current_branch(), target_branch)
+    pr = (
+        get_pr_by_id(session, remote, pr_id)
+        if pr_id is not None
+        else get_pr(session, remote, current_branch(), target_branch)
+    )
     pr_number = pr["pullRequestId"]
     if pr.get("status") != "active":
         sys.exit(f"PR #{pr_number} is already {pr.get('status', 'closed')} -- nothing to abandon.")
@@ -763,7 +843,7 @@ def abandon(
     except requests.RequestException as e:
         sys.exit(
             f"The PR is abandoned, but the '{pr_cancel.ABANDON_PREFIX}' comment could not be posted: {e} -- post it yourself "
-            f"(`bdt pr comment --message \"{pr_cancel.ABANDON_PREFIX} <reason>\"`), or `pr info`/`pr status` won't show why"
+            f'(`bdt pr comment --message "{pr_cancel.ABANDON_PREFIX} <reason>"`), or `pr info`/`pr status` won\'t show why'
         )
     print(f"Added an '{pr_cancel.ABANDON_PREFIX}' comment to PR #{pr_number}")
 
@@ -805,7 +885,9 @@ def get_builds_for_branch(session: requests.Session, remote: AdoRemote, branch: 
     just a different `branchName` ref.
     """
     url = f"{_base_url(remote)}/_apis/build/builds"
-    r = session.get(url, params={"branchName": f"refs/heads/{branch}", "$top": top, "api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS)
+    r = session.get(
+        url, params={"branchName": f"refs/heads/{branch}", "$top": top, "api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS
+    )
     r.raise_for_status()
     builds = r.json().get("value", [])
     builds.sort(key=lambda b: b["id"], reverse=True)
@@ -853,7 +935,11 @@ def build_web_url(remote: AdoRemote, build_id: int) -> str:
 
 
 def get_timeline_records(session: requests.Session, remote: AdoRemote, build_id: int) -> list:
-    r = session.get(f"{_base_url(remote)}/_apis/build/builds/{build_id}/timeline", params={"api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS)
+    r = session.get(
+        f"{_base_url(remote)}/_apis/build/builds/{build_id}/timeline",
+        params={"api-version": "7.1"},
+        timeout=HTTP_TIMEOUT_SECS,
+    )
     r.raise_for_status()
     return r.json().get("records") or []
 
@@ -901,7 +987,11 @@ def find_pending_approvals(session: requests.Session, remote: AdoRemote, builds:
 
 
 def get_failed_step_logs(session: requests.Session, remote: AdoRemote, build_id: int) -> None:
-    r = session.get(f"{_base_url(remote)}/_apis/build/builds/{build_id}/timeline", params={"api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS)
+    r = session.get(
+        f"{_base_url(remote)}/_apis/build/builds/{build_id}/timeline",
+        params={"api-version": "7.1"},
+        timeout=HTTP_TIMEOUT_SECS,
+    )
     r.raise_for_status()
     records = r.json().get("records", [])
 
@@ -943,7 +1033,11 @@ def retry_failed_build(session: requests.Session, remote: AdoRemote, build_id: i
 
 
 def _resolve_pr_and_branch(
-    session: requests.Session, remote: AdoRemote, target_branch: str | None, source_branch: str | None, pr_id: int | None
+    session: requests.Session,
+    remote: AdoRemote,
+    target_branch: str | None,
+    source_branch: str | None,
+    pr_id: int | None,
 ) -> tuple[dict, str]:
     """(pr, source_branch) -- shared by `retry()` and `run()`: resolves the PR by `pr_id`
     directly if given, deriving `source_branch` from the PR's own `sourceRefName` (since
@@ -959,7 +1053,11 @@ def _resolve_pr_and_branch(
 
 
 def retry(
-    remote: AdoRemote, pat: str | None, target_branch: str | None, source_branch: str | None = None, pr_id: int | None = None
+    remote: AdoRemote,
+    pat: str | None,
+    target_branch: str | None,
+    source_branch: str | None = None,
+    pr_id: int | None = None,
 ) -> None:
     """Retry the failed stage(s)/job(s) of the most recent build(s) for the PR opened
     from the current branch, or for `pr_id` directly if given -- one retry call per
@@ -1053,7 +1151,11 @@ def cancel(
 
     if cancelled:
         body = pr_cancel.comment_body(
-            reason, ((pr_cancel.one_line(b.get("definition", {}).get("name", "?")), b["id"], build_web_url(remote, b["id"])) for b in cancelled),
+            reason,
+            (
+                (pr_cancel.one_line(b.get("definition", {}).get("name", "?")), b["id"], build_web_url(remote, b["id"]))
+                for b in cancelled
+            ),
             agent_session,
         )
         try:
@@ -1077,7 +1179,9 @@ def queue_build(session: requests.Session, remote: AdoRemote, build: dict) -> di
     for key in ("parameters", "templateParameters"):
         if build.get(key):
             body[key] = build[key]
-    r = session.post(f"{_base_url(remote)}/_apis/build/builds", params={"api-version": "7.1"}, json=body, timeout=HTTP_TIMEOUT_SECS)
+    r = session.post(
+        f"{_base_url(remote)}/_apis/build/builds", params={"api-version": "7.1"}, json=body, timeout=HTTP_TIMEOUT_SECS
+    )
     r.raise_for_status()
     return r.json()
 
@@ -1101,7 +1205,9 @@ def requeue(
         sys.exit(no_builds_message(session, remote, pr, "requeue"))
 
     latest = latest_per_pipeline(builds)
-    todo = [b for b in latest if b.get("status") == "completed" and (include_succeeded or b.get("result") != "succeeded")]
+    todo = [
+        b for b in latest if b.get("status") == "completed" and (include_succeeded or b.get("result") != "succeeded")
+    ]
     if not todo:
         running = [b for b in latest if b.get("status") != "completed"]
         sys.exit(
@@ -1194,7 +1300,9 @@ def exit_if_blocked_on_approval(
         pipeline_name = build.get("definition", {}).get("name", "?")
         for rec in approvals:
             stage = approval_stage_name(records, rec)
-            print(f"  {pipeline_name} #{build['id']}: stage '{stage}' needs approval — {build_web_url(remote, build['id'])}")
+            print(
+                f"  {pipeline_name} #{build['id']}: stage '{stage}' needs approval — {build_web_url(remote, build['id'])}"
+            )
     if already_failed:
         print("\nDetails:")
         for b in pipeline_builds:
@@ -1258,6 +1366,7 @@ def _status(
     baseline_completed_ids: dict[int, int] = {}
     if wait:
         pr = _poll_or_exit(fetch_pr)
+        assert source_branch is not None  # fetch_pr resolved it
         for b in _poll_or_exit(get_builds_for_pr, session, remote, source_branch, pr["pullRequestId"]):
             if b.get("status") != "completed":
                 continue
@@ -1270,7 +1379,12 @@ def _status(
     heartbeat = PollHeartbeat()
 
     def time_out(msg: str, builds: list, pr_number: int) -> NoReturn:
-        exit_wait_timeout(msg, lambda: [print_build(session, remote, b) for b in builds], deadline, status_rerun_cmd(pr_number, timeout))
+        exit_wait_timeout(
+            msg,
+            lambda: [print_build(session, remote, b) for b in builds],
+            deadline,
+            status_rerun_cmd(pr_number, timeout),
+        )
 
     while True:
         pr = _poll_or_exit(fetch_pr)
@@ -1298,6 +1412,7 @@ def _status(
 
         msg = f"\rPR #{pr_number}: {pr_title} ({pr_status})"
 
+        assert source_branch is not None  # fetch_pr resolved it
         builds = _poll_or_exit(get_builds_for_pr, session, remote, source_branch, pr_number)
         if builds:
             pipeline_builds = latest_per_pipeline(builds)
@@ -1305,7 +1420,8 @@ def _status(
                 stale = [
                     b
                     for b in pipeline_builds
-                    if b["id"] <= baseline_completed_ids.get(b.get("definition", {}).get("id"), 0) and not cancelled_for_current_push(b, pr)
+                    if b["id"] <= baseline_completed_ids.get(b.get("definition", {}).get("id"), 0)
+                    and not cancelled_for_current_push(b, pr)
                 ]
                 if stale:
                     msg += " | waiting for new build(s) to start: " + ", ".join(
@@ -1321,7 +1437,9 @@ def _status(
                 for b in pipeline_builds
             )
 
-            exit_if_blocked_on_approval(session, remote, msg, pipeline_builds, wait, "bdt pr status --wait", show_retry_hint=True)
+            exit_if_blocked_on_approval(
+                session, remote, msg, pipeline_builds, wait, "bdt pr status --wait", show_retry_hint=True
+            )
 
             all_done = all(b.get("status") == "completed" for b in pipeline_builds)
             if all_done or not wait:

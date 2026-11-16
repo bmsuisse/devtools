@@ -26,7 +26,7 @@ import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from .cli_tools import detect_agent_session
+from bmsdna.devtools.cli_tools import detect_agent_session
 
 PREFIX = "CANCELLED BUILD:"
 ABANDON_PREFIX = "ABANDONED PR:"

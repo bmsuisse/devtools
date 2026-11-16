@@ -11,7 +11,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from .lint_findings import Finding
+from bmsdna.devtools.lint_findings import Finding
 
 DEFAULT_FIELD_THRESHOLD = 5
 DEFAULT_BASE_CLASS_NAMES = frozenset({"BaseModel", "PostgresTableModel"})
@@ -48,7 +48,9 @@ def _count_fields(node: ast.ClassDef) -> int:
     )
 
 
-def _is_disallowed_api_location(rel_dir_parts: tuple[str, ...], api_dir_names: frozenset[str], allowed_subdirs: frozenset[str]) -> bool:
+def _is_disallowed_api_location(
+    rel_dir_parts: tuple[str, ...], api_dir_names: frozenset[str], allowed_subdirs: frozenset[str]
+) -> bool:
     """True if `rel_dir_parts` (the file's directory components, repo-relative) passes through
     an `api/`-like directory with no `models/`/`schemas/`/`dto/`-like directory after it."""
     for i, part in enumerate(rel_dir_parts):
@@ -79,7 +81,7 @@ def check_models_file(
     else:
         try:
             text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        except OSError, UnicodeDecodeError:
             return []  # not a readable UTF-8 Python file -- skip it like a syntax error
     try:
         tree = ast.parse(text, filename=str(path))

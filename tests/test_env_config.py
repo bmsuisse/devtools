@@ -61,7 +61,7 @@ resource_group = "my-app-rg"
 slot = "staging"
 """,
     )
-    with pytest.raises(SystemExit, match="unknown --env 'prod'.*staging"):
+    with pytest.raises(SystemExit, match=r"unknown --env 'prod'.*staging"):
         resolve_env("prod", tmp_path)
 
 
@@ -74,7 +74,7 @@ webapp = "my-app"
 slot = "production"
 """,
     )
-    with pytest.raises(SystemExit, match="missing required key.*resource_group"):
+    with pytest.raises(SystemExit, match=r"missing required key.*resource_group"):
         resolve_env("prod", tmp_path)
 
 

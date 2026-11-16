@@ -42,7 +42,7 @@ def test_request_sends_bearer_token_for_scope(monkeypatch):
 def test_request_raises_with_service_message(monkeypatch):
     monkeypatch.setattr(requests, "request", lambda *a, **k: FakeResp(403, {"error": {"message": "denied"}}))
 
-    with pytest.raises(azure_arm.AzureApiError, match="HTTP 403.*denied"):
+    with pytest.raises(azure_arm.AzureApiError, match=r"HTTP 403.*denied"):
         azure_arm.request("GET", "https://x/y")
 
 
@@ -122,7 +122,12 @@ def test_default_subscription_ignores_unusable_az_profile(monkeypatch, tmp_path,
 
 def test_default_subscription_follows_next_link(monkeypatch):
     pages = [
-        FakeResp(body={"value": [{"subscriptionId": "a", "state": "Disabled"}], "nextLink": "https://management.azure.com/next"}),
+        FakeResp(
+            body={
+                "value": [{"subscriptionId": "a", "state": "Disabled"}],
+                "nextLink": "https://management.azure.com/next",
+            }
+        ),
         FakeResp(body={"value": [{"subscriptionId": "b", "state": "Enabled"}]}),
     ]
     urls: list[str] = []

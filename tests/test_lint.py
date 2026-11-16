@@ -17,7 +17,9 @@ pythonpath = ["."]
 
 
 def _setup_repo(tmp_path: Path, *, tooling_ok: bool = True, extra_pyproject: str = "") -> Path:
-    (tmp_path / "pyproject.toml").write_text((_TOOLING_OK if tooling_ok else "[project]\nname = 'x'\n") + extra_pyproject)
+    (tmp_path / "pyproject.toml").write_text(
+        (_TOOLING_OK if tooling_ok else "[project]\nname = 'x'\n") + extra_pyproject
+    )
     if tooling_ok:
         (tmp_path / "prek.toml").write_text("")
     return tmp_path

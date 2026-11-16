@@ -11,7 +11,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .gitrepo import AdoRemote, GitHubRemote, NotAzureDevOpsRemoteError, parse_ado_remote
+from bmsdna.devtools.gitrepo import AdoRemote, GitHubRemote, NotAzureDevOpsRemoteError, parse_ado_remote
 
 FORMS = "a number, owner/repo#N (GitHub), project/repo#N or org/project/repo#N (Azure DevOps), or the PR's URL"
 
@@ -34,7 +34,9 @@ class PrRef:
 
 
 _GITHUB_PR_URL = re.compile(r"^https://github\.com/([^/\s]+)/([^/\s]+)/pull/(\d+)(?:[/?#].*)?$")
-_ADO_PR_URL = re.compile(r"^https://(?:dev\.azure\.com/|[^/\s]+\.visualstudio\.com/).*?/_git/[^/\s]+/pullrequest/(\d+)(?:[/?#].*)?$")
+_ADO_PR_URL = re.compile(
+    r"^https://(?:dev\.azure\.com/|[^/\s]+\.visualstudio\.com/).*?/_git/[^/\s]+/pullrequest/(\d+)(?:[/?#].*)?$"
+)
 _SHORTHAND = re.compile(r"^(.+)#(\d+)$")
 
 
@@ -56,7 +58,7 @@ def parse_pr_ref(text: str, current_remote: Callable[[], AdoRemote | GitHubRemot
         url = text.replace("/DefaultCollection/", "/", 1) if "visualstudio.com" in text else text
         try:
             return PrRef(int(match.group(1)), parse_ado_remote(url))
-        except (NotAzureDevOpsRemoteError, IndexError):
+        except NotAzureDevOpsRemoteError, IndexError:
             raise PrRefError(f"can't read the Azure DevOps repo from '{text}'") from None
 
     if match := _SHORTHAND.match(text):

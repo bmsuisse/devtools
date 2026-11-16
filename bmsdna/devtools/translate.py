@@ -21,12 +21,13 @@ from __future__ import annotations
 import json
 import re
 import tomllib
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import tomli_w
 
-from .bdt_config import find_pyproject, load_bdt_table
+from bmsdna.devtools.bdt_config import find_pyproject, load_bdt_table
 
 SCAN_SUFFIXES = {".ts", ".tsx", ".js", ".jsx", ".vue"}
 JINJA_SUFFIXES = {".jinja2", ".j2", ".html"}
@@ -145,21 +146,11 @@ def import_existing(cfg: Config, transls: Translations) -> int:
     return added
 
 
-def _iter_files(roots: list[Path], suffixes: set[str]):
+def _iter_files(roots: list[Path], suffixes: set[str]) -> Iterator[Path]:
     for root in roots:
-        files = (
-            [root]
-            if root.is_file()
-            else sorted(root.rglob("*"))
-            if root.is_dir()
-            else []
-        )
+        files = [root] if root.is_file() else sorted(root.rglob("*")) if root.is_dir() else []
         for f in files:
-            if (
-                f.is_file()
-                and f.suffix in suffixes
-                and not SKIP_DIRS.intersection(f.relative_to(root).parts[:-1])
-            ):
+            if f.is_file() and f.suffix in suffixes and not SKIP_DIRS.intersection(f.relative_to(root).parts[:-1]):
                 yield f
 
 
@@ -183,9 +174,7 @@ def resolve(entry: dict, key: str, lng: str) -> str:
 
 
 def build_language(transls: Translations, lng: str, nested: bool) -> dict:
-    flat = {
-        k: resolve(v, k, lng) for k, v in transls.items() if not v.get("server_only")
-    }
+    flat = {k: resolve(v, k, lng) for k, v in transls.items() if not v.get("server_only")}
     if not nested:
         return flat
     tree: dict = {}
@@ -195,9 +184,7 @@ def build_language(transls: Translations, lng: str, nested: bool) -> dict:
         for part in parents:
             child = node.setdefault(part, {})
             if not isinstance(child, dict):
-                raise ValueError(
-                    f"Key conflict: {key!r} needs {part!r} to be an object, but it is a string"
-                )
+                raise ValueError(f"Key conflict: {key!r} needs {part!r} to be an object, but it is a string")
             node = child
         if isinstance(node.get(leaf), dict):
             raise ValueError(f"Key conflict: {key!r} is also a prefix of other keys")
@@ -208,9 +195,7 @@ def build_language(transls: Translations, lng: str, nested: bool) -> dict:
 @dataclass
 class Result:
     new_keys: list[str] = field(default_factory=list)
-    incomplete: dict[str, list[str]] = field(
-        default_factory=dict
-    )  # key -> missing languages
+    incomplete: dict[str, list[str]] = field(default_factory=dict)  # key -> missing languages
     imported: int = 0
     written: list[Path] = field(default_factory=list)
     toml_changed: bool = False
@@ -236,8 +221,7 @@ def run(cfg: Config, *, check: bool = False, import_json: bool = False) -> Resul
     res.incomplete = {
         k: missing
         for k, v in transls.items()
-        if not v.get("server_only")
-        and (missing := [lng for lng in cfg.languages if lng not in v])
+        if not v.get("server_only") and (missing := [lng for lng in cfg.languages if lng not in v])
     }
 
     res.toml_changed = transls != original

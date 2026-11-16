@@ -10,7 +10,7 @@ import json
 import re
 from dataclasses import asdict, dataclass, field
 
-from .issue_watch import Comment, format_comment
+from bmsdna.devtools.issue_watch import Comment, format_comment
 
 # Control characters other than newline and tab: issue text is written by anyone, and a raw ESC sequence
 # printed to a terminal can rewrite what it shows (or trigger terminal features).

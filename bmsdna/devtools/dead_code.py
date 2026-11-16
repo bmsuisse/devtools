@@ -13,11 +13,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import api_usage
-from .api_usage import ApiUsageError
-from .lint import _DEFAULT_EXCLUDE_DIR_NAMES, _iter_files, _iter_python_files
-from .lint_findings import Finding
-from .lint_sql_files import DEFAULT_LOADER_FUNCTIONS, check_unreferenced_sql_files
+from bmsdna.devtools import api_usage
+from bmsdna.devtools.api_usage import ApiUsageError
+from bmsdna.devtools.lint import _DEFAULT_EXCLUDE_DIR_NAMES, _iter_files, _iter_python_files
+from bmsdna.devtools.lint_findings import Finding
+from bmsdna.devtools.lint_sql_files import DEFAULT_LOADER_FUNCTIONS, check_unreferenced_sql_files
 
 CHECKS = ("sql", "routes")
 
@@ -38,7 +38,14 @@ def check_sql_roots(config: dict, *, repo_root: Path) -> list[Finding]:
         if candidate.is_dir() and candidate.resolve().is_relative_to(repo_root.resolve()):
             roots.append(candidate)
         else:
-            findings.append(Finding(candidate, 0, "lint-path-not-found", f"sql_roots entry '{root}' is not a directory inside {repo_root}."))
+            findings.append(
+                Finding(
+                    candidate,
+                    0,
+                    "lint-path-not-found",
+                    f"sql_roots entry '{root}' is not a directory inside {repo_root}.",
+                )
+            )
     sql_files, _ = _iter_files(roots, exclude_dir_names, (".sql",))
     python_files, _ = _iter_python_files([repo_root], exclude_dir_names)
     findings.extend(

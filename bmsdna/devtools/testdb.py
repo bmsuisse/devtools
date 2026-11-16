@@ -49,8 +49,8 @@ from pgdevkit.testdb import constants as pgdevkit_constants
 from pgdevkit.testdb.config import load_config
 from pgdevkit.testdb.naming import slugify
 
-from .bdt_config import load_bdt_table
-from .cli_tools import require_psql
+from bmsdna.devtools.bdt_config import load_bdt_table
+from bmsdna.devtools.cli_tools import require_psql
 
 # A DB name ending in one of these (after stripping any configured
 # `extra_db_suffixes` entry) looks like it's named after a bare branch
@@ -74,7 +74,7 @@ def has_pgdevkit_project(repo: Path) -> bool:
         return False
     try:
         data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
+    except OSError, tomllib.TOMLDecodeError:
         return False
     section = data.get("tool", {}).get("pgdevkit")
     # `is None` on purpose, not `not section` -- an empty `[tool.pgdevkit]`
@@ -143,8 +143,10 @@ def find_orphaned(repo: Path) -> list[tuple[str, str, bool]]:
     for root in project_roots(repo):
         config = load_config(root)
         suffixes = list(config.extra_db_suffixes)
-        for name in pgdevkit_testdb.find_orphaned_dbs(project_root=root):
-            results.append((name, config.name, is_caution_db(name, config.name, suffixes)))
+        results.extend(
+            (name, config.name, is_caution_db(name, config.name, suffixes))
+            for name in pgdevkit_testdb.find_orphaned_dbs(project_root=root)
+        )
     return results
 
 
@@ -163,8 +165,7 @@ def is_caution_db(db_name: str, project_name: str, sibling_suffixes: list[str]) 
         return False
     tail = db_name[len(prefix) :]
     for suffix in sibling_suffixes:
-        if tail.endswith(suffix):
-            tail = tail[: -len(suffix)]
+        tail = tail.removesuffix(suffix)
     return tail in CAUTION_BRANCH_NAMES
 
 

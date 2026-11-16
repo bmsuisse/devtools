@@ -35,10 +35,12 @@ def _ado(monkeypatch, *, description: str = "") -> list[dict]:
     monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.pr_build.has_build_policy", lambda session, remote, target: False)
     monkeypatch.setattr(
-        "bmsdna.devtools.pr_build.get_pr", lambda session, remote, source_branch, target: {"pullRequestId": 456, "description": description}
+        "bmsdna.devtools.pr_build.get_pr",
+        lambda session, remote, source_branch, target: {"pullRequestId": 456, "description": description},
     )
     monkeypatch.setattr(
-        "bmsdna.devtools.pr_build.get_pr_by_id", lambda session, remote, pr_id: {"pullRequestId": pr_id, "description": description}
+        "bmsdna.devtools.pr_build.get_pr_by_id",
+        lambda session, remote, pr_id: {"pullRequestId": pr_id, "description": description},
     )
     calls: list[dict] = []
 
@@ -130,7 +132,9 @@ def test_pr_create_defaults_to_draft_for_ado(monkeypatch) -> None:
 
 
 def test_pr_create_fails_before_touching_the_host_when_required_label_group_missing(monkeypatch) -> None:
-    monkeypatch.setattr("bmsdna.devtools.cli.pr_labels.required_label_groups", lambda: {"risk": ["breaking", "non-breaking"]})
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.pr_labels.required_label_groups", lambda: {"risk": ["breaking", "non-breaking"]}
+    )
 
     def fail_if_called(*args, **kwargs):
         raise AssertionError("should not be reached — the missing-label check must run first")
@@ -217,7 +221,7 @@ def test_pr_create_skips_commit_lookup_when_scope_labels_unconfigured(monkeypatc
     """Opt-in: no [tool.bdt.pr.scope_labels] table means no git log call at all,
     not just no label -- so repos that don't configure it see zero behavior change."""
     _github(monkeypatch)
-    monkeypatch.setattr("bmsdna.devtools.cli.pr_labels.scope_labels", lambda: {})
+    monkeypatch.setattr("bmsdna.devtools.cli.pr_labels.scope_labels", dict)
 
     def fail_if_called():
         raise AssertionError("head_commit_subject should not be called when scope_labels is empty")
@@ -231,7 +235,9 @@ def test_pr_create_skips_commit_lookup_when_scope_labels_unconfigured(monkeypatc
 
 def test_pr_create_proceeds_when_required_label_group_satisfied(monkeypatch) -> None:
     calls = _github(monkeypatch)
-    monkeypatch.setattr("bmsdna.devtools.cli.pr_labels.required_label_groups", lambda: {"risk": ["breaking", "non-breaking"]})
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.pr_labels.required_label_groups", lambda: {"risk": ["breaking", "non-breaking"]}
+    )
 
     result = runner.invoke(app, ["pr", "create", "--target", "main", "--label", "non-breaking"])
 
@@ -243,7 +249,9 @@ def test_github_pr_create_passes_full_title_and_description(monkeypatch) -> None
     calls = _github(monkeypatch)
     big = "line of description text\n" * 2000
 
-    result = runner.invoke(app, ["pr", "create", "--target", "main", "--title", "Long title " * 20, "--description", big])
+    result = runner.invoke(
+        app, ["pr", "create", "--target", "main", "--title", "Long title " * 20, "--description", big]
+    )
 
     assert result.exit_code == 0, result.output
     assert calls[0]["title"] == "Long title " * 20
@@ -261,7 +269,9 @@ def test_pr_create_rejects_issue_url_for_a_different_github_repo(monkeypatch) ->
 
     monkeypatch.setattr("bmsdna.devtools.cli.current_branch", fail_if_called)
 
-    result = runner.invoke(app, ["pr", "create", "--target", "main", "--issue", "https://github.com/other/repo/issues/9"])
+    result = runner.invoke(
+        app, ["pr", "create", "--target", "main", "--issue", "https://github.com/other/repo/issues/9"]
+    )
 
     assert result.exit_code != 0
     assert "owner/repo" in result.output
@@ -272,7 +282,7 @@ def _record_github_links(monkeypatch) -> tuple[list[tuple[int, int]], list[int]]
     labeled: list[int] = []
     monkeypatch.setattr(
         "bmsdna.devtools.gh_pr.link_issue_to_pr",
-        lambda gh, pr_number, body, number: (linked.append((pr_number, number)) or f"{body}\nFixes #{number}"),
+        lambda gh, pr_number, body, number: linked.append((pr_number, number)) or f"{body}\nFixes #{number}",
     )
     monkeypatch.setattr("bmsdna.devtools.gh_issue.ensure_pr_available_label", lambda gh: None)
     monkeypatch.setattr("bmsdna.devtools.gh_issue.add_pr_available_label", lambda gh, number: labeled.append(number))
@@ -306,9 +316,13 @@ def _record_ado_links(monkeypatch) -> tuple[list[tuple[int, int]], list[int]]:
     linked: list[tuple[int, int]] = []
     tagged: list[int] = []
     monkeypatch.setattr(
-        "bmsdna.devtools.pr_build.link_work_item", lambda session, remote, pr_id, work_item_id: linked.append((pr_id, work_item_id))
+        "bmsdna.devtools.pr_build.link_work_item",
+        lambda session, remote, pr_id, work_item_id: linked.append((pr_id, work_item_id)),
     )
-    monkeypatch.setattr("bmsdna.devtools.ado_issue.add_pr_available_tag", lambda session, remote, work_item_id: tagged.append(work_item_id))
+    monkeypatch.setattr(
+        "bmsdna.devtools.ado_issue.add_pr_available_tag",
+        lambda session, remote, work_item_id: tagged.append(work_item_id),
+    )
     return linked, tagged
 
 
@@ -394,7 +408,9 @@ def test_github_dry_run_stops_before_any_post_create_step(monkeypatch, tmp_path)
     shot = tmp_path / "a.png"
     shot.write_bytes(b"x")
 
-    result = runner.invoke(app, ["pr", "create", "--target", "main", "--issue", "10", "--screenshot", str(shot), "--", "--dry-run"])
+    result = runner.invoke(
+        app, ["pr", "create", "--target", "main", "--issue", "10", "--screenshot", str(shot), "--", "--dry-run"]
+    )
 
     assert result.exit_code == 0, result.output
     assert {"dry": True} in calls
@@ -402,17 +418,29 @@ def test_github_dry_run_stops_before_any_post_create_step(monkeypatch, tmp_path)
 
 def test_github_follow_ups_target_the_created_pr_not_the_checked_out_branch(monkeypatch, tmp_path) -> None:
     _github(monkeypatch, body="autofilled")
-    monkeypatch.setattr("bmsdna.devtools.gh_pr.create", lambda gh, target, extra_args, **kw: (0, "https://github.com/owner/repo/pull/42"))
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.create",
+        lambda gh, target, extra_args, **kw: (0, "https://github.com/owner/repo/pull/42"),
+    )
     seen: dict = {}
-    monkeypatch.setattr("bmsdna.devtools.gh_pr.add_attachments", lambda gh, o, r, b, s, f, pr_id=None: seen.setdefault("attach", pr_id))
-    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr_body", lambda gh, pr_id=None: (seen.setdefault("body", pr_id), "autofilled"))
-    monkeypatch.setattr("bmsdna.devtools.gh_pr.link_issue_to_pr", lambda gh, n, body, number: seen.setdefault("link", n) and body)
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.add_attachments", lambda gh, o, r, b, s, f, pr_id=None: seen.setdefault("attach", pr_id)
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.get_pr_body", lambda gh, pr_id=None: (seen.setdefault("body", pr_id), "autofilled")
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.link_issue_to_pr", lambda gh, n, body, number: seen.setdefault("link", n) and body
+    )
     monkeypatch.setattr("bmsdna.devtools.gh_issue.ensure_pr_available_label", lambda gh: None)
     monkeypatch.setattr("bmsdna.devtools.gh_issue.add_pr_available_label", lambda gh, number: None)
     report = tmp_path / "r.pdf"
     report.write_bytes(b"x")
 
-    result = runner.invoke(app, ["pr", "create", "--target", "main", "--issue", "10", "--file", str(report), "--", "--head", "other-branch"])
+    result = runner.invoke(
+        app,
+        ["pr", "create", "--target", "main", "--issue", "10", "--file", str(report), "--", "--head", "other-branch"],
+    )
 
     assert result.exit_code == 0, result.output
     assert seen == {"attach": 42, "body": 42, "link": 42}
@@ -423,7 +451,8 @@ def test_ado_follow_ups_use_the_created_pull_request_id(monkeypatch, tmp_path) -
     monkeypatch.setattr("bmsdna.devtools.cli.detect_agent_session", lambda: None)
     by_id: list[int] = []
     monkeypatch.setattr(
-        "bmsdna.devtools.pr_build.get_pr_by_id", lambda session, remote, pr_id: by_id.append(pr_id) or {"pullRequestId": pr_id, "description": ""}
+        "bmsdna.devtools.pr_build.get_pr_by_id",
+        lambda session, remote, pr_id: by_id.append(pr_id) or {"pullRequestId": pr_id, "description": ""},
     )
 
     def branch_lookup(*args, **kwargs):
@@ -433,7 +462,9 @@ def test_ado_follow_ups_use_the_created_pull_request_id(monkeypatch, tmp_path) -
     monkeypatch.setattr("bmsdna.devtools.pr_build.link_work_item", lambda session, remote, pr_id, work_item_id: None)
     monkeypatch.setattr("bmsdna.devtools.ado_issue.add_pr_available_tag", lambda session, remote, work_item_id: None)
 
-    result = runner.invoke(app, ["pr", "create", "--target", "test", "--issue", "20", "--", "--source-branch", "other-branch"])
+    result = runner.invoke(
+        app, ["pr", "create", "--target", "test", "--issue", "20", "--", "--source-branch", "other-branch"]
+    )
 
     assert result.exit_code == 0, result.output
     assert by_id == [456]
@@ -442,7 +473,9 @@ def test_ado_follow_ups_use_the_created_pull_request_id(monkeypatch, tmp_path) -
 def test_body_file_stdin_is_read_once_and_reaches_the_pr(monkeypatch) -> None:
     calls = _github(monkeypatch)
 
-    result = runner.invoke(app, ["pr", "create", "--target", "main", "--", "--body-file", "-"], input="piped description\n")
+    result = runner.invoke(
+        app, ["pr", "create", "--target", "main", "--", "--body-file", "-"], input="piped description\n"
+    )
 
     assert result.exit_code == 0, result.output
     assert calls[0]["description"] == "piped description\n"
@@ -451,7 +484,9 @@ def test_body_file_stdin_is_read_once_and_reaches_the_pr(monkeypatch) -> None:
 
 def test_required_label_group_is_satisfied_by_a_passthrough_label(monkeypatch) -> None:
     calls = _github(monkeypatch)
-    monkeypatch.setattr("bmsdna.devtools.cli.pr_labels.required_label_groups", lambda: {"risk": ["breaking", "non-breaking"]})
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.pr_labels.required_label_groups", lambda: {"risk": ["breaking", "non-breaking"]}
+    )
 
     ok = runner.invoke(app, ["pr", "create", "--target", "main", "--", "--label", "breaking"])
     missing = runner.invoke(app, ["pr", "create", "--target", "main", "--", "--title", "T"])
@@ -483,7 +518,9 @@ def test_promotion_pr_on_ado_keeps_commits_and_source_branch(monkeypatch) -> Non
 def test_explicit_merge_flags_beat_the_defaults(monkeypatch) -> None:
     calls = _ado(monkeypatch)
 
-    result = runner.invoke(app, ["pr", "create", "--target", "dev", "--", "--squash", "false", "--delete-source-branch", "false"])
+    result = runner.invoke(
+        app, ["pr", "create", "--target", "dev", "--", "--squash", "false", "--delete-source-branch", "false"]
+    )
 
     assert result.exit_code == 0, result.output
     assert (calls[0]["options"].squash, calls[0]["options"].delete_source_branch) == (False, False)

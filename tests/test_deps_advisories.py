@@ -51,7 +51,7 @@ class FakeSource:
         self.ids, self.records = ids, {r["id"]: r for r in records}
         self.kev, self.kev_down, self.released, self.fail_vuln = kev or set(), kev_down, released or {}, fail_vuln
 
-    def query_batch(self, packages):  # noqa: ANN001, ANN201
+    def query_batch(self, packages):
         return {p: self.ids.get(p, []) for p in packages}
 
     def vuln(self, vuln_id: str) -> dict[str, Any]:
@@ -81,7 +81,7 @@ def lock(
     return content
 
 
-def run(content: LockfileContent, records: list[dict], **kwargs: Any):  # noqa: ANN201
+def run(content: LockfileContent, records: list[dict], **kwargs: Any):
     pkg = content.packages[0]
     ids = {(pkg.ecosystem, pkg.name, pkg.version): [r["id"] for r in records]}
     return scan([content], FakeSource(ids, records, **kwargs), now=NOW)

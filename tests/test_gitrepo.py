@@ -20,7 +20,10 @@ from bmsdna.devtools.gitrepo import (
     [
         ("git@ssh.dev.azure.com:v3/bmeurope/BMS%20-%20Data/MDMApp", AdoRemote("bmeurope", "BMS - Data", "MDMApp")),
         ("https://dev.azure.com/bmeurope/BMS%20-%20CCMT2/_git/ccmt2", AdoRemote("bmeurope", "BMS - CCMT2", "ccmt2")),
-        ("https://user@dev.azure.com/bmeurope/BMS%20%E2%80%93%20MyPage/_git/onesales", AdoRemote("bmeurope", "BMS – MyPage", "onesales")),
+        (
+            "https://user@dev.azure.com/bmeurope/BMS%20%E2%80%93%20MyPage/_git/onesales",
+            AdoRemote("bmeurope", "BMS \u2013 MyPage", "onesales"),
+        ),
         ("https://bmeurope.visualstudio.com/BMS%20-%20Data/_git/MDMApp", AdoRemote("bmeurope", "BMS - Data", "MDMApp")),
     ],
 )

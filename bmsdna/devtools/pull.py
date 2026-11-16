@@ -30,8 +30,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from .cli_tools import CLI_TIMEOUT_SECS
-from .gitrepo import current_branch as _current_branch
+from bmsdna.devtools.cli_tools import CLI_TIMEOUT_SECS
+from bmsdna.devtools.gitrepo import current_branch as _current_branch
 
 # `git pull` can legitimately take longer than a metadata call (`ls-remote`,
 # `rev-parse`) -- an actual fetch+merge of a large repo over a slow network --
@@ -40,7 +40,9 @@ from .gitrepo import current_branch as _current_branch
 PULL_TIMEOUT_SECS = CLI_TIMEOUT_SECS * 4
 
 
-def _run_capture(cmd: list[str], cwd: Path | str | None = None, *, timeout: float = CLI_TIMEOUT_SECS) -> subprocess.CompletedProcess:
+def _run_capture(
+    cmd: list[str], cwd: Path | str | None = None, *, timeout: float = CLI_TIMEOUT_SECS
+) -> subprocess.CompletedProcess:
     """`subprocess.run` bounded by `timeout` -- every `git` call in this module goes
     through this, so a stalled network call (or git blocking on an interactive
     prompt, e.g. an expired SSH/HTTPS credential) can't hang the caller forever.
@@ -55,7 +57,10 @@ def _run_capture(cmd: list[str], cwd: Path | str | None = None, *, timeout: floa
         sys.exit(f"'{cmd[0]}' is required for this command but wasn't found on PATH.")
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(
-            cmd, 124, "", f"`{' '.join(cmd)}` timed out after {timeout:.0f}s -- stalled network, or needs an interactive login?"
+            cmd,
+            124,
+            "",
+            f"`{' '.join(cmd)}` timed out after {timeout:.0f}s -- stalled network, or needs an interactive login?",
         )
 
 
@@ -92,7 +97,7 @@ def _query_remote(remote: str, cwd: Path | str | None, *, timeout: float) -> tup
     for line in result.stdout.splitlines():
         # "ref: refs/heads/main\tHEAD"
         if line.startswith("ref:") and line.endswith("HEAD"):
-            default = line[len("ref:"):].split("\t")[0].strip().removeprefix("refs/heads/")
+            default = line[len("ref:") :].split("\t")[0].strip().removeprefix("refs/heads/")
     return default, _parse_ls_remote_heads(result.stdout)
 
 
@@ -159,7 +164,9 @@ class PullStep:
     cmd: list[str] | None
 
 
-def build_steps(remote: str, *, no_default: bool, pull_args: list[str], cwd: Path | str | None = None) -> list[PullStep]:
+def build_steps(
+    remote: str, *, no_default: bool, pull_args: list[str], cwd: Path | str | None = None
+) -> list[PullStep]:
     steps: list[PullStep] = []
     args = _with_default_strategy(pull_args)
     # Fully-qualified "remote/branch" refs a step above has already pulled,
@@ -191,15 +198,24 @@ def build_steps(remote: str, *, no_default: bool, pull_args: list[str], cwd: Pat
             steps.append(PullStep(main_ref, ["git", "pull", remote, main, *args]))
             pulled_refs[main_ref] = main_ref
     else:
-        steps.append(PullStep(f"{remote}'s main/master branch (skipped: neither exists on {remote}, or it's unreachable)", None))
+        steps.append(
+            PullStep(f"{remote}'s main/master branch (skipped: neither exists on {remote}, or it's unreachable)", None)
+        )
 
     if not no_default:
         if default is not None:
             default_ref = f"{remote}/{default}"
             if default_ref in pulled_refs:
-                steps.append(PullStep(f"{remote}'s default branch ({default}) (skipped: same as {pulled_refs[default_ref]}, already pulled above)", None))
+                steps.append(
+                    PullStep(
+                        f"{remote}'s default branch ({default}) (skipped: same as {pulled_refs[default_ref]}, already pulled above)",
+                        None,
+                    )
+                )
             else:
-                steps.append(PullStep(f"{remote}'s default branch ({default})", ["git", "pull", remote, default, *args]))
+                steps.append(
+                    PullStep(f"{remote}'s default branch ({default})", ["git", "pull", remote, default, *args])
+                )
         else:
             steps.append(PullStep(f"{remote}'s default branch (skipped: could not be determined)", None))
 

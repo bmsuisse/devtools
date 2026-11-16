@@ -4,8 +4,8 @@ import pytest
 import requests
 from typer.testing import CliRunner
 
-from bmsdna.devtools.cli import app
 from bmsdna.devtools import find_repo as find_repo_mod
+from bmsdna.devtools.cli import app
 from bmsdna.devtools.find_repo import (
     CommitInfo,
     RemoteRepo,
@@ -13,8 +13,8 @@ from bmsdna.devtools.find_repo import (
     find_local,
     find_remote,
     list_local,
-    local_clones_by_web_url,
     list_remote,
+    local_clones_by_web_url,
     readme_summary,
     run,
     run_list,
@@ -440,7 +440,9 @@ def test_run_clones_github_org_match_via_github_token_not_ado_auth(tmp_path, mon
     monkeypatch.setattr("bmsdna.devtools.find_repo.require_gh", lambda: "gh")
     monkeypatch.setattr(
         "bmsdna.devtools.find_repo.find_github",
-        lambda gh, org, name: [RemoteRepo("someghorg", "widgets", "https://github.com/someghorg/widgets", source="github")],
+        lambda gh, org, name: [
+            RemoteRepo("someghorg", "widgets", "https://github.com/someghorg/widgets", source="github")
+        ],
     )
     monkeypatch.setattr(
         "bmsdna.devtools.find_repo.auth_header", lambda pat: (_ for _ in ()).throw(AssertionError("must not be called"))
@@ -463,7 +465,9 @@ def test_run_searches_both_org_and_github_org(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.find_repo.find_remote", lambda org, name, pat=None: [])
     monkeypatch.setattr(
         "bmsdna.devtools.find_repo.find_github",
-        lambda gh, org, name: [RemoteRepo("someghorg", "widgets", "https://github.com/someghorg/widgets", source="github")],
+        lambda gh, org, name: [
+            RemoteRepo("someghorg", "widgets", "https://github.com/someghorg/widgets", source="github")
+        ],
     )
     clone_calls = []
     monkeypatch.setattr(
@@ -486,7 +490,9 @@ def test_run_prefers_exact_match_from_either_source_over_substring_from_the_othe
     )
     monkeypatch.setattr(
         "bmsdna.devtools.find_repo.find_github",
-        lambda gh, org, name: [RemoteRepo("someghorg", "widgets", "https://github.com/someghorg/widgets", source="github")],
+        lambda gh, org, name: [
+            RemoteRepo("someghorg", "widgets", "https://github.com/someghorg/widgets", source="github")
+        ],
     )
     clone_calls = []
     monkeypatch.setattr(
@@ -692,7 +698,9 @@ def test_clone_appends_to_existing_git_config_env(tmp_path, monkeypatch) -> None
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
     monkeypatch.setenv("GIT_CONFIG_KEY_0", "http.sslCAInfo")
     monkeypatch.setenv("GIT_CONFIG_VALUE_0", "/etc/ca.pem")
-    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: captured.update(env=kw["env"]) or subprocess.CompletedProcess(cmd, 0))
+    monkeypatch.setattr(
+        subprocess, "run", lambda cmd, **kw: captured.update(env=kw["env"]) or subprocess.CompletedProcess(cmd, 0)
+    )
 
     clone("https://example/x.git", tmp_path / "x", {"Authorization": "Basic abc"})
 
@@ -773,7 +781,13 @@ def test_list_remote_adds_readme_description_and_last_commit_to_ado_repos(monkey
     result = list_remote(org="org", github_org=None, pat="secret")
 
     assert result == [
-        RemoteRepo("A", "alpha", "https://a/alpha", description="Does alpha things.", last_commit=CommitInfo("id-alpha", "2026-01-02T03:04:05Z", "Ann")),
+        RemoteRepo(
+            "A",
+            "alpha",
+            "https://a/alpha",
+            description="Does alpha things.",
+            last_commit=CommitInfo("id-alpha", "2026-01-02T03:04:05Z", "Ann"),
+        ),
         RemoteRepo("A", "zed", "https://a/zed", last_commit=CommitInfo("id-zed", "2025-05-05T00:00:00Z", "Ann")),
         RemoteRepo("B", "beta", "https://b/beta"),
     ]
@@ -826,7 +840,9 @@ def _gh_node(name: str, **kw) -> dict:
         "description": None,
         "pushedAt": "2020-01-01T00:00:00Z",
         "isDisabled": False,
-        "defaultBranchRef": {"target": {"oid": "abc123", "committedDate": "2026-03-04T05:06:07Z", "author": {"name": "Ann"}}},
+        "defaultBranchRef": {
+            "target": {"oid": "abc123", "committedDate": "2026-03-04T05:06:07Z", "author": {"name": "Ann"}}
+        },
         **kw,
     }
 
@@ -847,7 +863,13 @@ def test_list_remote_reads_github_description_and_newest_commit_in_one_query_per
             last_commit=CommitInfo("abc123", "2026-03-04T05:06:07Z", "Ann"),
         ),
         # empty repo: no default branch, so it keeps the push time
-        RemoteRepo("org", "empty", "https://github.com/org/empty", source="github", last_commit=CommitInfo(date="2020-01-01T00:00:00Z")),
+        RemoteRepo(
+            "org",
+            "empty",
+            "https://github.com/org/empty",
+            source="github",
+            last_commit=CommitInfo(date="2020-01-01T00:00:00Z"),
+        ),
     ]
     assert client.calls == [{"login": "org", "after": None}, {"login": "org", "after": "cursor0"}]
 
@@ -879,7 +901,13 @@ def test_list_remote_ado_disabled_repos_are_filtered_and_get_no_detail_requests(
             {"name": "off", "remoteUrl": "https://a/off", "isDisabled": True},
         ]
     }
-    monkeypatch.setattr(requests, "get", _fake_ado_details([{"name": "A"}], repos, {"live": "# Live\n\nLive repo."}, {"live": "2026-01-02T03:04:05Z"}, calls))
+    monkeypatch.setattr(
+        requests,
+        "get",
+        _fake_ado_details(
+            [{"name": "A"}], repos, {"live": "# Live\n\nLive repo."}, {"live": "2026-01-02T03:04:05Z"}, calls
+        ),
+    )
 
     default = list_remote(org="org", github_org=None)
     included = list_remote(org="org", github_org=None, include_disabled=True)
@@ -915,7 +943,9 @@ def test_list_remote_ado_tries_other_readme_names(monkeypatch) -> None:
             content = readmes.get(params["path"])
             return FakeResp(body={"content": content}) if content else FakeResp(404, {"message": "nope"})
         if url.endswith("/commits"):
-            return FakeResp(body={"value": [{"commitId": "c1", "author": {"name": "Ann"}, "committer": {"date": "2026-01-01"}}]})
+            return FakeResp(
+                body={"value": [{"commitId": "c1", "author": {"name": "Ann"}, "committer": {"date": "2026-01-01"}}]}
+            )
         return FakeResp(body={"value": [{"name": "alpha", "remoteUrl": "https://a/alpha"}]})
 
     monkeypatch.setattr(requests, "get", fake_get)
@@ -952,9 +982,15 @@ def test_run_list_prints_aligned_columns(monkeypatch, capsys) -> None:
         "list_remote",
         lambda **kw: [
             RemoteRepo(
-                "P", "a", "u1", description="Does a", last_commit=CommitInfo("0123456789abcdef", "2026-01-02T03:04:05Z", "Ann")
+                "P",
+                "a",
+                "u1",
+                description="Does a",
+                last_commit=CommitInfo("0123456789abcdef", "2026-01-02T03:04:05Z", "Ann"),
             ),
-            RemoteRepo("Project", "longer-name", "u2", last_commit=CommitInfo("fedcba9876543210", "2025-12-31T00:00:00Z", "Bo")),
+            RemoteRepo(
+                "Project", "longer-name", "u2", last_commit=CommitInfo("fedcba9876543210", "2025-12-31T00:00:00Z", "Bo")
+            ),
         ],
     )
 
@@ -969,7 +1005,9 @@ def test_run_list_prints_aligned_columns(monkeypatch, capsys) -> None:
 def test_run_list_text_strips_terminal_control_characters_but_json_keeps_them(monkeypatch, capsys) -> None:
     import json
 
-    evil = RemoteRepo("P", "a", "u", description="hi\x1b[2Jthere\tx", last_commit=CommitInfo("0123456789", "2026-01-02", "A\x1bB"))
+    evil = RemoteRepo(
+        "P", "a", "u", description="hi\x1b[2Jthere\tx", last_commit=CommitInfo("0123456789", "2026-01-02", "A\x1bB")
+    )
     monkeypatch.setattr(find_repo_mod, "list_remote", lambda **kw: [evil])
 
     run_list(root=None, org="org")
@@ -988,7 +1026,13 @@ def test_run_list_json_is_structured(monkeypatch, capsys) -> None:
         find_repo_mod,
         "list_remote",
         lambda **kw: [
-            RemoteRepo("P", "a", "u1", description="Does a", last_commit=CommitInfo("0123456789abcdef", "2026-01-02T03:04:05Z", "Ann"))
+            RemoteRepo(
+                "P",
+                "a",
+                "u1",
+                description="Does a",
+                last_commit=CommitInfo("0123456789abcdef", "2026-01-02T03:04:05Z", "Ann"),
+            )
         ],
     )
 
@@ -1051,10 +1095,19 @@ def test_run_list_without_org_lists_local_clones_and_says_so(tmp_path, capsys) -
             "https://bmeurope@dev.azure.com/bmeurope/My%20Project/_git/the-repo",
             "https://dev.azure.com/bmeurope/My%20Project/_git/the-repo",
         ),
-        ("https://dev.azure.com/bmeurope/My Project/_git/the-repo", "https://dev.azure.com/bmeurope/My%20Project/_git/the-repo"),
-        ("git@ssh.dev.azure.com:v3/bmeurope/My%20Project/the-repo", "https://dev.azure.com/bmeurope/My%20Project/_git/the-repo"),
+        (
+            "https://dev.azure.com/bmeurope/My Project/_git/the-repo",
+            "https://dev.azure.com/bmeurope/My%20Project/_git/the-repo",
+        ),
+        (
+            "git@ssh.dev.azure.com:v3/bmeurope/My%20Project/the-repo",
+            "https://dev.azure.com/bmeurope/My%20Project/_git/the-repo",
+        ),
         ("https://dev.azure.com/bmeurope/_git/solo", "https://dev.azure.com/bmeurope/solo/_git/solo"),
-        ("https://org.visualstudio.com/My%20Project/_git/the-repo", "https://dev.azure.com/org/My%20Project/_git/the-repo"),
+        (
+            "https://org.visualstudio.com/My%20Project/_git/the-repo",
+            "https://dev.azure.com/org/My%20Project/_git/the-repo",
+        ),
         ("https://org.visualstudio.com/DefaultCollection/Proj/_git/repo", "https://dev.azure.com/org/Proj/_git/repo"),
         ("https://org.visualstudio.com/_git/solo", "https://dev.azure.com/org/solo/_git/solo"),
         ("org@vs-ssh.visualstudio.com:v3/org/Proj/repo", "https://dev.azure.com/org/Proj/_git/repo"),
@@ -1170,7 +1223,10 @@ def test_run_list_marks_disabled_repos_in_text_and_json(monkeypatch, capsys) -> 
     monkeypatch.setattr(
         find_repo_mod,
         "list_remote",
-        lambda **kw: seen.append(kw["include_disabled"]) or [RemoteRepo("P", "gone", "u", disabled=True), RemoteRepo("P", "ok", "u2", description="Fine")],
+        lambda **kw: (
+            seen.append(kw["include_disabled"])
+            or [RemoteRepo("P", "gone", "u", disabled=True), RemoteRepo("P", "ok", "u2", description="Fine")]
+        ),
     )
 
     run_list(root=None, org="org", include_disabled=True)
@@ -1203,7 +1259,9 @@ def test_list_remote_ado_failing_commit_request_still_looks_up_the_readme(monkey
         if url.endswith("/commits"):
             return FakeResp(503, {"message": "try later"})
         if url.endswith("/items"):
-            return FakeResp(body={"content": "Readable README."}) if params["path"] == "/README.md" else FakeResp(404, {})
+            return (
+                FakeResp(body={"content": "Readable README."}) if params["path"] == "/README.md" else FakeResp(404, {})
+            )
         return FakeResp(body={"value": [{"name": "alpha", "remoteUrl": "https://a/alpha"}]})
 
     monkeypatch.setattr(requests, "get", fake_get)

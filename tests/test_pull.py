@@ -196,7 +196,9 @@ def test_build_steps_includes_all_three_distinct_real_pulls_when_none_overlap(tm
     _git(["checkout", "-q", "-b", "develop"], cwd=remote)  # 'main' still exists; remote's default is now 'develop'
     checkout = clone(remote, tmp_path / "clone", checkout="develop")
     _git(["checkout", "-q", "-b", "feature"], cwd=checkout)
-    _git(["push", "-q", "-u", "origin", "feature"], cwd=checkout)  # tracks origin/feature -- distinct from main and develop
+    _git(
+        ["push", "-q", "-u", "origin", "feature"], cwd=checkout
+    )  # tracks origin/feature -- distinct from main and develop
 
     steps = build_steps("origin", no_default=False, pull_args=[], cwd=checkout)
 

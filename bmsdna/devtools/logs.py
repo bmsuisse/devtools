@@ -9,10 +9,10 @@ derivable from the git remote the way Azure DevOps org/project/repo is.
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from urllib.parse import quote
 
-from . import azure_arm
+from bmsdna.devtools import azure_arm
 
 SEVERITY_MAP = {"verbose": 0, "information": 1, "warning": 2, "error": 3, "critical": 4}
 
@@ -51,7 +51,9 @@ def find_app_insights(resource_group: str) -> str | None:
 def run_query(app_insights: str, resource_group: str, kql: str) -> tuple[dict | None, str | None]:
     """Run `kql` against the named App Insights component: (first result table, None) or (None, error)."""
     try:
-        component = azure_arm.arm("GET", f"{_components_path(resource_group)}/{quote(app_insights)}", APP_INSIGHTS_API_VERSION)
+        component = azure_arm.arm(
+            "GET", f"{_components_path(resource_group)}/{quote(app_insights)}", APP_INSIGHTS_API_VERSION
+        )
         app_id = component["properties"]["AppId"]
         r = azure_arm.request(
             "POST", f"{APP_INSIGHTS_QUERY_URL}/{app_id}/query", scope=APP_INSIGHTS_SCOPE, json={"query": kql}
@@ -111,7 +113,8 @@ union traces, exceptions
         sev: int | None = row[col_index["severityLevel"]] if "severityLevel" in col_index else None
         lvl = (
             {0: "VERBOSE ", 1: "INFO    ", 2: "WARNING ", 3: "ERROR   ", 4: "CRITICAL"}.get(sev, "UNKNOWN ")
-            if sev is not None else "UNKNOWN "
+            if sev is not None
+            else "UNKNOWN "
         )
         msg = col(row, "message", "outerMessage", "innermostMessage")
         item_type = col(row, "itemType")
@@ -136,9 +139,7 @@ def print_roles(app_insights: str, resource_group: str, minutes: int) -> None:
     print("\nPass --role <name> to fetch logs for a specific role.")
 
 
-def print_logs(
-    app_insights: str, resource_group: str, minutes: int, level: str, role: str, no_color: bool
-) -> None:
+def print_logs(app_insights: str, resource_group: str, minutes: int, level: str, role: str, no_color: bool) -> None:
     min_severity = SEVERITY_MAP[level]
     print(f"Querying last {minutes} min | role={role} | severity>={level}...", flush=True)
     rows, err = query_logs(app_insights, resource_group, minutes, min_severity, role)
@@ -155,7 +156,7 @@ def print_logs(
 
     print(f"--- {len(rows)} entries ---")
     for row in rows:
-        ts = datetime.fromisoformat(row["timestamp"].rstrip("Z")).replace(tzinfo=timezone.utc).strftime("%H:%M:%S")
+        ts = datetime.fromisoformat(row["timestamp"].rstrip("Z")).replace(tzinfo=UTC).strftime("%H:%M:%S")
         line = f"{ts} [{row['lvl']}] {row['msg']}{row['exc']}"
         if no_color:
             print(line)

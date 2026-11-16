@@ -2,7 +2,7 @@ from pathlib import Path
 
 from bmsdna.devtools.lint_models import check_models_file
 
-_BIG_MODEL = '''
+_BIG_MODEL = """
 from pydantic import BaseModel
 
 class ContractsModel(BaseModel):
@@ -13,14 +13,14 @@ class ContractsModel(BaseModel):
     amount: float
     currency: str
     created_at: str
-'''
+"""
 
-_SMALL_MODEL = '''
+_SMALL_MODEL = """
 from pydantic import BaseModel
 
 class CorrectRequest(BaseModel):
     text: str
-'''
+"""
 
 
 def _write(tmp_path: Path, rel: str, source: str) -> Path:
@@ -66,7 +66,7 @@ def test_small_model_under_api_is_not_flagged(tmp_path: Path) -> None:
 
 
 def test_field_count_boundary_is_exclusive(tmp_path: Path) -> None:
-    exactly_five = '''
+    exactly_five = """
 from pydantic import BaseModel
 
 class Exactly5(BaseModel):
@@ -75,13 +75,13 @@ class Exactly5(BaseModel):
     c: int
     d: int
     e: int
-'''
+"""
     path = _write(tmp_path, "backend/api/thing.py", exactly_five)
     assert check_models_file(path, repo_root=tmp_path) == []
 
 
 def test_classvar_fields_are_not_counted(tmp_path: Path) -> None:
-    source = '''
+    source = """
 from typing import ClassVar
 from pydantic import BaseModel
 
@@ -93,13 +93,13 @@ class WithClassVars(BaseModel):
     e: int
     TABLE_NAME: ClassVar[str] = "things"
     SCHEMA: ClassVar[str] = "public"
-'''
+"""
     path = _write(tmp_path, "backend/api/thing.py", source)
     assert check_models_file(path, repo_root=tmp_path) == []
 
 
 def test_non_pydantic_class_is_ignored(tmp_path: Path) -> None:
-    source = '''
+    source = """
 class PlainClass:
     a: int
     b: int
@@ -107,7 +107,7 @@ class PlainClass:
     d: int
     e: int
     f: int
-'''
+"""
     path = _write(tmp_path, "backend/api/thing.py", source)
     assert check_models_file(path, repo_root=tmp_path) == []
 

@@ -27,7 +27,10 @@ def test_claude_gets_the_given_session_id() -> None:
 
 
 def test_take_message_names_the_session() -> None:
-    assert issue_do.take_message("me", "claude", "abc") == "Taken by me\n\nClaude Session: abc (resume with `claude --resume abc`)"
+    assert (
+        issue_do.take_message("me", "claude", "abc")
+        == "Taken by me\n\nClaude Session: abc (resume with `claude --resume abc`)"
+    )
     assert issue_do.take_message("me", "codex", None) == "Taken by me (via codex)"
 
 

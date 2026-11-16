@@ -3,8 +3,8 @@ from pathlib import Path
 import pytest
 
 from bmsdna.devtools import dead_code
-from bmsdna.devtools.bdt_config import load_bdt_table
 from bmsdna.devtools.api_usage import ApiUsageError
+from bmsdna.devtools.bdt_config import load_bdt_table
 from bmsdna.devtools.lint_sql_files import check_unreferenced_sql_files
 
 
@@ -17,7 +17,9 @@ def _write(root: Path, rel: str, text: str = "") -> Path:
 
 def _check(root: Path, *, sql_root: str = "backend", **kwargs) -> list[str]:
     sql_files = sorted((root / sql_root).rglob("*.sql"))
-    findings = check_unreferenced_sql_files(repo_root=root, sql_files=sql_files, python_files=sorted(root.rglob("*.py")), **kwargs)
+    findings = check_unreferenced_sql_files(
+        repo_root=root, sql_files=sql_files, python_files=sorted(root.rglob("*.py")), **kwargs
+    )
     return [f.path.relative_to(root).as_posix() for f in findings if f.rule == "sql-file-unreferenced"]
 
 
@@ -130,7 +132,11 @@ def test_path_literal_must_match_whole_trailing_segments(tmp_path: Path) -> None
     _write(tmp_path, "backend/sql/a.sql")
     _write(tmp_path, "backend/sql/init.sql")
     _write(tmp_path, "backend/sql/reinit.sql")
-    _write(tmp_path, "backend/use.py", 'a = open("backend/sql/a.sql")\nb = open("./sql/init.sql")\nc = base + "/reinit.sql"\n')
+    _write(
+        tmp_path,
+        "backend/use.py",
+        'a = open("backend/sql/a.sql")\nb = open("./sql/init.sql")\nc = base + "/reinit.sql"\n',
+    )
     assert _check(tmp_path) == ["backend/sql/reinit.sql", "backend/xsql/a.sql"]
 
 
@@ -182,7 +188,10 @@ def test_sql_check_scans_whole_repo_for_references(tmp_path: Path) -> None:
 
 
 def test_sql_check_reads_loader_and_ignore_config_from_pyproject(tmp_path: Path) -> None:
-    _project(tmp_path, "sql_roots=['backend/q']\nsql_loader_functions=['get_query']\nsql_unreferenced_ignore=['backend/q/t/*.sql']")
+    _project(
+        tmp_path,
+        "sql_roots=['backend/q']\nsql_loader_functions=['get_query']\nsql_unreferenced_ignore=['backend/q/t/*.sql']",
+    )
     assert _run(tmp_path) == []  # everything ignored
     _project(tmp_path, "sql_roots=['backend/q']\nsql_loader_functions=['get_query']")
     # load_sql is no longer the loader name, so both files are unreferenced

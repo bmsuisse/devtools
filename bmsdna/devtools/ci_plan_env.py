@@ -8,8 +8,8 @@ from pathlib import Path
 
 import requests
 
-from . import ci_plan
-from .ci_plan import BranchFlowError, Context
+from bmsdna.devtools import ci_plan
+from bmsdna.devtools.ci_plan import BranchFlowError, Context
 
 PR_MERGE_REF = re.compile(r"refs/pull/(\d+)/merge")
 HTTP_TIMEOUT_SECS = 20
@@ -33,9 +33,7 @@ def _api_url(env: Mapping[str, str], path: str) -> str:
 def _get_json(url: str, env: Mapping[str, str]) -> object:
     token = env.get("SYSTEM_ACCESSTOKEN")
     if not token:
-        raise ValueError(
-            "SYSTEM_ACCESSTOKEN is not set (map $(System.AccessToken) into the step's env)"
-        )
+        raise ValueError("SYSTEM_ACCESSTOKEN is not set (map $(System.AccessToken) into the step's env)")
     response = requests.get(url, auth=("", token), timeout=HTTP_TIMEOUT_SECS)
     response.raise_for_status()
     return response.json()
@@ -104,13 +102,12 @@ def _git(
             text=True,
             timeout=GIT_TIMEOUT_SECS,
             env={**os.environ, **(extra_env or {})},
+            check=False,
         )
     except subprocess.TimeoutExpired as error:
         raise RuntimeError(f"git {args[0]} timed out") from error
     if done.returncode not in ok_codes:
-        raise RuntimeError(
-            f"git {' '.join(args[:2])} failed: {done.stderr.strip()[:200]}"
-        )
+        raise RuntimeError(f"git {' '.join(args[:2])} failed: {done.stderr.strip()[:200]}")
     return done
 
 
@@ -122,9 +119,7 @@ def changed_files(target: str, *, merge_checkout: bool) -> list[str]:
     `-z` keeps non-ASCII and other unusual names unquoted (git's default quoting would defeat every glob)."""
     diff = ("HEAD^1", "HEAD") if merge_checkout else (f"origin/{target}...HEAD",)
     out = _git("diff", "--name-only", "--no-renames", "-z", *diff).stdout
-    return [
-        path for path in out.split("\0") if path
-    ]  # -z: git would quote names like test_\303\274ber.py
+    return [path for path in out.split("\0") if path]  # -z: git would quote names like test_\303\274ber.py
 
 
 def verify_fix_base(env: Mapping[str, str]) -> None:
@@ -138,9 +133,7 @@ def verify_fix_base(env: Mapping[str, str]) -> None:
     if len(parents) != 3:
         raise RuntimeError("HEAD is not a PR merge commit")
     if _git("rev-parse", "--is-shallow-repository").stdout.strip() == "true":
-        raise RuntimeError(
-            "shallow checkout: set `fetchDepth: 0` on the checkout step to verify fix branches"
-        )
+        raise RuntimeError("shallow checkout: set `fetchDepth: 0` on the checkout step to verify fix branches")
     token = env.get("SYSTEM_ACCESSTOKEN")
     auth = (
         {
@@ -160,14 +153,10 @@ def verify_fix_base(env: Mapping[str, str]) -> None:
         extra_env=auth,
     )
     _, main, fix = parents
-    dev_only = set(
-        _git("rev-list", "refs/remotes/origin/dev", "--not", main).stdout.split()
-    )
+    dev_only = set(_git("rev-list", "refs/remotes/origin/dev", "--not", main).stdout.split())
     fix_only = set(_git("rev-list", fix, "--not", main).stdout.split())
     if dev_only & fix_only:
-        raise BranchFlowError(
-            "the fix branch contains unreleased dev commits; cut the fix from main"
-        )
+        raise BranchFlowError("the fix branch contains unreleased dev commits; cut the fix from main")
 
 
 def _vso(text: str) -> str:
@@ -176,19 +165,11 @@ def _vso(text: str) -> str:
 
 
 def emit(ado: bool, name: str, value: str) -> None:
-    print(
-        f"##vso[task.setvariable variable={name};isOutput=true]{_vso(value)}"
-        if ado
-        else f"{name}={value}"
-    )
+    print(f"##vso[task.setvariable variable={name};isOutput=true]{_vso(value)}" if ado else f"{name}={value}")
 
 
 def log(ado: bool, level: str, message: str) -> None:
-    print(
-        f"##vso[task.logissue type={level}]{_vso(message)}"
-        if ado
-        else f"{level}: {message}"
-    )
+    print(f"##vso[task.logissue type={level}]{_vso(message)}" if ado else f"{level}: {message}")
 
 
 def run(

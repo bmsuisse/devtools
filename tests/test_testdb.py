@@ -93,7 +93,9 @@ def test_project_roots_is_just_the_repo_with_no_nested_projects_configured(tmp_p
 
 
 def test_project_roots_includes_a_configured_nested_project_that_has_its_own_pgdevkit_section(tmp_path) -> None:
-    write_pyproject(tmp_path, '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n')
+    write_pyproject(
+        tmp_path, '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n'
+    )
     nested = tmp_path / "akeneo_editor"
     nested.mkdir()
     write_pyproject(nested, "[tool.pgdevkit]\n")
@@ -106,7 +108,9 @@ def test_project_roots_includes_a_configured_nested_project_with_no_pgdevkit_sec
     # [tool.pgdevkit] section of its own at all. Being named in
     # db_nested_projects is itself the opt-in -- pgdevkit's own
     # load_config() falls back to the directory name for the rest.
-    write_pyproject(tmp_path, '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n')
+    write_pyproject(
+        tmp_path, '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n'
+    )
     nested = tmp_path / "akeneo_editor"
     nested.mkdir()
     write_pyproject(nested, '[project]\nname = "akeneo-editor"\n')
@@ -115,7 +119,9 @@ def test_project_roots_includes_a_configured_nested_project_with_no_pgdevkit_sec
 
 
 def test_project_roots_excludes_a_configured_nested_project_directory_that_does_not_exist(tmp_path) -> None:
-    write_pyproject(tmp_path, '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n')
+    write_pyproject(
+        tmp_path, '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n'
+    )
 
     assert project_roots(tmp_path) == [tmp_path]
 
@@ -160,7 +166,9 @@ def test_workspace_db_names_includes_a_configured_nested_project_on_the_same_bra
     # parent worktree's git checkout (and so its branch), with its own
     # pyproject.toml/[tool.pgdevkit] section.
     repo = init_git_repo(tmp_path / "repo", branch="my-feature")
-    write_pyproject(repo, '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n')
+    write_pyproject(
+        repo, '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n'
+    )
     nested = repo / "akeneo_editor"
     nested.mkdir()
     write_pyproject(nested, "[tool.pgdevkit]\n")
@@ -173,7 +181,9 @@ def test_workspace_db_names_includes_a_nested_project_with_no_pgdevkit_section_a
     # docstring): the nested project's pyproject.toml has no
     # [tool.pgdevkit] section, only a bare [project] table.
     repo = init_git_repo(tmp_path / "repo", branch="my-feature")
-    write_pyproject(repo, '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n')
+    write_pyproject(
+        repo, '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n'
+    )
     nested = repo / "akeneo_editor"
     nested.mkdir()
     write_pyproject(nested, '[project]\nname = "akeneo-editor"\n')
@@ -206,7 +216,9 @@ def test_find_orphaned_delegates_to_pgdevkit_per_project_root(tmp_path, monkeypa
 
 def test_find_orphaned_covers_a_configured_nested_project_too(tmp_path, monkeypatch) -> None:
     repo = init_git_repo(tmp_path / "repo")
-    write_pyproject(repo, '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n')
+    write_pyproject(
+        repo, '[tool.pgdevkit]\nname = "mdm"\n\n[tool.bdt.worktree]\ndb_nested_projects = ["akeneo_editor"]\n'
+    )
     nested = repo / "akeneo_editor"
     nested.mkdir()
     write_pyproject(nested, "[tool.pgdevkit]\n")
@@ -347,7 +359,9 @@ def test_is_local_host_false_for_non_local_addresses(host: str) -> None:
 
 
 def test_confirm_remote_host_skips_prompt_for_local_host(monkeypatch) -> None:
-    monkeypatch.setattr("builtins.input", lambda *_: (_ for _ in ()).throw(AssertionError("should not prompt for a local host")))
+    monkeypatch.setattr(
+        "builtins.input", lambda *_: (_ for _ in ()).throw(AssertionError("should not prompt for a local host"))
+    )
 
     assert confirm_remote_host("localhost", 54322) is True
 

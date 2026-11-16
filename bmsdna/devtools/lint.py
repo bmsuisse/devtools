@@ -13,18 +13,18 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from .bdt_config import find_pyproject, load_bdt_table
-from .lint_findings import Finding, render_findings
-from .lint_models import (
+from bmsdna.devtools.bdt_config import find_pyproject, load_bdt_table
+from bmsdna.devtools.lint_findings import Finding, render_findings
+from bmsdna.devtools.lint_models import (
     DEFAULT_ALLOWED_SUBDIRS,
     DEFAULT_API_DIR_NAMES,
     DEFAULT_BASE_CLASS_NAMES,
     DEFAULT_FIELD_THRESHOLD,
     check_models_file,
 )
-from .lint_sql import check_sql_file, load_sql_functions, require_sqlglot
-from .lint_tooling import check_tooling
-from .lint_typescript import (
+from bmsdna.devtools.lint_sql import check_sql_file, load_sql_functions, require_sqlglot
+from bmsdna.devtools.lint_tooling import check_tooling
+from bmsdna.devtools.lint_typescript import (
     DEFAULT_NON_JSON_MARKERS,
     DEFAULT_TS_EXCLUDE_DIR_NAMES,
     TS_SUFFIXES,
@@ -67,7 +67,9 @@ def _iter_python_files(paths: list[Path], exclude_dir_names: frozenset[str]) -> 
     return _iter_files(paths, exclude_dir_names, (".py",))
 
 
-def _iter_files(paths: list[Path], exclude_dir_names: frozenset[str], suffixes: tuple[str, ...]) -> tuple[list[Path], list[Path]]:
+def _iter_files(
+    paths: list[Path], exclude_dir_names: frozenset[str], suffixes: tuple[str, ...]
+) -> tuple[list[Path], list[Path]]:
     """`paths` with directories expanded to every non-excluded file ending in one of `suffixes` under them
     (sorted, for stable output); a path that's already such a file is used as-is
     regardless of exclude_dir_names -- an explicit file (e.g. from a pre-commit hook's
@@ -141,7 +143,8 @@ def run(paths: list[str], *, root: Path | None = None, skip_tooling_check: bool 
         require_sqlglot()
 
     findings: list[Finding] = [
-        Finding(path, 0, "lint-path-not-found", f"'{path}' doesn't exist -- nothing was scanned for it.") for path in missing_paths
+        Finding(path, 0, "lint-path-not-found", f"'{path}' doesn't exist -- nothing was scanned for it.")
+        for path in missing_paths
     ]
     sql_functions = load_sql_functions(root)
     for path in python_files:

@@ -30,7 +30,18 @@ def _git(repo: Path, *args: str) -> None:
 def _repo_with_commits(tmp_path: Path, authors: list[tuple[str, str]]) -> Path:
     _git(tmp_path, "init", "-q")
     for i, (name, email) in enumerate(authors):
-        _git(tmp_path, "-c", f"user.name={name}", "-c", f"user.email={email}", "commit", "-q", "--allow-empty", "-m", f"c{i}")
+        _git(
+            tmp_path,
+            "-c",
+            f"user.name={name}",
+            "-c",
+            f"user.email={email}",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            f"c{i}",
+        )
     return tmp_path
 
 
@@ -44,7 +55,9 @@ def _entitlements(licenses: dict[str, str | int]) -> MagicMock:
         response = MagicMock()
         response.status_code = outcome if isinstance(outcome, int) else 200
         response.ok = response.status_code < 400
-        response.json.return_value = {"accessLevel": {"accountLicenseType": outcome}} if isinstance(outcome, str) else {}
+        response.json.return_value = (
+            {"accessLevel": {"accountLicenseType": outcome}} if isinstance(outcome, str) else {}
+        )
         return response
 
     session.get.side_effect = get
@@ -83,7 +96,9 @@ def test_read_commit_authors_is_none_for_a_shallow_clone_with_too_little_history
     (tmp_path / "source").mkdir()
     source = _repo_with_commits(tmp_path / "source", [("A", "a@example.com"), ("B", "b@example.com")])
     clone = tmp_path / "clone"
-    subprocess.run(["git", "clone", "-q", "--depth", "1", f"file://{source}", str(clone)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", f"file://{source}", str(clone)], check=True, capture_output=True
+    )
 
     assert read_commit_authors(depth=1000, cwd=clone) is None
     assert read_commit_authors(depth=1, cwd=clone) is not None  # the shallow history covers what was asked for
@@ -142,7 +157,9 @@ def test_classify_stakeholder_is_a_business_user_whatever_the_commits() -> None:
 
 def test_classify_licensed_user_with_commits_is_not_a_business_user() -> None:
     assert classify("basic", lambda: AUTHORS, "dev@example.com", None).business_user is False
-    assert classify(None, lambda: AUTHORS, None, "Dora Dev").business_user is False  # matched by name when the email differs
+    assert (
+        classify(None, lambda: AUTHORS, None, "Dora Dev").business_user is False
+    )  # matched by name when the email differs
 
 
 def test_classify_licensed_user_without_commits_is_a_business_user() -> None:
@@ -228,7 +245,9 @@ def test_search_business_users_keeps_only_items_created_by_business_users(tmp_pa
 def test_search_without_business_users_does_not_ask_for_the_creator() -> None:
     session = MagicMock()
     session.post.return_value.json.return_value = {"workItems": [{"id": 1}]}
-    session.get.return_value.json.return_value = {"value": [{"id": 1, "fields": {"System.Title": "t", "System.State": "New"}}]}
+    session.get.return_value.json.return_value = {
+        "value": [{"id": 1, "fields": {"System.Title": "t", "System.State": "New"}}]
+    }
 
     search(session, REMOTE, [])
 
@@ -244,7 +263,11 @@ def test_get_details_names_the_creator_and_whether_they_are_a_business_user(monk
 
     details = get_details(session, REMOTE, 5, detector)
 
-    assert (details.created_by, details.business_user, details.business_user_reason) == ("Sam Sales", True, "Stakeholder license")
+    assert (details.created_by, details.business_user, details.business_user_reason) == (
+        "Sam Sales",
+        True,
+        "Stakeholder license",
+    )
     assert "Created by: Sam Sales (business user: Stakeholder license)" in format_details(details).splitlines()
 
 
@@ -262,7 +285,15 @@ def test_get_details_without_a_detector_names_the_creator_but_judges_nothing(mon
 def test_format_details_shows_a_developer_creator_and_an_unknown_one() -> None:
     def details(business_user: bool | None, reason: str) -> IssueDetails:
         return IssueDetails(
-            number=1, title="t", state="New", url="u", body="", tags=[], created_by="Dora", business_user=business_user, business_user_reason=reason
+            number=1,
+            title="t",
+            state="New",
+            url="u",
+            body="",
+            tags=[],
+            created_by="Dora",
+            business_user=business_user,
+            business_user_reason=reason,
         )
 
     developer = details(False, "advanced license, has commits")
@@ -290,7 +321,11 @@ def test_get_license_is_none_for_a_body_that_is_not_json() -> None:
 
 
 def test_detector_does_not_judge_service_identities() -> None:
-    build_service = {"id": "svc", "uniqueName": "Build\\5b1f", "displayName": "Project Collection Build Service (myorg)"}
+    build_service = {
+        "id": "svc",
+        "uniqueName": "Build\\5b1f",
+        "displayName": "Project Collection Build Service (myorg)",
+    }
 
     assert BusinessUserDetector(_entitlements({}), REMOTE).verdict(build_service) == Verdict(None, "not a person")
 
@@ -299,7 +334,10 @@ def test_search_business_users_returns_at_most_top_items(monkeypatch) -> None:
     session = MagicMock()
     session.post.return_value.json.return_value = {"workItems": [{"id": i} for i in range(1, 21)]}
     session.get.return_value.json.return_value = {
-        "value": [{"id": i, "fields": {"System.Title": "t", "System.State": "New", "System.CreatedBy": SALES}} for i in range(1, 21)]
+        "value": [
+            {"id": i, "fields": {"System.Title": "t", "System.State": "New", "System.CreatedBy": SALES}}
+            for i in range(1, 21)
+        ]
     }
     detector = BusinessUserDetector(session, REMOTE)
     monkeypatch.setattr(detector, "verdict", lambda creator: Verdict(True, "x"))

@@ -32,7 +32,10 @@ def test_pr_status_with_pr_id_passes_it_to_gh_pr_run(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     captured = {}
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.run", lambda gh, wait, pr_id=None, timeout=0: captured.update(gh=gh, wait=wait, pr_id=pr_id))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.run",
+        lambda gh, wait, pr_id=None, timeout=0: captured.update(gh=gh, wait=wait, pr_id=pr_id),
+    )
 
     result = runner.invoke(app, ["pr", "status", "--pr-id", "99"])
 
@@ -73,7 +76,8 @@ def test_pr_update_with_pr_id_skips_the_redundant_branch_lookup(monkeypatch) -> 
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     monkeypatch.setattr(
-        "bmsdna.devtools.cli.gh_pr.get_pr", lambda gh, pr_id=None: pytest.fail("must not resolve branch via gh_pr.get_pr")
+        "bmsdna.devtools.cli.gh_pr.get_pr",
+        lambda gh, pr_id=None: pytest.fail("must not resolve branch via gh_pr.get_pr"),
     )
     captured = {}
     monkeypatch.setattr(
@@ -97,7 +101,8 @@ def test_pr_comment_with_pr_id_and_no_attachments_skips_branch_resolution(monkey
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     monkeypatch.setattr(
-        "bmsdna.devtools.cli.gh_pr.get_pr", lambda gh, pr_id=None: pytest.fail("must not resolve branch via gh_pr.get_pr")
+        "bmsdna.devtools.cli.gh_pr.get_pr",
+        lambda gh, pr_id=None: pytest.fail("must not resolve branch via gh_pr.get_pr"),
     )
     captured = {}
     monkeypatch.setattr(
@@ -124,7 +129,9 @@ def test_pr_comment_with_pr_id_and_a_screenshot_resolves_the_real_head_branch(mo
     captured = {}
     monkeypatch.setattr(
         "bmsdna.devtools.cli.gh_pr.comment_with_screenshots",
-        lambda gh, owner, repo, branch, message, screenshot, file, pr_id=None: captured.update(branch=branch, pr_id=pr_id),
+        lambda gh, owner, repo, branch, message, screenshot, file, pr_id=None: captured.update(
+            branch=branch, pr_id=pr_id
+        ),
     )
     shot = tmp_path / "shot.png"
     shot.write_bytes(b"fake-png-bytes")
@@ -240,7 +247,9 @@ def test_pr_comment_message_file_posts_the_file_content(monkeypatch, tmp_path) -
     captured = {}
     monkeypatch.setattr(
         "bmsdna.devtools.cli.gh_pr.comment_with_screenshots",
-        lambda gh, owner, repo, branch, message, screenshot, file, pr_id=None: captured.update(message=message, file=file),
+        lambda gh, owner, repo, branch, message, screenshot, file, pr_id=None: captured.update(
+            message=message, file=file
+        ),
     )
     plan = tmp_path / "plan.md"
     plan.write_text("# Plan\n\n- step 1\n", encoding="utf-8")

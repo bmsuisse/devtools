@@ -23,9 +23,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
-from .lockfiles import LockedPackage, LockfileContent, Unsupported
-from .osv import AdvisorySource, DataError, PackageQuery
-from .versions import (
+from bmsdna.devtools.deps.lockfiles import LockedPackage, LockfileContent, Unsupported
+from bmsdna.devtools.deps.osv import AdvisorySource, DataError, PackageQuery
+from bmsdna.devtools.deps.versions import (
     Ecosystem,
     SemVer,
     VersionError,
@@ -158,17 +158,12 @@ def fix_for(vuln: Vuln, ecosystem: Ecosystem, name: str, version: str) -> tuple[
             for range_type, events in entry.ranges:
                 if range_type not in ("ECOSYSTEM", "SEMVER"):
                     continue
-                parsed = []
-                for event in events:
-                    for kind in ("introduced", "fixed", "last_affected"):
-                        if kind in event:
-                            parsed.append(
-                                (
-                                    _event_version(ecosystem, event[kind]),
-                                    kind,
-                                    event[kind],
-                                )
-                            )
+                parsed = [
+                    (_event_version(ecosystem, event[kind]), kind, event[kind])
+                    for event in events
+                    for kind in ("introduced", "fixed", "last_affected")
+                    if kind in event
+                ]
                 order = {"introduced": 0, "last_affected": 1, "fixed": 2}
                 parsed.sort(key=lambda e: (e[0], order[e[1]]))
                 start = None

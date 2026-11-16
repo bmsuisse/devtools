@@ -8,13 +8,13 @@ from bmsdna.devtools.gh_issue import (
     build_search_query,
     comment,
     create,
+    delete,
     ensure_pr_available_label,
     get_details,
-    parse_comment_id,
-    parse_issue_number,
-    delete,
     last_comment,
     list_comments,
+    parse_comment_id,
+    parse_issue_number,
     resolve_board,
     resolve_project_number,
     search,
@@ -61,7 +61,6 @@ def test_build_search_query_always_sorts_by_updated_desc() -> None:
     assert "sort:updated-desc" in build_search_query(["auth"], None)
 
 
-
 SEARCH = "GET search/issues"
 
 
@@ -93,7 +92,11 @@ def test_search_defaults_to_open_state() -> None:
     gh = FakeGitHub({SEARCH: []})
     search(gh, "owner", "repo", [], None, 10)
     params = _query(gh)["params"]
-    assert "is:open" in params["q"].split() and "repo:owner/repo" in params["q"].split() and "is:issue" in params["q"].split()
+    assert (
+        "is:open" in params["q"].split()
+        and "repo:owner/repo" in params["q"].split()
+        and "is:issue" in params["q"].split()
+    )
     assert (params["sort"], params["order"]) == ("updated", "desc")
     assert "sort:updated-desc" not in params["q"]
 
@@ -122,7 +125,10 @@ def test_search_uppercases_state_for_the_current_repo(capsys) -> None:
 def test_search_board_overfetches_then_filters_to_limit() -> None:
     hits = [_search_hit(i) for i in range(1, 21)]
     # Board only has the even-numbered issues on it.
-    items = [{"content": {"__typename": "Issue", "number": i, "repository": {"nameWithOwner": "owner/repo"}}} for i in range(2, 21, 2)]
+    items = [
+        {"content": {"__typename": "Issue", "number": i, "repository": {"nameWithOwner": "owner/repo"}}}
+        for i in range(2, 21, 2)
+    ]
     gh = FakeGitHub({SEARCH: hits}, graphql=_projects_graphql([{"id": "P1", "title": "Roadmap", "number": 7}], items))
 
     results = search(gh, "owner", "repo", [], None, 3, board="Roadmap")
@@ -148,7 +154,13 @@ def test_search_org_wide_searches_the_owner_and_keeps_lowercase_state(capsys) ->
     q = _query(gh)["params"]["q"].split()
     assert "user:owner" in q and "repo:owner/repo" not in q
     assert results == [
-        {"number": 5, "title": "issue 5", "url": "https://github.com/owner/other-repo/issues/5", "state": "open", "repository": {"nameWithOwner": "owner/other-repo"}}
+        {
+            "number": 5,
+            "title": "issue 5",
+            "url": "https://github.com/owner/other-repo/issues/5",
+            "state": "open",
+            "repository": {"nameWithOwner": "owner/other-repo"},
+        }
     ]
     assert "owner/other-repo#5 [open] issue 5" in capsys.readouterr().out
 
@@ -249,7 +261,6 @@ def test_extract_issue_numbers_drops_issues_from_other_repos() -> None:
     assert _extract_issue_numbers(items, "owner", "repo") == {5}
 
 
-
 def _update_gh(**routes) -> FakeGitHub:
     return FakeGitHub({"GET repos/owner/repo/issues/42": {"id": 4200, "node_id": "N42"}, **routes})
 
@@ -306,7 +317,10 @@ def test_update_edits_fields_and_labels() -> None:
 def _fake_push_assets(monkeypatch) -> None:
     monkeypatch.setattr(
         "bmsdna.devtools.gh_issue.push_assets",
-        lambda owner, repo, key, paths, **kwargs: [f"https://github.com/{owner}/{repo}/blob/pr-assets/{key}/{i:02d}-{p.split('/')[-1]}?raw=true" for i, p in enumerate(paths)],
+        lambda owner, repo, key, paths, **kwargs: [
+            f"https://github.com/{owner}/{repo}/blob/pr-assets/{key}/{i:02d}-{p.split('/')[-1]}?raw=true"
+            for i, p in enumerate(paths)
+        ],
     )
 
 
@@ -319,7 +333,9 @@ def test_create_posts_the_issue_with_labels_and_prints_the_url(capsys) -> None:
 
     create(gh, "owner", "repo", "Bug title", "body text", ["bug", "ui"], [], [])
 
-    assert gh.calls == [("POST", "repos/owner/repo/issues", {"title": "Bug title", "body": "body text", "labels": ["bug", "ui"]})]
+    assert gh.calls == [
+        ("POST", "repos/owner/repo/issues", {"title": "Bug title", "body": "body text", "labels": ["bug", "ui"]})
+    ]
     assert "https://github.com/owner/repo/issues/42" in capsys.readouterr().out
 
 
@@ -336,7 +352,13 @@ def test_create_with_files_appends_attachments_section(monkeypatch) -> None:
 
 
 def test_create_maps_assignee_and_milestone_extra_args() -> None:
-    gh = FakeGitHub({CREATE: CREATED, "GET repos/owner/repo/milestones": [{"title": "v1", "number": 3}], "GET user": {"login": "me"}})
+    gh = FakeGitHub(
+        {
+            CREATE: CREATED,
+            "GET repos/owner/repo/milestones": [{"title": "v1", "number": 3}],
+            "GET user": {"login": "me"},
+        }
+    )
 
     create(gh, "owner", "repo", "T", "b", [], [], ["--assignee", "jane,@me", "--milestone=V1"])
 
@@ -346,14 +368,16 @@ def test_create_maps_assignee_and_milestone_extra_args() -> None:
 
 @pytest.mark.parametrize("flag", ["--template", "-T", "--recover", "--editor"])
 def test_create_rejects_unsupported_extra_args(flag) -> None:
-    with pytest.raises(SystemExit, match="unsupported argument.*supported:.*--assignee"):
+    with pytest.raises(SystemExit, match=r"unsupported argument.*supported:.*--assignee"):
         create(FakeGitHub({CREATE: CREATED}), "owner", "repo", "T", "b", [], [], [flag, "x"])
 
 
 def test_create_extra_title_body_and_labels_override_and_merge() -> None:
     gh = FakeGitHub({CREATE: CREATED})
 
-    create(gh, "owner", "repo", "T", "b", ["bug"], [], ["-t", "New title", "--body=New body", "--label", "ui,bug", "-l=x"])
+    create(
+        gh, "owner", "repo", "T", "b", ["bug"], [], ["-t", "New title", "--body=New body", "--label", "ui,bug", "-l=x"]
+    )
 
     payload = gh.calls_to("POST", "repos/owner/repo/issues")[0]
     assert (payload["title"], payload["body"]) == ("New title", "New body")
@@ -390,8 +414,12 @@ def test_create_project_flag_adds_to_each_project(monkeypatch) -> None:
     gh = FakeGitHub({CREATE: CREATED})
     found: list[str] = []
     added: list[tuple[str, str]] = []
-    monkeypatch.setattr("bmsdna.devtools.gh_issue._find_project", lambda gh, owner, b: found.append(b) or {"id": f"P_{b}"})
-    monkeypatch.setattr("bmsdna.devtools.gh_issue.add_to_project", lambda gh, project, node: added.append((project["id"], node)))
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_issue._find_project", lambda gh, owner, b: found.append(b) or {"id": f"P_{b}"}
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_issue.add_to_project", lambda gh, project, node: added.append((project["id"], node))
+    )
 
     create(gh, "owner", "repo", "T", "b", [], [], ["--project", "Roadmap", "-p", "Other"], board="Roadmap")
 
@@ -401,7 +429,7 @@ def test_create_project_flag_adds_to_each_project(monkeypatch) -> None:
 
 def test_create_web_opens_the_issue(monkeypatch) -> None:
     opened: list[str] = []
-    monkeypatch.setattr("bmsdna.devtools.gh_args.webbrowser.open", lambda url: opened.append(url))
+    monkeypatch.setattr("bmsdna.devtools.gh_args.webbrowser.open", opened.append)
 
     create(FakeGitHub({CREATE: CREATED}), "owner", "repo", "T", "b", [], [], ["--web"])
 
@@ -409,7 +437,7 @@ def test_create_web_opens_the_issue(monkeypatch) -> None:
 
 
 def test_create_with_board_adds_the_issue_to_the_project() -> None:
-    gh = FakeGitHub({CREATE: CREATED}, graphql=_projects_graphql([{"id": "PVT_1", "title": "Roadmap", "number": 7}]) )
+    gh = FakeGitHub({CREATE: CREATED}, graphql=_projects_graphql([{"id": "PVT_1", "title": "Roadmap", "number": 7}]))
     base = gh.graphql_handler
     gh.graphql_handler = lambda q, v: {} if "addProjectV2ItemById" in q else base(q, v)
 
@@ -444,7 +472,10 @@ def test_create_with_parent_and_blockers_calls_the_link_endpoints() -> None:
     create(gh, "owner", "repo", "Title", "body", [], [], [], parent=5, blocked_by=[7, 8, 7])
 
     assert gh.calls_to("POST", "repos/owner/repo/issues/5/sub_issues") == [{"sub_issue_id": 4200}]
-    assert gh.calls_to("POST", "repos/owner/repo/issues/42/dependencies/blocked_by") == [{"issue_id": 700}, {"issue_id": 800}]
+    assert gh.calls_to("POST", "repos/owner/repo/issues/42/dependencies/blocked_by") == [
+        {"issue_id": 700},
+        {"issue_id": 800},
+    ]
 
 
 def test_create_without_links_makes_no_link_calls() -> None:
@@ -455,7 +486,14 @@ def test_create_without_links_makes_no_link_calls() -> None:
 
 def test_comment_with_screenshots_and_files_builds_both_sections(monkeypatch) -> None:
     _fake_push_assets(monkeypatch)
-    gh = FakeGitHub({"POST repos/owner/repo/issues/42/comments": {"id": 1, "html_url": "https://github.com/owner/repo/issues/42#issuecomment-1"}})
+    gh = FakeGitHub(
+        {
+            "POST repos/owner/repo/issues/42/comments": {
+                "id": 1,
+                "html_url": "https://github.com/owner/repo/issues/42#issuecomment-1",
+            }
+        }
+    )
 
     comment(gh, "owner", "repo", 42, "Fixed", ["/tmp/shot.png"], ["/tmp/report.pdf"])
 
@@ -466,7 +504,14 @@ def test_comment_with_screenshots_and_files_builds_both_sections(monkeypatch) ->
 
 
 def test_comment_prints_id_and_url(capsys) -> None:
-    gh = FakeGitHub({"POST repos/owner/repo/issues/7/comments": {"id": 1, "html_url": "https://github.com/owner/repo/issues/7#issuecomment-1"}})
+    gh = FakeGitHub(
+        {
+            "POST repos/owner/repo/issues/7/comments": {
+                "id": 1,
+                "html_url": "https://github.com/owner/repo/issues/7#issuecomment-1",
+            }
+        }
+    )
     comment(gh, "owner", "repo", 7, "Taken by me", [], agent_note=False)
     out = capsys.readouterr().out
     assert "(comment #1)" in out and "issuecomment-1" in out
@@ -553,7 +598,9 @@ def test_update_links_parent_and_blockers_that_are_missing() -> None:
 
     update(gh, 42, parent=5, blocked_by=[7, 8])
 
-    assert gh.calls_to("POST", "repos/owner/repo/issues/5/sub_issues") == [{"sub_issue_id": 4200, "replace_parent": True}]
+    assert gh.calls_to("POST", "repos/owner/repo/issues/5/sub_issues") == [
+        {"sub_issue_id": 4200, "replace_parent": True}
+    ]
     assert gh.calls_to("POST", f"{ISSUE}/dependencies/blocked_by") == [{"issue_id": 700}, {"issue_id": 800}]
     assert gh.calls_to("PATCH") == []
 
@@ -579,7 +626,9 @@ def test_update_only_adds_the_blockers_that_are_missing_and_replaces_a_different
 
     update(gh, 42, parent=5, blocked_by=[7, 8])
 
-    assert gh.calls_to("POST", "repos/owner/repo/issues/5/sub_issues") == [{"sub_issue_id": 4200, "replace_parent": True}]
+    assert gh.calls_to("POST", "repos/owner/repo/issues/5/sub_issues") == [
+        {"sub_issue_id": 4200, "replace_parent": True}
+    ]
     assert gh.calls_to("POST", f"{ISSUE}/dependencies/blocked_by") == [{"issue_id": 800}]
 
 
@@ -614,15 +663,27 @@ def test_get_details_maps_the_api_responses_and_comments() -> None:
     gh = FakeGitHub(
         {
             f"GET {BASE}": {
-                "number": 42, "title": "Widget", "state": "open", "html_url": "https://github.com/owner/repo/issues/42", "body": "It breaks",
-                "labels": [{"name": "bug"}], "assignees": [{"login": "jane"}], "milestone": {"title": "v1"},
+                "number": 42,
+                "title": "Widget",
+                "state": "open",
+                "html_url": "https://github.com/owner/repo/issues/42",
+                "body": "It breaks",
+                "labels": [{"name": "bug"}],
+                "assignees": [{"login": "jane"}],
+                "milestone": {"title": "v1"},
             },
             f"GET {BASE}/parent": {"number": 5},
             f"GET {BASE}/sub_issues": [{"number": 9}],
             f"GET {BASE}/dependencies/blocked_by": [{"number": 7}],
             f"GET {BASE}/dependencies/blocking": [{"number": 10}],
             f"GET {BASE}/comments": [
-                {"id": 1, "user": {"login": "bob"}, "created_at": "2026-01-02", "html_url": "https://github.com/owner/repo/issues/42#issuecomment-1", "body": "hi"}
+                {
+                    "id": 1,
+                    "user": {"login": "bob"},
+                    "created_at": "2026-01-02",
+                    "html_url": "https://github.com/owner/repo/issues/42#issuecomment-1",
+                    "body": "hi",
+                }
             ],
         }
     )
@@ -640,7 +701,16 @@ def test_get_details_maps_the_api_responses_and_comments() -> None:
 def test_get_details_of_a_bare_issue() -> None:
     gh = FakeGitHub(
         {
-            "GET repos/owner/repo/issues/1": {"number": 1, "title": "t", "state": "closed", "html_url": "u", "body": None, "labels": [], "assignees": [], "milestone": None},
+            "GET repos/owner/repo/issues/1": {
+                "number": 1,
+                "title": "t",
+                "state": "closed",
+                "html_url": "u",
+                "body": None,
+                "labels": [],
+                "assignees": [],
+                "milestone": None,
+            },
             "GET repos/owner/repo/issues/1/parent": NOT_FOUND,
         }
     )
@@ -669,6 +739,7 @@ def test_last_comment_reads_graphql() -> None:
         return {"repository": {"issue": {"comments": {"nodes": [{"body": "Taken by x"}]}}}}
 
     assert last_comment(FakeGitHub(graphql=handler), "o", "r", 5) == "Taken by x"
+
     def empty(q, v):
         return {"repository": {"issue": {"comments": {"nodes": []}}}}
 
@@ -681,14 +752,21 @@ def test_update_and_delete_comment_use_the_comment_endpoint() -> None:
     gh = FakeGitHub()
     update_comment(gh, "o", "r", "9", "new text")
     delete_comment(gh, "o", "r", "9")
-    assert gh.calls == [("PATCH", "repos/o/r/issues/comments/9", {"body": "new text"}), ("DELETE", "repos/o/r/issues/comments/9", None)]
+    assert gh.calls == [
+        ("PATCH", "repos/o/r/issues/comments/9", {"body": "new text"}),
+        ("DELETE", "repos/o/r/issues/comments/9", None),
+    ]
 
 
 def test_list_comments_projects_the_api_shape() -> None:
-    gh = FakeGitHub({"GET repos/o/r/issues/84/comments": [
-        {"id": 1, "user": {"login": "alice"}, "created_at": "t1", "html_url": "u1", "body": "first"},
-        {"id": 2, "user": None, "created_at": "t2", "html_url": "u2", "body": None},
-    ]})
+    gh = FakeGitHub(
+        {
+            "GET repos/o/r/issues/84/comments": [
+                {"id": 1, "user": {"login": "alice"}, "created_at": "t1", "html_url": "u1", "body": "first"},
+                {"id": 2, "user": None, "created_at": "t2", "html_url": "u2", "body": None},
+            ]
+        }
+    )
     assert list_comments(gh, "o", "r", 84) == [
         {"id": 1, "author": "alice", "created_at": "t1", "url": "u1", "body": "first"},
         {"id": 2, "author": "ghost", "created_at": "t2", "url": "u2", "body": ""},

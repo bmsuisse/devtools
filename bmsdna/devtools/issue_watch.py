@@ -19,7 +19,7 @@ import time
 from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, replace
 
-from .agent_mentions import mentions_agent
+from bmsdna.devtools.agent_mentions import mentions_agent
 
 # `issue watch` exits with this code when --timeout passed without a (matching) new comment.
 # Deliberately not 1 (an error), 2 (usage error, Click/Typer) or 3 (`pr status --wait`: needs approval).
@@ -57,7 +57,16 @@ class Comment:
 
 def to_comments(raw: list[dict], *, is_html: bool = False) -> list[Comment]:
     """The backends' `list_comments` dicts as `Comment`s; `is_html` converts Azure DevOps's HTML bodies to text."""
-    return [Comment(int(c["id"]), c["author"], c["created_at"], c["url"], html_to_text(c["body"]) if is_html else strip_hidden(c["body"])) for c in raw]
+    return [
+        Comment(
+            int(c["id"]),
+            c["author"],
+            c["created_at"],
+            c["url"],
+            html_to_text(c["body"]) if is_html else strip_hidden(c["body"]),
+        )
+        for c in raw
+    ]
 
 
 def build_accept(
@@ -76,9 +85,7 @@ def build_accept(
             return False
         if own_session_id and own_session_id in comment.body:
             return False
-        if own_author and comment.author.casefold() == own_author.casefold():
-            return False
-        return True
+        return not (own_author and comment.author.casefold() == own_author.casefold())
 
     return accept
 
@@ -159,7 +166,9 @@ def follow(
     deadline = None if timeout is None else clock() + timeout
     while True:
         remaining = None if deadline is None else max(deadline - clock(), 0)
-        batch = poll_until(probe, interval=interval, timeout=remaining, sleep=sleep, clock=clock, log=log, max_errors=max_errors)
+        batch = poll_until(
+            probe, interval=interval, timeout=remaining, sleep=sleep, clock=clock, log=log, max_errors=max_errors
+        )
         if batch is None:
             return
         yield batch
@@ -183,7 +192,19 @@ def watch(
     log: Callable[[str], None] = lambda msg: print(msg, file=sys.stderr, flush=True),
 ) -> list[Comment] | None:
     """The first batch of `follow`; None when `timeout` seconds (None = never) pass without one."""
-    return next(follow(fetch, since_id=since_id, accept=accept, interval=interval, timeout=timeout, sleep=sleep, clock=clock, log=log), None)
+    return next(
+        follow(
+            fetch,
+            since_id=since_id,
+            accept=accept,
+            interval=interval,
+            timeout=timeout,
+            sleep=sleep,
+            clock=clock,
+            log=log,
+        ),
+        None,
+    )
 
 
 def strip_hidden(text: str) -> str:
@@ -200,7 +221,10 @@ def truncate_body(comment: Comment, limit: int = MAX_FOLLOW_BODY) -> Comment:
     """`comment` with a body longer than `limit` characters cut short, saying so and where to read the rest."""
     if len(comment.body) <= limit:
         return comment
-    return replace(comment, body=f"{comment.body[:limit]}... [truncated, {len(comment.body) - limit} more characters, see {comment.url}]")
+    return replace(
+        comment,
+        body=f"{comment.body[:limit]}... [truncated, {len(comment.body) - limit} more characters, see {comment.url}]",
+    )
 
 
 def format_comment(comment: Comment, *, as_json: bool = False) -> str:

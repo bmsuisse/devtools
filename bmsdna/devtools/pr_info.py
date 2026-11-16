@@ -12,11 +12,11 @@ from dataclasses import asdict, dataclass, field
 
 import requests
 
-from .ado_auth import AdoAuthError
-from .pr_cancel import Reason, Session
-from . import ado_issue, gh_pr, pr_build, pr_issue_link
-from .github_api import GitHubClient
-from .gitrepo import AdoRemote, GitHubRemote
+from bmsdna.devtools import ado_issue, gh_pr, pr_build, pr_issue_link
+from bmsdna.devtools.ado_auth import AdoAuthError
+from bmsdna.devtools.github_api import GitHubClient
+from bmsdna.devtools.gitrepo import AdoRemote, GitHubRemote
+from bmsdna.devtools.pr_cancel import Reason, Session
 
 # `build` values: aggregate of every check/pipeline on the PR. "unknown" means the state couldn't
 # be determined (Azure DevOps request failed), as opposed to "none": nothing ran at all.
@@ -55,11 +55,19 @@ class PrInfo:
     issues: list[IssueRef] = field(default_factory=list)
     merge: str = MERGE_NONE  # `MERGE_*`: does it merge into `target` as it is now
     target: str = ""  # the branch it merges into
-    conflicts: list[str] = field(default_factory=list)  # the conflicting paths, when `merge` is "conflicts" and they are known
-    target_behind: int | None = None  # commits `target` gained since the PR's merge status was computed (Azure DevOps), when known
-    cancel_reason: str | None = None  # why the build was cancelled, when `build` is "cancelled" and a `CANCELLED BUILD:` comment says
+    conflicts: list[str] = field(
+        default_factory=list
+    )  # the conflicting paths, when `merge` is "conflicts" and they are known
+    target_behind: int | None = (
+        None  # commits `target` gained since the PR's merge status was computed (Azure DevOps), when known
+    )
+    cancel_reason: str | None = (
+        None  # why the build was cancelled, when `build` is "cancelled" and a `CANCELLED BUILD:` comment says
+    )
     cancel_session: Session | None = None  # the agent session that cancelled it, when that comment says
-    abandon_reason: str | None = None  # why the PR was abandoned, when `state` is "closed" and an `ABANDONED PR:` comment says
+    abandon_reason: str | None = (
+        None  # why the PR was abandoned, when `state` is "closed" and an `ABANDONED PR:` comment says
+    )
     abandon_session: Session | None = None  # the agent session that abandoned it, when that comment says
     repo: str = ""  # "owner/repo" (GitHub) or "org/project/repo" (Azure DevOps): which repo the PR is in
 
@@ -99,7 +107,8 @@ def _is_this_repo(repo: dict, remote: GitHubRemote) -> bool:
     """Is a `closingIssuesReferences[].repository` this repo -- owner and name (an `otherorg/api` issue isn't `myorg/api`'s)?"""
     owner = (repo.get("owner") or {}).get("login", remote.owner)
     return (
-        owner.casefold() == remote.owner.casefold() and repo.get("name", remote.repo).casefold() == remote.repo.casefold()
+        owner.casefold() == remote.owner.casefold()
+        and repo.get("name", remote.repo).casefold() == remote.repo.casefold()
     )
 
 
@@ -126,7 +135,11 @@ def github_info(pr: dict, remote: GitHubRemote, gh: GitHubClient | None = None) 
         build=build_state(checks, cancelled=cancelled is not None),
         issues=issues,
         # GitHub recomputes `mergeable` whenever the base moves, so it needs no drift check of its own
-        merge=MERGE_NONE if state != "open" else MERGE_CONFLICTS if pr.get("mergeable") == gh_pr.CONFLICTING else MERGE_CLEAN,
+        merge=MERGE_NONE
+        if state != "open"
+        else MERGE_CONFLICTS
+        if pr.get("mergeable") == gh_pr.CONFLICTING
+        else MERGE_CLEAN,
         target=pr.get("baseRefName") or "",
         cancel_reason=cancelled.reason if cancelled else None,
         cancel_session=cancelled.session if cancelled else None,
@@ -163,7 +176,11 @@ def _ado_build(session: requests.Session, remote: AdoRemote, pr: dict) -> tuple[
         builds = pr_build.latest_per_pipeline(pr_build.get_builds_for_pr(session, remote, source_branch, pr_id))
         # a timeline lookup per running build -- only worth it when nothing has failed yet
         failed = any(b.get("result") == "failed" for b in builds)
-        approval = not failed and any(b.get("status") != "completed" for b in builds) and bool(pr_build.find_pending_approvals(session, remote, builds))
+        approval = (
+            not failed
+            and any(b.get("status") != "completed" for b in builds)
+            and bool(pr_build.find_pending_approvals(session, remote, builds))
+        )
         state = ado_build_state(builds, approval)
         cancelled = pr_build.cancellation(session, remote, pr_id, builds) if state == BUILD_CANCELLED else None
     except AdoAuthError:
@@ -180,7 +197,9 @@ def _ado_merge(session: requests.Session, remote: AdoRemote, pr: dict) -> tuple[
         return MERGE_NONE, [], None
     if pr.get("mergeStatus") == "conflicts":
         return MERGE_CONFLICTS, [], None
-    if pr_build.merge_conflict_message(pr):  # the merge failed or was rejected by policy: not a conflict, but not mergeable either
+    if pr_build.merge_conflict_message(
+        pr
+    ):  # the merge failed or was rejected by policy: not a conflict, but not mergeable either
         return MERGE_UNKNOWN, [], None
     try:
         drift = pr_build.target_drift(session, remote, pr)

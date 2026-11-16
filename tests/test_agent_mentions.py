@@ -67,7 +67,13 @@ def test_last_comment_filter() -> None:
 
 @pytest.mark.parametrize(
     "raw,expected",
-    [("Claude", "claude"), ("claude-code_2-1-270_agent", "claude"), ("@Goose", "goose"), ("Codex CLI", "codex"), ("OpenCode", "opencode")],
+    [
+        ("Claude", "claude"),
+        ("claude-code_2-1-270_agent", "claude"),
+        ("@Goose", "goose"),
+        ("Codex CLI", "codex"),
+        ("OpenCode", "opencode"),
+    ],
 )
 def test_normalize_agent(raw: str, expected: str) -> None:
     assert normalize_agent(raw) == expected

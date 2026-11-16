@@ -28,7 +28,9 @@ def build_screenshots_section_html(existing_text: str | None, images: list[tuple
     tag renders either way: a plain-HTML comment/field renders it natively, and a Markdown one
     still renders it since Markdown renderers pass inline HTML through untouched.
     """
-    section = "\n".join(f'<img src="{escape(url)}" alt="{escape(name)}" style="max-width:100%;">' for name, url in images)
+    section = "\n".join(
+        f'<img src="{escape(url)}" alt="{escape(name)}" style="max-width:100%;">' for name, url in images
+    )
     return f"{existing_text or ''}\n\n<h2>Screenshots</h2>\n\n{section}\n"
 
 

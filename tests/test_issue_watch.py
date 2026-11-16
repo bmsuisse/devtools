@@ -1,3 +1,4 @@
+import contextlib
 import json
 
 import pytest
@@ -10,16 +11,16 @@ from bmsdna.devtools.issue_watch import (
     follow,
     format_comment,
     html_to_text,
-    strip_hidden,
-    truncate_body,
     poll_until,
+    strip_hidden,
     to_comments,
+    truncate_body,
     watch,
 )
 
 
-def c(id: int, body: str = "hello", author: str = "alice") -> Comment:
-    return Comment(id, author, "2026-10-13T08:00:00Z", f"https://example.test/issues/1#c{id}", body)
+def c(comment_id: int, body: str = "hello", author: str = "alice") -> Comment:
+    return Comment(comment_id, author, "2026-10-13T08:00:00Z", f"https://example.test/issues/1#c{comment_id}", body)
 
 
 class FakeClock:
@@ -44,10 +45,8 @@ def sequence(*polls):
 
     def fetch():
         nonlocal last
-        try:
+        with contextlib.suppress(StopIteration):
             last = next(it)
-        except StopIteration:
-            pass
         if isinstance(last, BaseException):
             raise last
         return last
@@ -235,7 +234,9 @@ def test_format_comment_text() -> None:
 
 
 def test_html_to_text_strips_tags_and_unescapes() -> None:
-    assert html_to_text('<div>Hi <a href="x">@Claude</a><br>a &amp; b</div><div>next</div>') == "Hi @Claude\na & b\nnext"
+    assert (
+        html_to_text('<div>Hi <a href="x">@Claude</a><br>a &amp; b</div><div>next</div>') == "Hi @Claude\na & b\nnext"
+    )
 
 
 def test_to_comments_converts_html_only_when_asked() -> None:
@@ -307,7 +308,11 @@ def test_follow_survives_a_transient_error_but_raises_repeated_ones() -> None:
 
     clock = FakeClock()
     with pytest.raises(RuntimeError):
-        list(run_follow(sequence([c(1)], *[RuntimeError("down")] * MAX_CONSECUTIVE_ERRORS), clock, timeout=500, interval=10))
+        list(
+            run_follow(
+                sequence([c(1)], *[RuntimeError("down")] * MAX_CONSECUTIVE_ERRORS), clock, timeout=500, interval=10
+            )
+        )
 
 
 def test_follow_polls_once_more_at_the_deadline_after_a_batch() -> None:

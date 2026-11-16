@@ -59,9 +59,7 @@ def no_fix_check() -> None:
     return None
 
 
-def plan_for(
-    config, ctx, *, labels=(), files=(), fix_base=no_fix_check, on_missing=None
-) -> Plan:
+def plan_for(config, ctx, *, labels=(), files=(), fix_base=no_fix_check, on_missing=None) -> Plan:
     if on_missing:
         config = PlanConfig(config.root, config.tiers, on_missing, config.non_code)
 
@@ -118,9 +116,7 @@ def test_empty_table_uses_default_tiers(tmp_path) -> None:
 )
 def test_invalid_config_is_rejected(tmp_path, body) -> None:
     (tmp_path / "pyproject.toml").write_text(
-        f"[tool.bdt.ci.plan]\n{body}\n"
-        if "[" not in body
-        else f"{body}\n[tool.bdt.ci.plan]\n"
+        f"[tool.bdt.ci.plan]\n{body}\n" if "[" not in body else f"{body}\n[tool.bdt.ci.plan]\n"
     )
     with pytest.raises(ValueError, match=r"tool\.bdt\.ci\.plan"):
         load_plan_config(tmp_path)
@@ -140,9 +136,7 @@ def test_area_label_is_kebab_case() -> None:
 
 def test_required_label_choices_include_full_none_and_legacy(config) -> None:
     choices = ci_plan.required_label_choices(config)
-    assert {"test-orders", "test-full", "test-none", "e2e-orders", "e2e-none"} <= set(
-        choices
-    )
+    assert {"test-orders", "test-full", "test-none", "e2e-orders", "e2e-none"} <= set(choices)
 
 
 def test_paths_folder_and_glob_mode(config) -> None:
@@ -175,9 +169,7 @@ def test_area_of(config) -> None:
 
 
 def test_folders_without_tests_are_not_areas(config) -> None:
-    touch(
-        config.root, "tests/unit/test-results/report.xml", "tests/unit/helpers/util.py"
-    )
+    touch(config.root, "tests/unit/test-results/report.xml", "tests/unit/helpers/util.py")
     unit = config.tiers[0]
     assert unit.areas(config.root) == ["customers", "orders", "shared"]
     assert area_of(unit, config.root, "tests/unit/helpers/util.py") is None
@@ -192,9 +184,7 @@ def test_area_folder_helpers_select_their_area(config) -> None:
     )
     unit = config.tiers[0]
     assert area_of(unit, config.root, "tests/unit/orders/conftest.py") == {"orders"}
-    assert area_of(unit, config.root, "tests/unit/orders/fixtures/data.json") == {
-        "orders"
-    }
+    assert area_of(unit, config.root, "tests/unit/orders/fixtures/data.json") == {"orders"}
 
 
 def test_nested_and_suffix_style_tests_make_an_area(tmp_path) -> None:
@@ -251,9 +241,7 @@ def test_none_label_runs_nothing(config) -> None:
 
 def test_none_label_loses_against_areas_with_a_warning(config) -> None:
     result = plan_for(config, pr(), labels=["test-none", "test-orders"])
-    assert result.kind == "areas" and any(
-        "test-none is ignored" in w for w in result.warnings
-    )
+    assert result.kind == "areas" and any("test-none is ignored" in w for w in result.warnings)
 
 
 def test_unknown_test_label_warns_and_falls_back_to_inference(config) -> None:
@@ -309,22 +297,14 @@ def test_infer_unreadable_file_list_runs_everything(config) -> None:
 
 def test_on_missing_fail_is_an_error_naming_the_choices(config) -> None:
     result = plan_for(config, pr(), on_missing="fail")
-    assert (
-        result.kind == "error"
-        and "test-orders" in result.reason
-        and "test-none" in result.reason
-    )
+    assert result.kind == "error" and "test-orders" in result.reason and "test-none" in result.reason
 
 
 # --- branch flow -----------------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("source", "target"), [("dev", "test"), ("test", "main"), ("main", "dev")]
-)
-def test_promotions_run_nothing_without_looking_at_labels(
-    config, source, target
-) -> None:
+@pytest.mark.parametrize(("source", "target"), [("dev", "test"), ("test", "main"), ("main", "dev")])
+def test_promotions_run_nothing_without_looking_at_labels(config, source, target) -> None:
     result = plan_for(config, pr(source, target), labels=OSError("must not be read"))
     assert result.kind == "none" and "promotion" in result.reason
 
@@ -353,9 +333,7 @@ def test_fix_branch_with_dev_commits_is_an_error(config) -> None:
     def violated() -> None:
         raise BranchFlowError("contains unreleased dev commits")
 
-    result = plan_for(
-        config, pr("fix/x", "main"), labels=["test-full"], fix_base=violated
-    )
+    result = plan_for(config, pr("fix/x", "main"), labels=["test-full"], fix_base=violated)
     assert result.kind == "error" and "unreleased dev commits" in result.reason
 
 
@@ -363,9 +341,7 @@ def test_fix_base_check_failing_to_run_only_warns(config) -> None:
     def broken() -> None:
         raise RuntimeError("shallow clone")
 
-    result = plan_for(
-        config, pr("fix/x", "main"), labels=["test-full"], fix_base=broken
-    )
+    result = plan_for(config, pr("fix/x", "main"), labels=["test-full"], fix_base=broken)
     assert result.kind == "full" and any("shallow clone" in w for w in result.warnings)
 
 
@@ -373,36 +349,24 @@ def test_fix_base_check_only_runs_for_main(config) -> None:
     def must_not_run() -> None:
         raise AssertionError("fix_base checked")
 
-    assert (
-        plan_for(
-            config, pr("fix/x", "dev"), labels=["test-full"], fix_base=must_not_run
-        ).kind
-        == "full"
-    )
+    assert plan_for(config, pr("fix/x", "dev"), labels=["test-full"], fix_base=must_not_run).kind == "full"
 
 
 def test_push_to_test_or_main_runs_nothing(config) -> None:
     for branch in ("main", "test"):
         for reason in ("IndividualCI", "BatchedCI"):
-            assert (
-                plan_for(config, Context(branch=branch, reason=reason)).kind == "none"
-            )
+            assert plan_for(config, Context(branch=branch, reason=reason)).kind == "none"
 
 
 @pytest.mark.parametrize("branch", ["main", "test"])
 @pytest.mark.parametrize("reason", ["Manual", "Schedule", ""])
-def test_manual_and_scheduled_runs_on_test_or_main_run_everything(
-    config, branch, reason
-) -> None:
+def test_manual_and_scheduled_runs_on_test_or_main_run_everything(config, branch, reason) -> None:
     assert plan_for(config, Context(branch=branch, reason=reason)).kind == "full"
 
 
 def test_nightly_dev_and_other_branches_run_everything(config) -> None:
     assert plan_for(config, Context(branch="dev", reason="Schedule")).kind == "full"
-    assert (
-        plan_for(config, Context(branch="feature/x", reason="IndividualCI")).kind
-        == "full"
-    )
+    assert plan_for(config, Context(branch="feature/x", reason="IndividualCI")).kind == "full"
 
 
 def test_fork_runs_everything(config) -> None:
@@ -427,21 +391,14 @@ def test_outputs_for_selected_areas(config) -> None:
 
 def test_outputs_for_full_run_whole_tiers(config) -> None:
     out = ci_plan.outputs(plan_for(config, pr(), labels=["test-full"]), config)
-    assert (
-        out["unitPaths"] == "tests/unit"
-        and out["unitAreas"] == "customers orders shared"
-    )
+    assert out["unitPaths"] == "tests/unit" and out["unitAreas"] == "customers orders shared"
     assert out["e2eRun"] == "true" and out["e2eAreas"] == "chat review shared"
 
 
 @pytest.mark.parametrize("labels", [["test-none"]])
 def test_outputs_for_none_run_nothing(config, labels) -> None:
     out = ci_plan.outputs(plan_for(config, pr(), labels=labels), config)
-    assert (
-        out["runTests"] == "false"
-        and out["unitRun"] == "false"
-        and out["e2ePaths"] == ""
-    )
+    assert out["runTests"] == "false" and out["unitRun"] == "false" and out["e2ePaths"] == ""
 
 
 def test_area_named_like_a_control_label_is_rejected(tmp_path) -> None:
@@ -457,9 +414,7 @@ def test_paths_with_spaces_are_shell_quoted(tmp_path) -> None:
     config = load_plan_config(tmp_path)
     assert config is not None
     result = Plan("areas", "x", frozenset({"customer orders"}))
-    assert (
-        ci_plan.outputs(result, config)["unitPaths"] == "'tests/unit/customer orders'"
-    )
+    assert ci_plan.outputs(result, config)["unitPaths"] == "'tests/unit/customer orders'"
 
 
 def test_removed_area_tests_leave_nothing_to_run(config) -> None:
@@ -470,12 +425,8 @@ def test_removed_area_tests_leave_nothing_to_run(config) -> None:
 def test_non_code_star_is_root_only_and_double_star_is_recursive(config) -> None:
     root_only = PlanConfig(config.root, config.tiers, "infer", ("*.md",))
     recursive = PlanConfig(config.root, config.tiers, "infer", ("**/*.md",))
-    assert root_only.is_non_code("README.md") and not root_only.is_non_code(
-        "src/pkg/README.md"
-    )
-    assert recursive.is_non_code("README.md") and recursive.is_non_code(
-        "src/pkg/README.md"
-    )
+    assert root_only.is_non_code("README.md") and not root_only.is_non_code("src/pkg/README.md")
+    assert recursive.is_non_code("README.md") and recursive.is_non_code("src/pkg/README.md")
 
 
 def test_a_directory_named_like_a_test_file_is_not_a_test(tmp_path) -> None:
@@ -491,9 +442,7 @@ def test_a_directory_named_like_a_test_file_is_not_a_test(tmp_path) -> None:
 
 def test_pycache_in_the_checkout_path_does_not_hide_areas(tmp_path) -> None:
     root = tmp_path / "__pycache__" / "repo"
-    touch(
-        root, "tests/unit/orders/test_a.py", "tests/unit/orders/__pycache__/test_a.py"
-    )
+    touch(root, "tests/unit/orders/test_a.py", "tests/unit/orders/__pycache__/test_a.py")
     assert Tier("unit", "tests/unit").areas(root) == ["orders"]
     touch(root, "tests/unit/cached/__pycache__/test_b.py")
     assert Tier("unit", "tests/unit").areas(root) == ["orders"]
@@ -549,23 +498,15 @@ def test_invalid_paths_config_is_rejected(tmp_path) -> None:
 
 def test_infra_only_pr_infers_the_infra_area_and_runs_no_tier(tmp_path) -> None:
     config = infra_config(tmp_path)
-    result = plan_for(
-        config, pr(), files=["infra/main.bicep", "infra/modules/app.bicep"]
-    )
+    result = plan_for(config, pr(), files=["infra/main.bicep", "infra/modules/app.bicep"])
     assert (result.kind, result.areas) == ("areas", {"infra"})
     out = ci_plan.outputs(result, config)
-    assert (
-        out["runTests"] == "true"
-        and out["unitRun"] == "false"
-        and out["unitPaths"] == ""
-    )
+    assert out["runTests"] == "true" and out["unitRun"] == "false" and out["unitPaths"] == ""
 
 
 def test_infra_change_next_to_code_still_runs_everything(tmp_path) -> None:
     config = infra_config(tmp_path)
-    assert (
-        plan_for(config, pr(), files=["infra/main.bicep", "src/app.py"]).kind == "full"
-    )
+    assert plan_for(config, pr(), files=["infra/main.bicep", "src/app.py"]).kind == "full"
 
 
 def test_infra_label_selects_the_infra_area(tmp_path) -> None:
@@ -591,8 +532,6 @@ def test_infra_label_without_an_infra_folder_is_unknown(tmp_path) -> None:
 
 def test_path_area_named_like_a_control_label_is_rejected(tmp_path) -> None:
     touch(tmp_path, "tests/unit/orders/test_a.py")
-    (tmp_path / "pyproject.toml").write_text(
-        '[tool.bdt.ci.plan]\n[tool.bdt.ci.plan.paths]\nnone = ["x/**"]\n'
-    )
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.ci.plan]\n[tool.bdt.ci.plan.paths]\nnone = ["x/**"]\n')
     with pytest.raises(ValueError, match="collide"):
         load_plan_config(tmp_path)

@@ -28,7 +28,7 @@ from collections.abc import Iterable
 from fnmatch import fnmatch
 from pathlib import Path
 
-from .lint_findings import Finding
+from bmsdna.devtools.lint_findings import Finding
 
 RULE = "sql-file-unreferenced"
 RULE_UNPARSEABLE = "sql-check-python-unparseable"
@@ -79,7 +79,11 @@ class _References:
             if sql_literals:
                 self.bare_by_file.append((path.resolve(), sql_literals))
             for node in ast.walk(tree):
-                if isinstance(node, ast.Call) and _call_name(node) in self.loader_functions and (node.args or node.keywords):
+                if (
+                    isinstance(node, ast.Call)
+                    and _call_name(node) in self.loader_functions
+                    and (node.args or node.keywords)
+                ):
                     self._add_loader_call(node, literals)
 
     def _add_loader_call(self, node: ast.Call, literals: set[str]) -> None:

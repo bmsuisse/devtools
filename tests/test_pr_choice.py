@@ -16,11 +16,28 @@ runner = CliRunner()
 ADO_REMOTE = AdoRemote("myorg", "MyProj", "myrepo")
 GITHUB_REMOTE = GitHubRemote("owner", "repo")
 
-ADO_INTO_MAIN = {"pullRequestId": 10, "title": "into main", "targetRefName": "refs/heads/main", "mergeStatus": "succeeded"}
+ADO_INTO_MAIN = {
+    "pullRequestId": 10,
+    "title": "into main",
+    "targetRefName": "refs/heads/main",
+    "mergeStatus": "succeeded",
+}
 ADO_INTO_DEV = {"pullRequestId": 11, "title": "into dev", "targetRefName": "refs/heads/dev", "mergeStatus": "succeeded"}
 # GitHub REST `pulls` objects
-GH_INTO_MAIN = {"number": 10, "title": "into main", "base": {"ref": "main"}, "html_url": "https://github.com/owner/repo/pull/10", "state": "open"}
-GH_INTO_DEV = {"number": 11, "title": "into dev", "base": {"ref": "dev"}, "html_url": "https://github.com/owner/repo/pull/11", "state": "open"}
+GH_INTO_MAIN = {
+    "number": 10,
+    "title": "into main",
+    "base": {"ref": "main"},
+    "html_url": "https://github.com/owner/repo/pull/10",
+    "state": "open",
+}
+GH_INTO_DEV = {
+    "number": 11,
+    "title": "into dev",
+    "base": {"ref": "dev"},
+    "html_url": "https://github.com/owner/repo/pull/11",
+    "state": "open",
+}
 
 
 class PrListClient:
@@ -53,7 +70,9 @@ def non_interactive(monkeypatch):
 
 @pytest.fixture
 def never_asks(monkeypatch):
-    monkeypatch.setattr(pr_choice.typer, "prompt", lambda *a, **k: pytest.fail("must not ask when there is nothing to choose"))
+    monkeypatch.setattr(
+        pr_choice.typer, "prompt", lambda *a, **k: pytest.fail("must not ask when there is nothing to choose")
+    )
 
 
 def _assert_lists_both_and_says_how_to_choose(message: str) -> None:
@@ -176,7 +195,9 @@ def test_gh_single_open_pr_into_main_is_used_without_asking(gh_list, never_asks)
     client = gh_list([GH_INTO_MAIN])
 
     assert gh_pr.resolve_pr_id(client, None) == 10  # ty: ignore[invalid-argument-type]
-    assert client.calls[0]["head"] == "owner:feat" and client.calls[0]["state"] == "open"  # only open PRs are candidates
+    assert (
+        client.calls[0]["head"] == "owner:feat" and client.calls[0]["state"] == "open"
+    )  # only open PRs are candidates
     assert "base" not in client.calls[0]
 
 
@@ -203,7 +224,9 @@ def test_gh_target_without_a_matching_open_pr_exits(gh_list, never_asks) -> None
     assert "'feat'" in str(exc_info.value) and "'release'" in str(exc_info.value)
 
 
-def test_gh_several_open_prs_interactive_asks_and_uses_the_chosen_one(gh_list, interactive, monkeypatch, capsys) -> None:
+def test_gh_several_open_prs_interactive_asks_and_uses_the_chosen_one(
+    gh_list, interactive, monkeypatch, capsys
+) -> None:
     client = gh_list([GH_INTO_MAIN, GH_INTO_DEV])
     monkeypatch.setattr(pr_choice.typer, "prompt", lambda text, **k: 2)
 
@@ -246,7 +269,9 @@ def test_cli_pr_status_interactive_with_several_prs_acts_on_the_chosen_one(monke
     _github_cli(monkeypatch, [GH_INTO_MAIN, GH_INTO_DEV])
     monkeypatch.setattr(pr_choice, "_interactive", lambda: True)
     seen = {}
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.run", lambda gh, wait, pr_id=None, timeout=0: seen.update(pr_id=pr_id))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.run", lambda gh, wait, pr_id=None, timeout=0: seen.update(pr_id=pr_id)
+    )
 
     result = runner.invoke(app, ["pr", "status"], input="1\n")
 
@@ -257,7 +282,9 @@ def test_cli_pr_status_interactive_with_several_prs_acts_on_the_chosen_one(monke
 def test_cli_pr_status_with_a_single_pr_into_main_does_not_ask(monkeypatch, never_asks) -> None:
     _github_cli(monkeypatch, [GH_INTO_MAIN])
     seen = {}
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.run", lambda gh, wait, pr_id=None, timeout=0: seen.update(pr_id=pr_id))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.run", lambda gh, wait, pr_id=None, timeout=0: seen.update(pr_id=pr_id)
+    )
 
     result = runner.invoke(app, ["pr", "status"])
 
@@ -284,7 +311,9 @@ def test_cli_pr_publish_on_azure_devops_with_several_prs_non_interactive_fails(m
     monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.cli.requests.Session", lambda: session)
     monkeypatch.setattr(pr_choice, "_interactive", lambda: False)
-    monkeypatch.setattr("bmsdna.devtools.cli.pr_build.publish", lambda *a, **k: pytest.fail("must not pick a PR on its own"))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.pr_build.publish", lambda *a, **k: pytest.fail("must not pick a PR on its own")
+    )
 
     result = runner.invoke(app, ["pr", "publish"])
 
@@ -299,11 +328,12 @@ def test_cli_pr_publish_on_azure_devops_with_target_picks_that_pr(monkeypatch, n
     monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.cli.requests.Session", lambda: session)
     published = []
-    monkeypatch.setattr("bmsdna.devtools.cli.pr_build.publish", lambda s, remote, pr: published.append(pr["pullRequestId"]))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.pr_build.publish", lambda s, remote, pr: published.append(pr["pullRequestId"])
+    )
 
     result = runner.invoke(app, ["pr", "publish", "--target", "dev"])
 
     assert result.exit_code == 0, result.output
     assert published == [11]
     assert session.params[0]["searchCriteria.targetRefName"] == "refs/heads/dev"
-
