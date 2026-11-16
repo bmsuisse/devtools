@@ -89,11 +89,6 @@ state of every pipeline/check, ends with `Still running after N s. Re-run ... to
 kills the command after a few minutes and discards its output; re-run the same command to keep waiting.
 Without `--timeout` (or with `0`) it waits until everything is done, as before. `--timeout` needs `--wait`.
 
-Wrapped in coreutils `timeout` (`timeout 590 bdt pr status --wait`, which agents like to write instead of `--timeout`),
-`--wait` notices that and gives up 30 s before `timeout` would kill it -- so the state is printed and the exit code is
-**4**, not a silent 124. It looks for `timeout` / `gtimeout` among the parent processes (through `ps`, so Linux and macOS
-only) and counts the time it has already been running; a smaller `--timeout` of your own still wins.
-
 On Azure DevOps, `--wait` on a PR with no builds yet also checks that the target branch has an enabled
 Build validation policy; if it doesn't, no build will ever run, so it exits 1 with an error instead of
 polling forever (a failed policy lookup is ignored and the wait continues).
