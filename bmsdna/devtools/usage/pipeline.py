@@ -79,11 +79,11 @@ def assign_phases(con: duckdb.DuckDBPyConnection, scope: str) -> None:
         for r in con.execute("SELECT thread_id, parent_mid, agent_type FROM threads").fetchall()
     }
 
-    start_ts: dict[str, datetime] = {}
-    for tid, ts in con.execute(
-        "SELECT m.thread_id, min(m.ts) FROM msgs m JOIN tool_markers k USING (mid) WHERE k.kind = 'start' GROUP BY 1"
-    ).fetchall():
-        start_ts[tid] = ts
+    start_ts: dict[str, datetime] = dict(
+        con.execute(
+            "SELECT m.thread_id, min(m.ts) FROM msgs m JOIN tool_markers k USING (mid) WHERE k.kind = 'start' GROUP BY 1"
+        ).fetchall()
+    )
     for tid, ts in con.execute("SELECT thread_id, ts FROM workflow_commands").fetchall():
         if tid in msgs_by_thread:
             start_ts[tid] = min(start_ts.get(tid, ts), ts)

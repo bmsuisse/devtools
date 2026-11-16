@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from bmsdna.devtools.bdt_config import load_bdt_table
 
@@ -71,7 +72,7 @@ def conventional_commit_scope(message: str) -> str | None:
 
 def _run(cmd: list[str], cwd: str | None = None) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(cmd, capture_output=True, encoding="utf-8", cwd=cwd)
+        return subprocess.run(cmd, capture_output=True, encoding="utf-8", cwd=cwd, check=False)
     except FileNotFoundError:
         sys.exit("'git' is required for this command but wasn't found on PATH.")
 
@@ -101,12 +102,12 @@ def _git_dir(cwd: str | None) -> str:
     root = cwd or "."
     r = _run(["git", "rev-parse", "--git-dir"], cwd=cwd)
     git_dir = r.stdout.strip() if r.returncode == 0 else ".git"
-    return git_dir if os.path.isabs(git_dir) else os.path.join(root, git_dir)
+    return str(Path(root) / git_dir)
 
 
 def _pre_commit_hook_installed(cwd: str | None) -> bool:
-    hook_path = os.path.join(_git_dir(cwd), "hooks", "pre-commit")
-    return os.path.isfile(hook_path) and os.access(hook_path, os.X_OK)
+    hook_path = Path(_git_dir(cwd)) / "hooks" / "pre-commit"
+    return hook_path.is_file() and os.access(hook_path, os.X_OK)
 
 
 def _maybe_install_prek_hook(cwd: str | None) -> tuple[bool, str | None]:
@@ -117,7 +118,7 @@ def _maybe_install_prek_hook(cwd: str | None) -> tuple[bool, str | None]:
     Returns (installed, error): `installed` is True if we just installed the
     hook; `error` holds `prek install`'s failure output, if any."""
     root = cwd or "."
-    if not os.path.isfile(os.path.join(root, "prek.toml")):
+    if not (Path(root) / "prek.toml").is_file():
         return False, None
     if _pre_commit_hook_installed(cwd):
         return False, None
@@ -130,7 +131,7 @@ def _maybe_install_prek_hook(cwd: str | None) -> tuple[bool, str | None]:
 
 
 def _present_or_staged_deletion(path: str, subrepos: list[str]) -> bool:
-    if os.path.exists(path):
+    if Path(path).exists():
         return True
     for subrepo in subrepos:
         prefix = subrepo + "/"
@@ -182,7 +183,7 @@ def _add(files: list[str], cwd: str | None) -> None:
     one pathspec doesn't match anything. Passing only what's actually present
     on disk avoids silently dropping the other files' staged content."""
     root = cwd or "."
-    addable = [f for f in files if os.path.exists(os.path.join(root, f))]
+    addable = [f for f in files if (Path(root) / f).exists()]
     if addable:
         _run(["git", "add", *addable], cwd=cwd)
 

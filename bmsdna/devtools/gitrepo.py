@@ -80,18 +80,12 @@ def parse_ado_remote(url: str) -> AdoRemote:
             if "dev.azure.com" in part:
                 org = parts[i + 1]
                 project = unquote(parts[i + 2])
-                if i + 4 < len(parts) and parts[i + 3] == "_git":
-                    repo = unquote(parts[i + 4])
-                else:
-                    repo = unquote(parts[i + 3])
+                repo = unquote(parts[i + 4]) if i + 4 < len(parts) and parts[i + 3] == "_git" else unquote(parts[i + 3])
                 return AdoRemote(org, project, repo)
     elif "visualstudio.com" in url:
         org = parts[2].split(".")[0]
         project = unquote(parts[3])
-        if len(parts) > 5 and parts[4] == "_git":
-            repo = unquote(parts[5])
-        else:
-            repo = unquote(parts[4])
+        repo = unquote(parts[5]) if len(parts) > 5 and parts[4] == "_git" else unquote(parts[4])
         return AdoRemote(org, project, repo)
 
     raise NotAzureDevOpsRemoteError(f"Could not parse Azure DevOps info from remote URL: {url}")

@@ -9,6 +9,7 @@ which touches neither the working tree nor any ref. GitHub recomputes `mergeable
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import subprocess
@@ -45,7 +46,9 @@ class Drift:
 
 def _git(args: list[str], cwd: str | None, timeout: float = CLI_TIMEOUT_SECS) -> subprocess.CompletedProcess[str]:
     try:
-        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, encoding="utf-8", timeout=timeout)
+        return subprocess.run(
+            ["git", *args], cwd=cwd, capture_output=True, encoding="utf-8", timeout=timeout, check=False
+        )
     except (
         OSError,
         subprocess.TimeoutExpired,
@@ -68,10 +71,9 @@ def _cache_read(path: Path | None) -> dict:
 def _cache_write(path: Path | None, cache: dict) -> None:
     if path is None:
         return
-    try:
+    # a cache that can't be written only costs the next run a fetch
+    with contextlib.suppress(OSError):
         path.write_text(json.dumps(dict(list(cache.items())[-_CACHE_ENTRIES:])), encoding="utf-8")
-    except OSError:
-        pass  # a cache that can't be written only costs the next run a fetch
 
 
 def merge_conflicts(source: str, target: str, cwd: str | None = None) -> tuple[str, ...] | None:

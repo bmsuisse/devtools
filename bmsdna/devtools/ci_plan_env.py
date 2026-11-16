@@ -102,6 +102,7 @@ def _git(
             text=True,
             timeout=GIT_TIMEOUT_SECS,
             env={**os.environ, **(extra_env or {})},
+            check=False,
         )
     except subprocess.TimeoutExpired as error:
         raise RuntimeError(f"git {args[0]} timed out") from error

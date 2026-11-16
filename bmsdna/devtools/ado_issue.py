@@ -707,8 +707,7 @@ def build_search_wiql(
         f"([System.Title] Contains Words '{_escape_wiql_string(k)}' OR [System.Description] Contains Words '{_escape_wiql_string(k)}')"
         for k in keywords
     ]
-    for tag in tags or []:
-        clauses.append(f"[System.Tags] Contains '{_escape_wiql_string(tag)}'")
+    clauses.extend(f"[System.Tags] Contains '{_escape_wiql_string(tag)}'" for tag in tags or [])
     if since:
         clauses.append(f"[System.ChangedDate] >= '{since}T00:00:00Z'")
     if area_path:

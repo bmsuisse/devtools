@@ -39,7 +39,7 @@ EXIT_FOUND, EXIT_SETUP, EXIT_INCOMPLETE = 1, 2, 3
 
 
 def _read_all(paths: list[Path] | None) -> list[LockfileContent]:
-    roots = [p for p in (paths or [Path.cwd()])]
+    roots = list(paths or [Path.cwd()])
     missing = [str(p) for p in roots if not p.exists()]
     if missing:
         typer.echo(f"bdt deps: path not found: {', '.join(missing)}", err=True)
@@ -122,10 +122,8 @@ def _render(result: ScanResult) -> str:
                 f"    - {' / '.join(group.ids + group.cves)} [{flags}] fixed in {group.fixed or 'n/a'}: {group.summary}"
             )
         lines.extend(f"    next: {command}" for command in finding.commands)
-    for item in result.unsupported:
-        lines.append(f"[unsupported] {item.name}: {item.reason}  {item.lockfile}")
-    for reason in result.incomplete:
-        lines.append(f"[incomplete] {reason}")
+    lines.extend(f"[unsupported] {item.name}: {item.reason}  {item.lockfile}" for item in result.unsupported)
+    lines.extend(f"[incomplete] {reason}" for reason in result.incomplete)
     return "\n".join(lines)
 
 

@@ -255,7 +255,7 @@ _REMOTE_ERRORS = (UnknownRemoteError, NotGitHubRemoteError, NotAzureDevOpsRemote
 
 def _current_remote_or_none() -> AdoRemote | GitHubRemote | None:
     """The current repo's remote, or None outside a checkout -- without git's own complaint, as that is no error here."""
-    r = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, encoding="utf-8")
+    r = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, encoding="utf-8", check=False)
     if r.returncode != 0:
         return None
     try:
@@ -1750,9 +1750,8 @@ def issue_watch(
     for batch in batches:
         reported = True
         for comment in batch:
-            if follow:
-                comment = issue_watch_mod.truncate_body(comment)
-            typer.echo(issue_watch_mod.format_comment(comment, as_json=as_json))
+            shown = issue_watch_mod.truncate_body(comment) if follow else comment
+            typer.echo(issue_watch_mod.format_comment(shown, as_json=as_json))
             if not as_json:
                 typer.echo("")
         if not follow:
@@ -2187,7 +2186,7 @@ def translate_cmd(
         res = translate_mod.run(cfg, check=check, import_json=import_json)
     except ValueError as e:
         typer.echo(str(e), err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     if res.imported:
         typer.echo(f"Imported {res.imported} value(s) from existing JSON files")
     for key in res.new_keys:
@@ -2249,7 +2248,7 @@ def translate_add(
         res = translate_mod.add_key(cfg, key, values, force=force)
     except ValueError as e:
         typer.echo(str(e), err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     missing = [lng for lng in cfg.languages if lng not in values]
     if missing:
         typer.echo(f"warning: no {', '.join(missing)} translation given (falls back to de/en)", err=True)

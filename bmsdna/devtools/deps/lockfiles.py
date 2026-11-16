@@ -287,7 +287,7 @@ def read_gradle_lockfile(path: Path, text: str | None = None) -> LockfileContent
     seen: set[tuple[str, str]] = set()
     for raw in (text if text is not None else path.read_text(encoding="utf-8")).splitlines():
         line = raw.strip()
-        if not line or line.startswith("#") or line.startswith("empty="):
+        if not line or line.startswith(("#", "empty=")):
             continue
         coordinates = line.partition("=")[0].split(":")
         if len(coordinates) != 3 or not all(coordinates):

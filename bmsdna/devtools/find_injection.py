@@ -115,6 +115,7 @@ def diff_files(root: Path, base: str | None = None) -> list[Path]:
             cwd=root,
             capture_output=True,
             encoding="utf-8",
+            check=False,
         )
         candidates += [head.stdout.strip()] if head.returncode == 0 and head.stdout.strip() else []
         candidates += ["origin/main", "main", "origin/master", "master"]
@@ -123,7 +124,10 @@ def diff_files(root: Path, base: str | None = None) -> list[Path]:
             c
             for c in candidates
             if c
-            and subprocess.run(["git", "rev-parse", "--verify", "-q", c], cwd=root, capture_output=True).returncode == 0
+            and subprocess.run(
+                ["git", "rev-parse", "--verify", "-q", c], cwd=root, capture_output=True, check=False
+            ).returncode
+            == 0
         ),
         None,
     )
@@ -189,14 +193,13 @@ class _ScanFilter:
         self.dir_names = _DEFAULT_EXCLUDE_DIR_NAMES | {".next", "coverage", "storybook-static"}
         self._patterns: list[str] = []
         for entry in exclude:
-            entry = entry.replace("\\", "/").strip().strip("/")
-            entry = entry.removeprefix("./")
-            if not entry:
+            cleaned = entry.replace("\\", "/").strip().strip("/").removeprefix("./")
+            if not cleaned:
                 continue
-            if "/" not in entry and not _GLOB_CHARS & set(entry):
-                self.dir_names = self.dir_names | {entry}
+            if "/" not in cleaned and not _GLOB_CHARS & set(cleaned):
+                self.dir_names = self.dir_names | {cleaned}
             else:
-                self._patterns.append(entry)
+                self._patterns.append(cleaned)
         self._visible = _git_visible_files(root) if respect_gitignore else None
 
     def allows(self, path: Path) -> bool:
@@ -221,6 +224,7 @@ def _git_visible_files(root: Path) -> set[Path] | None:
             cwd=root,
             capture_output=True,
             encoding="utf-8",
+            check=False,
         )
     except FileNotFoundError:
         return None

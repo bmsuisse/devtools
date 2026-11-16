@@ -6,9 +6,11 @@ caller; anything not in the caller's spec exits with the list of what is support
 
 from __future__ import annotations
 
+import contextlib
 import sys
 import webbrowser
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
@@ -56,8 +58,7 @@ def read_body_file(path: str) -> str:
     if path == "-":
         return sys.stdin.read()
     try:
-        with open(path, encoding="utf-8") as f:
-            return f.read()
+        return Path(path).read_text(encoding="utf-8")
     except OSError as e:
         sys.exit(f"cannot read --body-file {path!r}: {e}")
 
@@ -66,7 +67,5 @@ def open_in_browser(url: str | None) -> None:
     """`--web`: best-effort, a failure to open a browser never fails the command."""
     if not url:
         return
-    try:
+    with contextlib.suppress(webbrowser.Error):
         webbrowser.open(url)
-    except webbrowser.Error:
-        pass

@@ -10,6 +10,7 @@ ship its own top-level `bmsdna` package (CCMT2 does) that would shadow ours. `ap
 import importlib
 import json
 import sys
+from pathlib import Path
 
 HTTP_METHODS = ("get", "post", "put", "patch", "delete", "options", "head")
 
@@ -54,7 +55,7 @@ def collect(app, mount=""):
 def main(argv):
     module_name, _, attr = argv[0].partition(":")
     app = getattr(importlib.import_module(module_name), attr)
-    with open(argv[1], "w", encoding="utf-8") as out:
+    with Path(argv[1]).open("w", encoding="utf-8") as out:
         json.dump(collect(app), out)
 
 

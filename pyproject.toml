@@ -95,6 +95,10 @@ ignore = ["ANN401"]  # `Any` is a warning via the ruff-warn-any prek hook, not a
 "bmsdna/**" = ["T20"]
 "tests/**" = ["T20"]
 
+[tool.ruff.lint.pep8-naming]
+# ast.NodeVisitor dispatches on visit_<NodeClass> names
+extend-ignore-names = ["visit_*"]
+
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = ["typer.Option", "typer.Argument"]
 

@@ -123,6 +123,7 @@ def load_app_operations(app_spec: str, *, cwd: Path, env: dict[str, str] | None 
                 text=True,
                 encoding="utf-8",
                 timeout=_APP_IMPORT_TIMEOUT_SECONDS,
+                check=False,
             )
         except subprocess.TimeoutExpired as exc:
             raise ApiUsageError(
@@ -234,10 +235,10 @@ def scan_frontend(files: list[Path]) -> FrontendUsage:
         usage.files += 1
         usage.identifiers.update(_IDENT_RE.findall(text))
         found: list[tuple[int, str]] = [(m.start(), m.group("body")) for m in _QUOTED_PATH_RE.finditer(text)]
-        for m in _TEMPLATE_START_RE.finditer(text):
-            found.append(
-                (m.start(), _read_template(text, m.start(), min(len(text), m.start() + _MAX_TEMPLATE_CHARS))[0])
-            )
+        found.extend(
+            (m.start(), _read_template(text, m.start(), min(len(text), m.start() + _MAX_TEMPLATE_CHARS))[0])
+            for m in _TEMPLATE_START_RE.finditer(text)
+        )
         for pos, body in found:
             normalized = normalize_path(body)
             call = _FETCH_METHOD_RE.search(text[max(0, pos - 40) : pos])

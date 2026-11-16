@@ -53,7 +53,7 @@ def _chunks(items: Sequence[Any], size: int) -> Iterator[Sequence[Any]]:
 
 
 def _parse_time(text: str) -> datetime:
-    parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    parsed = datetime.fromisoformat(text)
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 

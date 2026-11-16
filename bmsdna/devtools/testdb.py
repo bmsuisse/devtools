@@ -143,8 +143,10 @@ def find_orphaned(repo: Path) -> list[tuple[str, str, bool]]:
     for root in project_roots(repo):
         config = load_config(root)
         suffixes = list(config.extra_db_suffixes)
-        for name in pgdevkit_testdb.find_orphaned_dbs(project_root=root):
-            results.append((name, config.name, is_caution_db(name, config.name, suffixes)))
+        results.extend(
+            (name, config.name, is_caution_db(name, config.name, suffixes))
+            for name in pgdevkit_testdb.find_orphaned_dbs(project_root=root)
+        )
     return results
 
 

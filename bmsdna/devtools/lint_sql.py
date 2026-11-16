@@ -766,9 +766,7 @@ def _sqlglot_builder_findings(
     # `.group_by()` on a polars/Django/SQLAlchemy object in the same file is none of our business.
     if name not in _SQLGLOT_STRING_BUILDERS or not (root in trust.sqlglot_names or root in sqlglot_vars):
         return []
-    arguments: list[ast.expr] = []
-    for arg in call.args:
-        arguments.append(arg.value if isinstance(arg, ast.Starred) else arg)
+    arguments: list[ast.expr] = [arg.value if isinstance(arg, ast.Starred) else arg for arg in call.args]
     arguments.extend(kw.value for kw in call.keywords if kw.arg not in _SQLGLOT_NON_SQL_KEYWORDS)
     for arg in arguments:
         candidates = [c for top in [arg, *_elements(arg)] for c in _resolve_candidates(top, lookup)]
@@ -867,9 +865,12 @@ class _ExecuteCallVisitor(ast.NodeVisitor):
     visit_ClassDef = _visit_scoped
 
     def _track_sqlglot_var(self, name: str, value: ast.expr) -> None:
-        if isinstance(value, ast.Call) and (root := _call_root_name(value.func)) is not None:
-            if root in self.trust.sqlglot_names or root in self._sqlglot_vars:
-                self._sqlglot_vars.add(name)
+        if (
+            isinstance(value, ast.Call)
+            and (root := _call_root_name(value.func)) is not None
+            and (root in self.trust.sqlglot_names or root in self._sqlglot_vars)
+        ):
+            self._sqlglot_vars.add(name)
 
     def visit_Assign(self, node: ast.Assign) -> None:
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):

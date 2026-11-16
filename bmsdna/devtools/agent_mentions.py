@@ -34,8 +34,7 @@ _ENV_PREFIXES: tuple[tuple[str, str], ...] = (
 def normalize_agent(name: str) -> str:
     """The mention handle for an agent name or tag: 'Claude' / 'claude-code_2-1_agent' -> 'claude',
     'Codex CLI' -> 'codex', '@Goose' -> 'goose'."""
-    tag = re.split(r"[\s_-]+", name.strip().lstrip("@").lower(), maxsplit=1)[0]
-    return tag
+    return re.split(r"[\s_-]+", name.strip().lstrip("@").lower(), maxsplit=1)[0]
 
 
 def detect_agent(env: Mapping[str, str] | None = None, override: str | None = None) -> str | None:

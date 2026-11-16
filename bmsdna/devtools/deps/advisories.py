@@ -158,17 +158,12 @@ def fix_for(vuln: Vuln, ecosystem: Ecosystem, name: str, version: str) -> tuple[
             for range_type, events in entry.ranges:
                 if range_type not in ("ECOSYSTEM", "SEMVER"):
                     continue
-                parsed = []
-                for event in events:
-                    for kind in ("introduced", "fixed", "last_affected"):
-                        if kind in event:
-                            parsed.append(
-                                (
-                                    _event_version(ecosystem, event[kind]),
-                                    kind,
-                                    event[kind],
-                                )
-                            )
+                parsed = [
+                    (_event_version(ecosystem, event[kind]), kind, event[kind])
+                    for event in events
+                    for kind in ("introduced", "fixed", "last_affected")
+                    if kind in event
+                ]
                 order = {"introduced": 0, "last_affected": 1, "fixed": 2}
                 parsed.sort(key=lambda e: (e[0], order[e[1]]))
                 start = None

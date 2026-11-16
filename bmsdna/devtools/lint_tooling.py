@@ -56,16 +56,16 @@ def check_tooling(root: Path) -> list[Finding]:
     declared = _declared_dependencies(data)
     findings: list[Finding] = []
 
-    for tool in _REQUIRED_DEPENDENCIES:
-        if tool not in declared:
-            findings.append(
-                Finding(
-                    pyproject_path,
-                    0,
-                    f"tooling-missing-{tool}",
-                    f"'{tool}' isn't declared as a dependency in pyproject.toml.",
-                )
-            )
+    findings.extend(
+        Finding(
+            pyproject_path,
+            0,
+            f"tooling-missing-{tool}",
+            f"'{tool}' isn't declared as a dependency in pyproject.toml.",
+        )
+        for tool in _REQUIRED_DEPENDENCIES
+        if tool not in declared
+    )
 
     if "pytest" in declared:
         repo_root = pyproject_path.parent

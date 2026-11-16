@@ -198,11 +198,11 @@ def find_repos(root: Path) -> list[Path]:
     stack = [str(root)]
     while stack:
         current = stack.pop()
-        git_path = os.path.join(current, ".git")
-        if os.path.isdir(git_path):
+        git_path = Path(current) / ".git"
+        if git_path.is_dir():
             repos.append(Path(current))
             continue
-        if os.path.exists(git_path):
+        if git_path.exists():
             # A `.git` file means this is a linked worktree or submodule
             # checkout; its worktrees are already reachable from the repo
             # it belongs to, so there's nothing new to find by descending.

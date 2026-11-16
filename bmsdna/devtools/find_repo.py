@@ -52,7 +52,7 @@ def work_dir() -> Path:
     return Path("~/projects").expanduser()
 
 
-def _prefer_exact(items: list[T], name: str, key: Callable[[T], str]) -> list[T]:
+def _prefer_exact[T](items: list[T], name: str, key: Callable[[T], str]) -> list[T]:
     """Exact (case-insensitive) matches on `key(item)` if there are any, else
     substring matches -- shared by `find_local`/`find_remote`/`find_github`
     (and, cross-source, by `run`) so a short/common name doesn't drown in
@@ -535,7 +535,7 @@ def run_list(
     labels = [_printable(label) for label in labels]
     authors = [_printable(str(e["last_commit_author"])) for e in entries]
     label_w, author_w = max(map(len, labels), default=0), max(map(len, authors), default=0)
-    for label, author, description, e in zip(labels, authors, descriptions, entries):
+    for label, author, description, e in zip(labels, authors, descriptions, entries, strict=True):
         commit = f"{str(e['last_commit_date'])[:10]:<10}  {str(e['last_commit_id'])[:8]:<8}  {author:<{author_w}}"
         print(f"{label:<{label_w}}  {commit}  {_printable(description)}".rstrip())
 

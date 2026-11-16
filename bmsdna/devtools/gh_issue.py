@@ -51,12 +51,12 @@ _SORT_TOKEN = "sort:updated-desc"
 
 def _screenshot_images(owner: str, repo: str, key: str, screenshot_paths: list[str]) -> list[tuple[str, str]]:
     urls = push_assets(owner, repo, key, screenshot_paths)
-    return list(zip((Path(p).name for p in screenshot_paths), urls))
+    return list(zip((Path(p).name for p in screenshot_paths), urls, strict=True))
 
 
 def _file_links(owner: str, repo: str, key: str, file_paths: list[str]) -> list[tuple[str, str]]:
     urls = push_assets(owner, repo, key, file_paths)
-    return list(zip((Path(p).name for p in file_paths), urls))
+    return list(zip((Path(p).name for p in file_paths), urls, strict=True))
 
 
 def parse_issue_number(issue_url: str) -> str:

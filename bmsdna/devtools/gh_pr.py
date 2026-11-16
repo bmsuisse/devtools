@@ -111,7 +111,7 @@ def _run(args: list[str], *, timeout: float = CLI_TIMEOUT_SECS, **kwargs) -> sub
     pass a longer `timeout` -- see `CLI_UPLOAD_TIMEOUT_SECS`.
     """
     try:
-        return subprocess.run(args, timeout=timeout, **kwargs)
+        return subprocess.run(args, timeout=timeout, **kwargs, check=False)
     except subprocess.TimeoutExpired:
         sys.exit(
             f"`{' '.join(args)}` timed out after {timeout:.0f}s -- stalled network, or needs an interactive login?"
@@ -631,7 +631,7 @@ def _status(gh: GitHubClient, wait: bool, pr_id: int | None, timeout: float, dea
         buckets = [check_bucket(c) for c in checks]
         msg += " | " + ", ".join(f"{check_label(c)}: {check_bucket(c)}" for c in checks)
 
-        waiting_approval = [c for c, b in zip(checks, buckets) if b == "waiting_approval"]
+        waiting_approval = [c for c, b in zip(checks, buckets, strict=True) if b == "waiting_approval"]
         # A failed check anywhere in the PR is reported as such even when another check is
         # separately waiting on approval — a human shouldn't be sent to go approve a
         # deployment gate while staying unaware that CI has already failed elsewhere.
@@ -650,7 +650,10 @@ def _status(gh: GitHubClient, wait: bool, pr_id: int | None, timeout: float, dea
             heartbeat.show(msg)
             if deadline.expired():
                 exit_wait_timeout(
-                    msg, lambda: [print_check(c) for c in checks], deadline, status_rerun_cmd(pr_number, timeout)
+                    msg,
+                    lambda checks=checks: [print_check(c) for c in checks],
+                    deadline,
+                    status_rerun_cmd(pr_number, timeout),
                 )
             deadline.sleep(30)
             continue
@@ -1129,12 +1132,12 @@ def push_assets(owner: str, repo: str, branch: str, paths: list[str], max_attemp
 
 def _screenshot_images(owner: str, repo: str, branch: str, screenshot_paths: list[str]) -> list[tuple[str, str]]:
     urls = push_assets(owner, repo, branch, screenshot_paths)
-    return list(zip((Path(p).name for p in screenshot_paths), urls))
+    return list(zip((Path(p).name for p in screenshot_paths), urls, strict=True))
 
 
 def _file_links(owner: str, repo: str, branch: str, file_paths: list[str]) -> list[tuple[str, str]]:
     urls = push_assets(owner, repo, branch, file_paths)
-    return list(zip((Path(p).name for p in file_paths), urls))
+    return list(zip((Path(p).name for p in file_paths), urls, strict=True))
 
 
 def add_attachments(

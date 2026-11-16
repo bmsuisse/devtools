@@ -85,9 +85,7 @@ def build_accept(
             return False
         if own_session_id and own_session_id in comment.body:
             return False
-        if own_author and comment.author.casefold() == own_author.casefold():
-            return False
-        return True
+        return not (own_author and comment.author.casefold() == own_author.casefold())
 
     return accept
 

@@ -66,12 +66,12 @@ def _layout(fig: go.Figure, height: int, **kw) -> go.Figure:
     light = INK["light"]
     fig.update_layout(
         height=height,
-        margin=dict(l=10, r=30, t=10, b=40),
+        margin={"l": 10, "r": 30, "t": 10, "b": 40},
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(family="system-ui, -apple-system, Segoe UI, sans-serif", size=12, color=light["text"]),
-        legend=dict(orientation="h", y=-0.18, x=0, font=dict(color=light["text"])),
-        hoverlabel=dict(font_size=13),
+        font={"family": "system-ui, -apple-system, Segoe UI, sans-serif", "size": 12, "color": light["text"]},
+        legend={"orientation": "h", "y": -0.18, "x": 0, "font": {"color": light["text"]}},
+        hoverlabel={"font_size": 13},
         **kw,
     )
     fig.update_xaxes(gridcolor=light["grid"], zeroline=False, linecolor=light["grid"], ticks="")
@@ -83,7 +83,7 @@ def _bar(name: str, slot: int, **kw) -> go.Bar:
     return go.Bar(
         name=name,
         meta={"slot": slot},
-        marker=dict(color=SERIES["light"][slot], line=dict(color="rgba(0,0,0,0)", width=0)),
+        marker={"color": SERIES["light"][slot], "line": {"color": "rgba(0,0,0,0)", "width": 0}},
         **kw,
     )
 
@@ -118,7 +118,7 @@ def fig_cost_share(con) -> go.Figure:
             text=[f"{s['pct_cost']:.1f}%" for s in steps],
             textposition="middle right",
             cliponaxis=False,
-            textfont=dict(color=INK["light"]["text"]),
+            textfont={"color": INK["light"]["text"]},
             meta={"role": "label"},
         )
     )
@@ -194,8 +194,8 @@ def fig_session_spread(con) -> go.Figure:
                 boxpoints="all",
                 jitter=0.5,
                 pointpos=0,
-                marker=dict(color=SERIES["light"][0], size=4, opacity=0.55),
-                line=dict(color=SERIES["light"][0], width=1.5),
+                marker={"color": SERIES["light"][0], "size": 4, "opacity": 0.55},
+                line={"color": SERIES["light"][0], "width": 1.5},
                 fillcolor="rgba(42,120,214,0.12)",
                 meta={"slot": 0},
                 showlegend=False,
@@ -371,7 +371,7 @@ __UNPRICED__
 <div class="card">__FIG_SPREAD__</div>
 
 <h2>Are screenshots the problem?</h2>
-<p class="sub">Estimated cost of re-reading screenshots that sit in the context of every later turn (image tokens ≈ width×height/750 from the PNG header).</p>
+<p class="sub">Estimated cost of re-reading screenshots that sit in the context of every later turn (image tokens ≈ width&times;height/750 from the PNG header).</p>
 <div class="card">__FIG_IMG__</div>
 
 <h2>Most expensive subagents</h2>
@@ -435,7 +435,7 @@ def write_report(con: duckdb.DuckDBPyConnection, out_dir: Path) -> Path:
     }
     page = PAGE
     plot_cfg = {"displayModeBar": False, "responsive": True}
-    for i, (key, fig) in enumerate(figs.items()):
+    for key, fig in figs.items():
         div = fig.to_html(full_html=False, include_plotlyjs=False, config=plot_cfg, div_id=f"fig_{key.lower()}")
         page = page.replace(f"__FIG_{key}__", div)
     page = (
