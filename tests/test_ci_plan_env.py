@@ -448,3 +448,48 @@ def test_monorepo_own_test_file_selects_its_area(monorepo) -> None:
     output = _dry_run_changing(monorepo, "app/tests/unit/orders/test_a.py")
     assert "test plan: areas (changed area tests: orders)" in output
     assert "unitPaths=tests/unit/orders" in output
+
+
+def test_changed_files_ignore_a_configured_diff_relative(clone, monkeypatch) -> None:
+    """`git config diff.relative true` would make git itself drop what is outside the folder and re-root the rest."""
+    git(clone, "config", "diff.relative", "true")
+    git(clone, "checkout", "-q", "-b", "feat")
+    for name in ("app/code.py", "infra/main.bicep"):
+        (clone / name).parent.mkdir(exist_ok=True)
+        (clone / name).write_text(name)
+    git(clone, "add", "-A")
+    git(clone, "commit", "-q", "-m", "mono")
+    monkeypatch.chdir(clone / "app")
+    assert sorted(ci_plan_env.changed_files("main", merge_checkout=False, root=clone / "app")) == [
+        "../infra/main.bicep",
+        "code.py",
+    ]
+
+
+def test_changed_files_of_a_project_nested_two_levels_deep(clone, monkeypatch) -> None:
+    git(clone, "checkout", "-q", "-b", "feat")
+    for name in ("apps/app/code.py", "apps/other/x.py", "apps/app/sub/y.py", "infra/main.bicep"):
+        (clone / name).parent.mkdir(parents=True, exist_ok=True)
+        (clone / name).write_text(name)
+    git(clone, "add", "-A")
+    git(clone, "commit", "-q", "-m", "mono")
+    monkeypatch.chdir(clone)  # the process cwd does not matter, the project root does
+    files = ci_plan_env.changed_files("main", merge_checkout=False, root=clone / "apps" / "app")
+    assert sorted(files) == ["../../infra/main.bicep", "../other/x.py", "code.py", "sub/y.py"]
+
+
+def test_changed_files_for_a_repository_folder_ending_in_a_space(tmp_path, monkeypatch) -> None:
+    """Paths come from git's own spelling, not from comparing file-system paths: odd folder names change nothing."""
+    work = tmp_path / "repo "
+    work.mkdir()
+    git(work, "init", "-q", "-b", "main")
+    commit(work, "m1")
+    git(work, "update-ref", "refs/remotes/origin/main", "HEAD")
+    git(work, "checkout", "-q", "-b", "feat")
+    (work / "app").mkdir()
+    (work / "app/code.py").write_text("x")
+    git(work, "add", "-A")
+    git(work, "commit", "-q", "-m", "app")
+    monkeypatch.chdir(work / "app")
+    assert ci_plan_env.changed_files("main", merge_checkout=False, root=work / "app") == ["code.py"]
+    assert ci_plan_env.changed_files("main", merge_checkout=False, root=work) == ["app/code.py"]

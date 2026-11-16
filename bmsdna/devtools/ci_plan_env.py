@@ -115,12 +115,21 @@ def relative_to_root(files: list[str], root: Path) -> list[str]:
     """Git lists paths relative to the repository root, the plan config (`dir`, `paths`, `non_code`) and the paths it
     outputs are relative to the folder of the pyproject.toml. They are the same thing unless the project lives in a
     sub-folder of a monorepo: then a file of the project is listed relative to it (`backend/app.py`) and one outside it
-    keeps its place as a `../` path (`../infra/main.bicep`), which the config can match like any other path."""
-    top = Path(_git("rev-parse", "--show-toplevel").stdout.strip()).resolve()
-    base = root.resolve()
-    if base == top:
+    keeps its place as a `../` path (`../infra/main.bicep`), which the config can match like any other path.
+    The project's own prefix comes from git (`--show-prefix`) and is cut from git's own spelling of each path: no
+    file-system lookups, so symlinks, case-insensitive file systems and unusual folder names cannot skew it."""
+    prefix = _git("-C", str(root), "rev-parse", "--show-prefix").stdout.removesuffix("\n")
+    base = prefix.rstrip("/").split("/") if prefix else []
+    if not base:
         return files
-    return [Path(os.path.relpath(top / name, base)).as_posix() for name in files]
+    result = []
+    for name in files:
+        parts = name.split("/")
+        common = 0
+        while common < len(base) and common < len(parts) - 1 and parts[common] == base[common]:
+            common += 1
+        result.append("../" * (len(base) - common) + "/".join(parts[common:]))
+    return result
 
 
 def changed_files(target: str, *, merge_checkout: bool, root: Path | None = None) -> list[str]:
@@ -130,9 +139,11 @@ def changed_files(target: str, *, merge_checkout: bool, root: Path | None = None
     `relative_to_root`.
     `--no-renames` lists a moved file under its old path too: rename detection would hide the old path, so code moved
     into a `non_code` folder (or a test moved between areas) would look like nothing happened to the old place.
-    `-z` keeps non-ASCII and other unusual names unquoted (git's default quoting would defeat every glob)."""
+    `--no-relative` keeps the paths relative to the repository root whatever `diff.relative` is configured (the plan
+    normalises them itself, see `relative_to_root`). `-z` keeps non-ASCII and other unusual names unquoted (git's default
+    quoting would defeat every glob)."""
     diff = ("HEAD^1", "HEAD") if merge_checkout else (f"origin/{target}...HEAD",)
-    out = _git("diff", "--name-only", "--no-renames", "-z", *diff).stdout
+    out = _git("diff", "--name-only", "--no-renames", "--no-relative", "-z", *diff).stdout
     files = [path for path in out.split("\0") if path]  # -z: git would quote names like test_\303\274ber.py
     return files if root is None else relative_to_root(files, root)
 
