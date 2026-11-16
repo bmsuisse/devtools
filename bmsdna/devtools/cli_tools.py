@@ -9,8 +9,11 @@ concerns for arguments that come from user input, e.g. PR titles).
 
 from __future__ import annotations
 
+import math
 import os
+import re
 import shutil
+import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -38,6 +41,11 @@ EXIT_WAIT_TIMEOUT = 4
 # from a hang. 10 minutes is short enough to reassure someone watching it live, long enough
 # not to spam a captured log.
 POLL_HEARTBEAT_SECS = 600.0
+
+# How long before an enclosing `timeout N bdt pr status --wait` would kill us the wait loop gives up on its own
+# (see `limit_by_enclosing_timeout`): enough for a poll that is in flight (HTTP_TIMEOUT_SECS) plus printing the
+# per-build details of the final status.
+ENCLOSING_TIMEOUT_MARGIN_SECS = 30.0
 
 # Bounds a single call to an external CLI (`gh`/`az`/`git`) or a single Azure DevOps REST
 # request. Without a timeout, a stalled network call or the CLI blocking on an interactive
@@ -112,6 +120,104 @@ def exit_wait_timeout(msg: str, print_details: Callable[[], object], deadline: W
     print_details()
     print(f"\nStill running after {deadline.timeout_secs:g} s. Re-run `{rerun_cmd}` to keep waiting.")
     sys.exit(EXIT_WAIT_TIMEOUT)
+
+
+_TIMEOUT_COMMANDS = ("timeout", "gtimeout")  # GNU coreutils; macOS has it as `gtimeout` unless aliased
+_TIMEOUT_LONG_OPTIONS_WITH_VALUE = ("--kill-after", "--signal")
+_DURATION_UNITS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
+_ETIME_RE = re.compile(r"^(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)$")  # [[dd-]hh:]mm:ss, as printed by `ps -o etime`
+_MAX_ANCESTORS = 8
+
+
+def parse_timeout_command(args: list[str]) -> float | None:
+    """The duration (seconds) of a `timeout [OPTION]... DURATION COMMAND...` command line, or None if `args` isn't
+    one, the duration is 0 / infinite (= no limit) or the options can't be read with confidence: not detecting a
+    limit is harmless, a wrong one would cut the wait short."""
+    if not args or os.path.basename(args[0]) not in _TIMEOUT_COMMANDS:
+        return None
+    rest = iter(args[1:])
+    for arg in rest:
+        if arg == "--":
+            arg = next(rest, "")
+        elif arg.startswith("--"):
+            # getopt accepts any unambiguous prefix of a long option (`--kill 5`)
+            if "=" not in arg and len(arg) > 2 and any(opt.startswith(arg) for opt in _TIMEOUT_LONG_OPTIONS_WITH_VALUE):
+                next(rest, None)
+            continue
+        elif arg.startswith("-") and arg != "-":
+            for pos, flag in enumerate(arg[1:], start=1):
+                if flag in "ks":  # the value is the rest of the cluster (`-k5`), else the next argument
+                    if pos == len(arg) - 1:
+                        next(rest, None)
+                    break
+                if flag not in "fpv":
+                    return None
+            continue
+        return _parse_duration(arg)
+    return None
+
+
+def _parse_duration(text: str) -> float | None:
+    m = re.fullmatch(r"(.+?)([smhd]?)", text)
+    try:
+        seconds = float(m.group(1)) * _DURATION_UNITS[m.group(2)] if m else 0.0
+    except ValueError:
+        return None
+    return seconds if math.isfinite(seconds) and seconds > 0 else None
+
+
+def _parse_etime(text: str) -> float | None:
+    m = _ETIME_RE.match(text.strip())
+    if not m:
+        return None
+    days, hours, minutes, seconds = (int(g or 0) for g in m.groups())
+    return float(((days * 24 + hours) * 60 + minutes) * 60 + seconds)
+
+
+def _process_info(pid: int) -> tuple[int, float, list[str]] | None:
+    """(parent pid, seconds since it started, command line) of process `pid`, via `ps` (Linux and macOS; None
+    anywhere it isn't available, e.g. Windows)."""
+    try:
+        r = subprocess.run(["ps", "-o", "ppid=,etime=,args=", "-p", str(pid)], capture_output=True, encoding="utf-8", timeout=CLI_TIMEOUT_SECS, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    parts = r.stdout.split(None, 2)
+    if r.returncode != 0 or len(parts) < 3 or not parts[0].isdigit():
+        return None
+    elapsed = _parse_etime(parts[1])
+    return (int(parts[0]), elapsed, parts[2].split()) if elapsed is not None else None
+
+
+def enclosing_timeout_remaining() -> float | None:
+    """Seconds until a `timeout N ...` wrapped around this process (as in `timeout 590 bdt pr status --wait`) kills
+    it, or None when there is none (the closest limit when several are nested). Best-effort: walks up the parent
+    processes, so it also sees through the shells and launcher shims in between."""
+    remaining: float | None = None
+    pid = os.getppid()
+    for _ in range(_MAX_ANCESTORS):
+        if pid < 1 or (info := _process_info(pid)) is None:
+            break
+        ppid, elapsed, args = info
+        limit = parse_timeout_command(args)
+        if limit is not None:
+            remaining = min(remaining if remaining is not None else limit, max(limit - elapsed, 0.0))
+        pid = ppid
+    return remaining
+
+
+def limit_by_enclosing_timeout(timeout_secs: float) -> float:
+    """`timeout_secs` of a `--wait` loop (0 = forever), cut down to end `ENCLOSING_TIMEOUT_MARGIN_SECS` before an
+    enclosing `timeout N` would kill us. Otherwise that kill drops everything we would have printed, which is
+    exactly what `--timeout` is there to avoid -- and callers (agents) keep wrapping the command in `timeout`
+    instead of passing `--timeout`."""
+    remaining = enclosing_timeout_remaining()
+    if remaining is None:
+        return timeout_secs
+    limit = max(remaining - ENCLOSING_TIMEOUT_MARGIN_SECS, 1.0)
+    if timeout_secs and timeout_secs <= limit:
+        return timeout_secs
+    print(f"Enclosing `timeout` ends in {remaining:.0f} s: giving up waiting after {limit:.0f} s so the status gets printed first.", file=sys.stderr)
+    return limit
 
 
 def is_claude_code() -> bool:
