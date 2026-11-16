@@ -111,15 +111,43 @@ def _git(
     return done
 
 
-def changed_files(target: str, *, merge_checkout: bool) -> list[str]:
+def relative_to_root(files: list[str], root: Path) -> list[str]:
+    """Git lists paths relative to the repository root, the plan config (`dir`, `paths`, `non_code`) and the paths it
+    outputs are relative to the folder of the pyproject.toml. They are the same thing unless the project lives in a
+    sub-folder of a monorepo: then a file of the project is listed relative to it (`backend/app.py`) and one outside it
+    keeps its place as a `../` path (`../infra/main.bicep`), which the config can match like any other path.
+    The project's own prefix comes from git (`--show-prefix`) and is cut from git's own spelling of each path: no
+    file-system lookups, so symlinks, case-insensitive file systems and unusual folder names cannot skew it."""
+    prefix = _git("-C", str(root), "rev-parse", "--show-prefix").stdout.removesuffix("\n")
+    base = prefix.rstrip("/").split("/") if prefix else []
+    if not base:
+        return files
+    result = []
+    for name in files:
+        parts = name.split("/")
+        common = 0
+        while common < len(base) and common < len(parts) - 1 and parts[common] == base[common]:
+            common += 1
+        result.append("../" * (len(base) - common) + "/".join(parts[common:]))
+    return result
+
+
+def changed_files(target: str, *, merge_checkout: bool, root: Path | None = None) -> list[str]:
     """Files the PR changes: in CI HEAD is the synthetic PR merge commit, compared with its first parent (the target);
     for a local dry run the branch is compared with `origin/<target>` (it may contain ordinary merges).
+    With `root` (the project folder, when it is not the repository root) the paths are relative to it, see
+    `relative_to_root`.
     `--no-renames` lists a moved file under its old path too: rename detection would hide the old path, so code moved
     into a `non_code` folder (or a test moved between areas) would look like nothing happened to the old place.
-    `-z` keeps non-ASCII and other unusual names unquoted (git's default quoting would defeat every glob)."""
+    `-c diff.relative=false` keeps the paths relative to the repository root whatever the user configured (the plan
+    normalises them itself, see `relative_to_root`; unlike `--no-relative` it works on any git version). `-z` keeps non-ASCII and other unusual names unquoted (git's default
+    quoting would defeat every glob)."""
     diff = ("HEAD^1", "HEAD") if merge_checkout else (f"origin/{target}...HEAD",)
-    out = _git("diff", "--name-only", "--no-renames", "-z", *diff).stdout
-    return [path for path in out.split("\0") if path]  # -z: git would quote names like test_\303\274ber.py
+    # `-C root`: the same repository the prefix is taken from, whatever the process cwd is.
+    where = ["-C", str(root)] if root is not None else []
+    out = _git(*where, "-c", "diff.relative=false", "diff", "--name-only", "--no-renames", "-z", *diff).stdout
+    files = [path for path in out.split("\0") if path]  # -z: git would quote names like test_\303\274ber.py
+    return files if root is None else relative_to_root(files, root)
 
 
 def verify_fix_base(env: Mapping[str, str]) -> None:
@@ -214,7 +242,7 @@ def run(
         ctx,
         config,
         labels=label_provider,
-        changed_files=lambda: changed_files(ctx.target, merge_checkout=not dry_run),
+        changed_files=lambda: changed_files(ctx.target, merge_checkout=not dry_run, root=config.root),
         verify_fix_base=lambda: verify_fix_base(env),
     )
     for warning in plan.warnings:

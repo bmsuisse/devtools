@@ -16,6 +16,10 @@ Configured under `[tool.bdt.ci.plan]` in pyproject.toml (the table must exist, e
     [tool.bdt.ci.plan.paths]        # non-test files an area owns: changing them infers that area, not everything
     infra = ["infra/**"]            # built-in default when the repo has an infra/ folder (areas may have no tests)
 
+Monorepo: run the command in the project's folder (the one with the pyproject.toml). Changed files are matched relative
+to that folder, so a file outside it is a `../` path: own it with `paths` (`infra = ["../infra/**"]`) or ignore it with
+`non_code` (`["../other-app/**"]`); any other file outside it (a shared folder) still selects everything.
+
 Labels: `test-<area>`, `test-full` (everything), `test-none` (no tests; lint and build still run). The legacy
 `e2e-<area>` labels count as `test-<area>`. Order of decision (the reason is always reported):
 
@@ -100,11 +104,11 @@ class Tier:
         )
 
     def area_of(self, root: Path, path: str, areas: Collection[str]) -> frozenset[str] | None:
-        """Areas owning a repo-relative file, or None when the file is not an area file of this tier (a helper
-        folder, a file directly in the tier folder): changing it can affect any test, so the plan runs everything.
-        In folder mode a file of an area folder counts, helpers like conftest.py included. A test file whose
-        whole folder was removed still names its (now gone) area. `areas` is `self.areas(root)`, computed once per
-        plan by the caller."""
+        """Areas owning a file (a path relative to the pyproject.toml folder), or None when the file is not an area
+        file of this tier (a helper folder, a file directly in the tier folder): changing it can affect any test, so the
+        plan runs everything. In folder mode a file of an area folder counts, helpers like conftest.py included. A test
+        file whose whole folder was removed still names its (now gone) area. `areas` is `self.areas(root)`, computed once
+        per plan by the caller."""
         pure = PurePosixPath(path)
         if not pure.is_relative_to(self.dir):
             return None
