@@ -8,11 +8,11 @@ import subprocess
 from unittest.mock import MagicMock
 
 import pytest
+from fake_github import FakeGitHub
 from typer.testing import CliRunner
 
-from fake_github import FakeGitHub
-
-from bmsdna.devtools import ado_issue, gh_issue, issue_watch as issue_watch_mod
+from bmsdna.devtools import ado_issue, gh_issue
+from bmsdna.devtools import issue_watch as issue_watch_mod
 from bmsdna.devtools.agent_mentions import last_comment_filter
 from bmsdna.devtools.cli import app
 from bmsdna.devtools.gitrepo import AdoRemote, GitHubRemote
@@ -80,7 +80,7 @@ def test_gh_search_keeps_only_issues_whose_last_comment_matches(monkeypatch, cap
 def test_gh_search_overfetches_and_stops_checking_once_limit_matched(monkeypatch) -> None:
     list_cmds: list[dict] = []
     graphql_calls: list[dict] = []
-    gh = _fake_gh(monkeypatch, _gh_issues(20), {i: "@claude" for i in range(1, 21)}, graphql_calls, list_cmds)
+    gh = _fake_gh(monkeypatch, _gh_issues(20), dict.fromkeys(range(1, 21), "@claude"), graphql_calls, list_cmds)
 
     items = gh_issue.search(gh, "o", "r", [], None, 2, comment_filter=last_comment_filter("claude"))
 
@@ -215,7 +215,7 @@ def test_ado_search_org_wide_checks_comments_in_the_items_own_project() -> None:
 
 def test_gh_search_scan_limit_widens_the_scanned_pool_but_not_the_result(monkeypatch) -> None:
     list_cmds: list[dict] = []
-    gh = _fake_gh(monkeypatch, _gh_issues(30), {i: "@Claude hi" for i in range(1, 31)}, list_cmds=list_cmds)
+    gh = _fake_gh(monkeypatch, _gh_issues(30), dict.fromkeys(range(1, 31), "@Claude hi"), list_cmds=list_cmds)
 
     items = gh_issue.search(gh, "o", "r", [], None, 1, comment_filter=lambda c: True, scan_limit=5)
 

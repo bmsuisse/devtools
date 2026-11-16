@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 
-from .gitrepo import AdoRemote, GitHubRemote
+from bmsdna.devtools.gitrepo import AdoRemote, GitHubRemote
 
 PR_AVAILABLE_LABEL = "pr-available"
 

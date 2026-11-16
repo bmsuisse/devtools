@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from .bdt_config import load_bdt_table
+from bmsdna.devtools.bdt_config import load_bdt_table
 
 REQUIRED_KEYS = ("webapp", "resource_group")
 

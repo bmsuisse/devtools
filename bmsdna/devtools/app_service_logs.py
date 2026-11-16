@@ -17,7 +17,7 @@ from urllib.parse import quote, urlparse
 
 import requests
 
-from . import azure_arm
+from bmsdna.devtools import azure_arm
 
 # Matches common error/warning markers across granian, uvicorn, and python tracebacks.
 ERROR_RE = re.compile(r"\b(ERROR|CRITICAL|WARNING|Traceback|Exception|\b[45]\d\d\b|FAILED|FATAL)\b")

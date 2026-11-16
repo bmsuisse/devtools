@@ -10,8 +10,8 @@ import re
 import tomllib
 from pathlib import Path
 
-from .bdt_config import find_pyproject
-from .lint_findings import Finding
+from bmsdna.devtools.bdt_config import find_pyproject
+from bmsdna.devtools.lint_findings import Finding
 
 _REQUIRED_DEPENDENCIES = ("ty", "ruff", "pytest")
 _DEP_NAME_RE = re.compile(r"[A-Za-z0-9_.-]+")

@@ -13,8 +13,8 @@ from urllib.parse import quote
 
 import requests
 
-from ..cli_tools import HTTP_TIMEOUT_SECS
-from .versions import Ecosystem
+from bmsdna.devtools.cli_tools import HTTP_TIMEOUT_SECS
+from bmsdna.devtools.deps.versions import Ecosystem
 
 OSV_URL = "https://api.osv.dev"
 KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"

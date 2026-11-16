@@ -10,11 +10,18 @@ from typing import Annotated
 
 import typer
 
-from .advisories import DEFAULT_COOLDOWN_DAYS, ScanResult, scan
-from .cooldown import CooldownResult, changed_packages, check
-from .lockfiles import LockedPackage, LockfileContent, LockfileError, Unsupported, find_lockfiles, read_lockfile
-from .osv import DataError, OsvClient
-from .versions import ECOSYSTEMS, VersionError, normalize_name, spec_matches
+from bmsdna.devtools.deps.advisories import DEFAULT_COOLDOWN_DAYS, ScanResult, scan
+from bmsdna.devtools.deps.cooldown import CooldownResult, changed_packages, check
+from bmsdna.devtools.deps.lockfiles import (
+    LockedPackage,
+    LockfileContent,
+    LockfileError,
+    Unsupported,
+    find_lockfiles,
+    read_lockfile,
+)
+from bmsdna.devtools.deps.osv import DataError, OsvClient
+from bmsdna.devtools.deps.versions import ECOSYSTEMS, VersionError, normalize_name, spec_matches
 
 deps_app = typer.Typer(
     name="deps",

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
 
-from .lint_findings import Finding
+from bmsdna.devtools.lint_findings import Finding
 
 RULE_HTTP = "ts-handwired-http"
 RULE_MODEL = "ts-handwired-model"

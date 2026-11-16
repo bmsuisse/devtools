@@ -9,9 +9,9 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
-from .azure_auth import get_azure_token
-from .pr_cancel import one_line
-from .gitrepo import AdoRemote, current_remote
+from bmsdna.devtools.azure_auth import get_azure_token
+from bmsdna.devtools.gitrepo import AdoRemote, current_remote
+from bmsdna.devtools.pr_cancel import one_line
 
 # Well-known Azure DevOps resource ID; `<id>/.default` is its AAD scope.
 ADO_RESOURCE_ID = "499b84ac-1321-427f-aa17-267ca6975798"
@@ -49,7 +49,7 @@ def _remote_org() -> str | None:
     outside a checkout)."""
     try:
         remote = current_remote()
-    except Exception:  # noqa: BLE001 -- not a git checkout / unknown remote: just no org to name
+    except Exception:
         return None
     return remote.org if isinstance(remote, AdoRemote) else None
 
@@ -166,7 +166,7 @@ def _check_auth_hook(pat_used: bool):
                 raise error
 
             # replaces the generic "401 Client Error: Unauthorized for url" `raise_for_status` would raise
-            setattr(response, "raise_for_status", raise_for_status)
+            response.raise_for_status = raise_for_status
         return response
 
     return hook

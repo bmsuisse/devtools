@@ -10,7 +10,7 @@ from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import pricing
+from bmsdna.devtools.usage import pricing
 
 if TYPE_CHECKING:
     import duckdb
@@ -128,13 +128,12 @@ def assign_phases(con: duckdb.DuckDBPyConnection, scope: str) -> None:
                 phase, started = "setup", True
             once = None
             for ph, kind in sorted(markers.get(mid, []), key=lambda m: KIND_RANK[m[1]]):
-                if kind == "skill" and phase not in INACTIVE_PHASES:
-                    phase = ph
-                elif kind == "review_agent" and phase not in INACTIVE_PHASES and phase not in REVIEW_PHASES:
-                    phase = ph
-                elif kind in ("cmd", "edit") and started:
-                    phase = ph
-                elif kind == "soft" and started and phase != "design_review":
+                if (
+                    (kind == "skill" and phase not in INACTIVE_PHASES)
+                    or (kind == "review_agent" and phase not in INACTIVE_PHASES and phase not in REVIEW_PHASES)
+                    or (kind in ("cmd", "edit") and started)
+                    or (kind == "soft" and started and phase != "design_review")
+                ):
                     phase = ph
                 elif kind == "once" and started:
                     once = ph

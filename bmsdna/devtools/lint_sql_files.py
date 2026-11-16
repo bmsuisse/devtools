@@ -28,7 +28,7 @@ from collections.abc import Iterable
 from fnmatch import fnmatch
 from pathlib import Path
 
-from .lint_findings import Finding
+from bmsdna.devtools.lint_findings import Finding
 
 RULE = "sql-file-unreferenced"
 RULE_UNPARSEABLE = "sql-check-python-unparseable"

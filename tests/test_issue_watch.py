@@ -10,10 +10,10 @@ from bmsdna.devtools.issue_watch import (
     follow,
     format_comment,
     html_to_text,
-    strip_hidden,
-    truncate_body,
     poll_until,
+    strip_hidden,
     to_comments,
+    truncate_body,
     watch,
 )
 

@@ -6,7 +6,7 @@ from __future__ import annotations
 import functools
 import sys
 
-from .cli_tools import CLI_TIMEOUT_SECS
+from bmsdna.devtools.cli_tools import CLI_TIMEOUT_SECS
 
 
 @functools.cache

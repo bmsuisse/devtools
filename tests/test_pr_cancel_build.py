@@ -11,7 +11,7 @@ from bmsdna.devtools import pr_build, pr_cancel, pr_info
 from bmsdna.devtools.cli import app
 from bmsdna.devtools.cli_tools import AgentSession
 from bmsdna.devtools.gitrepo import AdoRemote, GitHubRemote
-from tests.test_gh_pr import FAILED_CHECK_RUN, COMPLETED_SUCCESS_CHECK_RUN, FakeGH
+from tests.test_gh_pr import COMPLETED_SUCCESS_CHECK_RUN, FAILED_CHECK_RUN, FakeGH
 
 REMOTE = AdoRemote(org="myorg", project="MyProj", repo="myrepo")
 PR = {"pullRequestId": 42, "title": "feat", "sourceRefName": "refs/heads/feature-x"}

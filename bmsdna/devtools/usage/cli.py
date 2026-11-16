@@ -9,7 +9,7 @@ from pathlib import Path
 
 import typer
 
-from . import pricing
+from bmsdna.devtools.usage import pricing
 
 usage_app = typer.Typer(
     name="usage",
@@ -85,7 +85,7 @@ def analyze(
     except ValueError as e:
         raise typer.BadParameter(str(e), param_hint="--price") from None
     duckdb = require_duckdb()
-    from . import pipeline
+    from bmsdna.devtools.usage import pipeline
 
     data_dir = default_data_dir()
     db_path = Path(db).expanduser() if db else data_dir / "profile.duckdb"
@@ -128,7 +128,7 @@ def analyze(
             file=sys.stderr,
         )
     if not no_report:
-        from . import report
+        from bmsdna.devtools.usage import report
 
         out_dir = Path(out).expanduser() if out else db_path.parent
         print(f"Report: {report.write_report(con, out_dir)}", file=sys.stderr)

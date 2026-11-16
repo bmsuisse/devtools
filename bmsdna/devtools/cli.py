@@ -13,7 +13,7 @@ import uuid
 import webbrowser
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
@@ -21,46 +21,49 @@ import requests
 import typer
 from pgdevkit.testdb import constants as pgdevkit_constants
 
-from . import ci_plan_env
-from . import (
+from bmsdna.devtools import (
     ado_issue,
     agent_mentions,
-    api_usage as api_usage_mod,
     app_service_logs,
-    commit as commit_mod,
-    dead_code as dead_code_mod,
-)
-from . import env_config
-from . import env_files as env_files_mod
-from . import find_repo as find_repo_mod
-from . import issue_do as issue_do_mod
-from . import issue_watch as issue_watch_mod
-from . import gh_issue, gh_pr
-from . import business_user as business_user_mod
-from . import issue_show as issue_show_mod
-from . import find_injection as find_injection_mod
-from . import lint as lint_mod
-from . import logs as logs_mod
-from . import translate as translate_mod
-from . import (
+    ci_plan_env,
+    env_config,
+    gh_issue,
+    gh_pr,
     pr_build,
     pr_cancel,
-    pr_info as pr_info_mod,
     pr_issue_link,
+    pr_labels,
     pr_merge_defaults,
     pr_ref,
-    pr_labels,
-    pull as pull_mod,
-    worktree as worktree_mod,
 )
-from .ado_auth import AdoAuthError, ado_session, auth_header
-from .bdt_config import find_pyproject, load_bdt_table
-from .cli_tools import CLI_TIMEOUT_SECS, EXIT_WAIT_TIMEOUT, detect_agent_session, limit_by_enclosing_timeout, require_gh
-from .github_api import GitHubClient
-from .pr_create_args import PrCreateArgsError, extract_labels, parse_pr_create_args, resolve_body, unsupported_notes
-from .deps.cli import deps_app
-from .usage.cli import usage_app
-from .gitrepo import (
+from bmsdna.devtools import api_usage as api_usage_mod
+from bmsdna.devtools import business_user as business_user_mod
+from bmsdna.devtools import commit as commit_mod
+from bmsdna.devtools import dead_code as dead_code_mod
+from bmsdna.devtools import env_files as env_files_mod
+from bmsdna.devtools import find_injection as find_injection_mod
+from bmsdna.devtools import find_repo as find_repo_mod
+from bmsdna.devtools import issue_do as issue_do_mod
+from bmsdna.devtools import issue_show as issue_show_mod
+from bmsdna.devtools import issue_watch as issue_watch_mod
+from bmsdna.devtools import lint as lint_mod
+from bmsdna.devtools import logs as logs_mod
+from bmsdna.devtools import pr_info as pr_info_mod
+from bmsdna.devtools import pull as pull_mod
+from bmsdna.devtools import translate as translate_mod
+from bmsdna.devtools import worktree as worktree_mod
+from bmsdna.devtools.ado_auth import AdoAuthError, ado_session, auth_header
+from bmsdna.devtools.bdt_config import find_pyproject, load_bdt_table
+from bmsdna.devtools.cli_tools import (
+    CLI_TIMEOUT_SECS,
+    EXIT_WAIT_TIMEOUT,
+    detect_agent_session,
+    limit_by_enclosing_timeout,
+    require_gh,
+)
+from bmsdna.devtools.deps.cli import deps_app
+from bmsdna.devtools.github_api import GitHubClient
+from bmsdna.devtools.gitrepo import (
     AdoRemote,
     GitHubRemote,
     NotAzureDevOpsRemoteError,
@@ -72,7 +75,15 @@ from .gitrepo import (
     origin_url,
     parse_remote,
 )
-from .lint_findings import render_findings
+from bmsdna.devtools.lint_findings import render_findings
+from bmsdna.devtools.pr_create_args import (
+    PrCreateArgsError,
+    extract_labels,
+    parse_pr_create_args,
+    resolve_body,
+    unsupported_notes,
+)
+from bmsdna.devtools.usage.cli import usage_app
 
 # Non-ASCII output (checkmarks, en-dashes in ADO project names, etc.) needs a
 # UTF-8 stream — the default Windows console codepage isn't UTF-8, and would
@@ -1304,7 +1315,7 @@ def issue_search(
     if take:
         search_extra["scan_limit"] = limit
         limit = 1
-    since = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%Y-%m-%d") if since_days > 0 else None
+    since = (datetime.now(UTC) - timedelta(days=since_days)).strftime("%Y-%m-%d") if since_days > 0 else None
     tags_or_labels = _merge_tags_and_labels(tag, label) or []
 
     # --org/--github-org are only ever consulted as a *fallback*, when `current_remote()` itself
@@ -2347,7 +2358,7 @@ def list_repo_cmd(
 
 @cleanup_app.command("worktrees")
 def cleanup_worktrees(
-    root: Path = typer.Argument(Path("."), help="Root folder to scan for git repositories (recursively)"),
+    root: Path = typer.Argument(Path(), help="Root folder to scan for git repositories (recursively)"),
     remote: str = typer.Option(
         "origin",
         "--remote",
@@ -2375,7 +2386,7 @@ def cleanup_worktrees(
 
 @cleanup_app.command("orphaned-dbs")
 def cleanup_orphaned_dbs(
-    root: Path = typer.Argument(Path("."), help="Root folder to scan for git repositories (recursively)"),
+    root: Path = typer.Argument(Path(), help="Root folder to scan for git repositories (recursively)"),
     include_caution: bool = typer.Option(
         False,
         "--include-caution",
@@ -2400,7 +2411,7 @@ def cleanup_orphaned_dbs(
 @cleanup_app.command("db")
 def cleanup_db(
     root: Path = typer.Argument(
-        Path("."), help="Worktree/repo whose own pgdevkit test DB(s) to drop (default: current directory)"
+        Path(), help="Worktree/repo whose own pgdevkit test DB(s) to drop (default: current directory)"
     ),
     confirm: bool = typer.Option(False, "--confirm", help="Drop without an interactive confirmation prompt"),
     pg_host: str = _PG_HOST_OPTION,
@@ -2419,7 +2430,7 @@ def cleanup_db(
 
 @cleanup_app.command("worktree")
 def cleanup_worktree(
-    path: Path = typer.Argument(Path("."), help="Worktree to remove (default: current directory)"),
+    path: Path = typer.Argument(Path(), help="Worktree to remove (default: current directory)"),
     keep_db: bool = typer.Option(
         False, "--keep-db", help="Don't drop this worktree's pgdevkit test DB(s) along with it"
     ),

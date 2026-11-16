@@ -17,8 +17,8 @@ import sys
 from fnmatch import fnmatchcase
 from pathlib import Path
 
-from .bdt_config import load_bdt_table
-from .pr_create_args import Host, PrCreateOptions
+from bmsdna.devtools.bdt_config import load_bdt_table
+from bmsdna.devtools.pr_create_args import Host, PrCreateOptions
 
 DEFAULT_LONG_LIVED_BRANCHES = ("dev", "develop", "test", "main", "master", "release/*")
 

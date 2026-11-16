@@ -30,8 +30,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from .cli_tools import CLI_TIMEOUT_SECS
-from .gitrepo import current_branch as _current_branch
+from bmsdna.devtools.cli_tools import CLI_TIMEOUT_SECS
+from bmsdna.devtools.gitrepo import current_branch as _current_branch
 
 # `git pull` can legitimately take longer than a metadata call (`ls-remote`,
 # `rev-parse`) -- an actual fetch+merge of a large repo over a slow network --

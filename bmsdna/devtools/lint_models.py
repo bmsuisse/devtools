@@ -11,7 +11,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from .lint_findings import Finding
+from bmsdna.devtools.lint_findings import Finding
 
 DEFAULT_FIELD_THRESHOLD = 5
 DEFAULT_BASE_CLASS_NAMES = frozenset({"BaseModel", "PostgresTableModel"})

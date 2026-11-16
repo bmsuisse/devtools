@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from .cli_tools import CLI_TIMEOUT_SECS, HTTP_TIMEOUT_SECS
+from bmsdna.devtools.cli_tools import CLI_TIMEOUT_SECS, HTTP_TIMEOUT_SECS
 
 API_URL = "https://api.github.com"
 RETRY_ATTEMPTS = 3
@@ -91,7 +91,7 @@ class GitHubClient:
     def _resolve_repo(self) -> None:
         if self._owner and self._repo:
             return
-        from .gitrepo import parse_github_remote, origin_url
+        from bmsdna.devtools.gitrepo import origin_url, parse_github_remote
 
         remote = parse_github_remote(origin_url())
         self._owner, self._repo = remote.owner, remote.repo

@@ -256,7 +256,7 @@ def test_issue_create_merges_tag_and_label_for_github(monkeypatch) -> None:
         blocked_by=None,
     ):
         captured["labels"] = labels
-        return None
+        return
 
     monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.create", fake_create)
 

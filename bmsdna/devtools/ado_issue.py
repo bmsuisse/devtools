@@ -49,14 +49,14 @@ from urllib.parse import quote
 
 import requests
 
-from .bdt_config import load_bdt_table
-from .business_user import BusinessUserDetector
-from .cli_tools import ensure_agent_session_note
-from .gitrepo import AdoRemote
-from .issue_show import IssueDetails
-from .issue_watch import html_to_text, to_comments
-from .pr_issue_link import PR_AVAILABLE_LABEL
-from .pr_markdown import build_comment_content_html
+from bmsdna.devtools.bdt_config import load_bdt_table
+from bmsdna.devtools.business_user import BusinessUserDetector
+from bmsdna.devtools.cli_tools import ensure_agent_session_note
+from bmsdna.devtools.gitrepo import AdoRemote
+from bmsdna.devtools.issue_show import IssueDetails
+from bmsdna.devtools.issue_watch import html_to_text, to_comments
+from bmsdna.devtools.pr_issue_link import PR_AVAILABLE_LABEL
+from bmsdna.devtools.pr_markdown import build_comment_content_html
 
 COMMENTS_API_VERSION = "7.1-preview.4"
 

@@ -8,8 +8,8 @@ from pathlib import Path
 
 import requests
 
-from . import ci_plan
-from .ci_plan import BranchFlowError, Context
+from bmsdna.devtools import ci_plan
+from bmsdna.devtools.ci_plan import BranchFlowError, Context
 
 PR_MERGE_REF = re.compile(r"refs/pull/(\d+)/merge")
 HTTP_TIMEOUT_SECS = 20

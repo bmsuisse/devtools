@@ -11,8 +11,9 @@ from urllib.parse import quote
 
 import requests
 
-from .ado_auth import AdoAuthError, ado_session
-from .cli_tools import (
+from bmsdna.devtools import pr_cancel, pr_drift
+from bmsdna.devtools.ado_auth import AdoAuthError, ado_session
+from bmsdna.devtools.cli_tools import (
     EXIT_NEEDS_APPROVAL,
     HTTP_TIMEOUT_SECS,
     PollHeartbeat,
@@ -23,11 +24,10 @@ from .cli_tools import (
     is_claude_code,
     status_rerun_cmd,
 )
-from .gitrepo import AdoRemote, current_branch, head_commit_subject
-from .pr_create_args import PrCreateOptions
-from . import pr_cancel, pr_drift
-from .pr_choice import PrCandidate, choose_pr
-from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
+from bmsdna.devtools.gitrepo import AdoRemote, current_branch, head_commit_subject
+from bmsdna.devtools.pr_choice import PrCandidate, choose_pr
+from bmsdna.devtools.pr_create_args import PrCreateOptions
+from bmsdna.devtools.pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 # Matches an ISO 8601 timestamp at the start of a log line, e.g. 2024-03-21T15:01:23.1234567Z
 TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*")

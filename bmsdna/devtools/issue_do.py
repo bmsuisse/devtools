@@ -15,9 +15,9 @@ import sys
 
 import requests
 
-from .ado_issue import _base_url
-from .github_api import GitHubClient
-from .gitrepo import AdoRemote
+from bmsdna.devtools.ado_issue import _base_url
+from bmsdna.devtools.github_api import GitHubClient
+from bmsdna.devtools.gitrepo import AdoRemote
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 TAKEN_PREFIX = "Taken by"

@@ -9,10 +9,10 @@ derivable from the git remote the way Azure DevOps org/project/repo is.
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from urllib.parse import quote
 
-from . import azure_arm
+from bmsdna.devtools import azure_arm
 
 SEVERITY_MAP = {"verbose": 0, "information": 1, "warning": 2, "error": 3, "critical": 4}
 
@@ -156,7 +156,7 @@ def print_logs(app_insights: str, resource_group: str, minutes: int, level: str,
 
     print(f"--- {len(rows)} entries ---")
     for row in rows:
-        ts = datetime.fromisoformat(row["timestamp"].rstrip("Z")).replace(tzinfo=timezone.utc).strftime("%H:%M:%S")
+        ts = datetime.fromisoformat(row["timestamp"].rstrip("Z")).replace(tzinfo=UTC).strftime("%H:%M:%S")
         line = f"{ts} [{row['lvl']}] {row['msg']}{row['exc']}"
         if no_color:
             print(line)

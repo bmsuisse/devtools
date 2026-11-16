@@ -32,8 +32,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from .bdt_config import load_bdt_table
-from .lint_findings import Finding
+from bmsdna.devtools.bdt_config import load_bdt_table
+from bmsdna.devtools.lint_findings import Finding
 
 # This module must import cleanly without sqlglot installed -- require_sqlglot() is what gives
 # a clear error (with an install hint), not an ImportError at `bdt`'s own startup (cli.py
@@ -105,7 +105,7 @@ def load_sql_functions(root: Path | None = None) -> frozenset[str]:
     return frozenset(name.strip().rpartition(".")[2] for name in configured)
 
 
-def parse_sql_text(text: str, dialect: str = "postgres") -> "exp.Expression | None":
+def parse_sql_text(text: str, dialect: str = "postgres") -> exp.Expression | None:
     """`text` parsed as one statement, or None if it fails to parse or doesn't parse as one of
     `_ACCEPTED_STATEMENT_TYPES` -- the gate that makes every rule below "pretty sure it's really
     SQL" before applying (see module docstring)."""
@@ -394,14 +394,14 @@ if exp is not None:
     }
 
 
-def _parse_any_dialect(text: str, databricks: bool) -> "exp.Expression | None":
+def _parse_any_dialect(text: str, databricks: bool) -> exp.Expression | None:
     parsed = parse_sql_text(text)
     if parsed is None and databricks:
         parsed = parse_sql_text(text, "databricks")
     return parsed
 
 
-def _parse_probe_text(text: str, databricks: bool = False) -> "exp.Expression | None":
+def _parse_probe_text(text: str, databricks: bool = False) -> exp.Expression | None:
     """`parse_sql_text` for text with `_PROBE_PLACEHOLDER` standing in for dynamic fragments: the placeholder
     as an identifier first, then (see `_PROBE_SLOT_VARIANTS`) every fragment as nothing/an assignment -- the
     latter only when the literal text carries the statement's own keyword (`_VARIANT_REQUIRED_KEYWORD`)."""
@@ -440,7 +440,7 @@ def _injection_finding(
     return [Finding(path, lineno, rule, f"SQL built with {how} -- injection risk. {fix}")]
 
 
-def _complexity_findings(parsed: "exp.Expression", text: str, path: Path, lineno: int) -> list[Finding]:
+def _complexity_findings(parsed: exp.Expression, text: str, path: Path, lineno: int) -> list[Finding]:
     findings: list[Finding] = []
     line_count = len([line for line in text.splitlines() if line.strip()])
     has_complex_construct = (

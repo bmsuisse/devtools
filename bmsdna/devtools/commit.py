@@ -13,7 +13,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 
-from .bdt_config import load_bdt_table
+from bmsdna.devtools.bdt_config import load_bdt_table
 
 IS_SANDBOX_ENV_VAR = "IS_BMS_AI_SANDBOX"
 

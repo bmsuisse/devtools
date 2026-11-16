@@ -25,8 +25,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from . import pr_cancel, pr_issue_link
-from .cli_tools import (
+from bmsdna.devtools import pr_cancel, pr_issue_link
+from bmsdna.devtools.cli_tools import (
     CLI_TIMEOUT_SECS,
     EXIT_NEEDS_APPROVAL,
     PollHeartbeat,
@@ -37,12 +37,18 @@ from .cli_tools import (
     is_claude_code,
     status_rerun_cmd,
 )
-from .gh_args import open_in_browser
-from .github_api import GitHubClient
-from .gitrepo import current_branch
-from .pr_choice import PrCandidate, choose_pr
-from .pr_create_args import PrCreateArgsError, PrCreateOptions, parse_pr_create_args, resolve_body, unsupported_notes
-from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
+from bmsdna.devtools.gh_args import open_in_browser
+from bmsdna.devtools.github_api import GitHubClient
+from bmsdna.devtools.gitrepo import current_branch
+from bmsdna.devtools.pr_choice import PrCandidate, choose_pr
+from bmsdna.devtools.pr_create_args import (
+    PrCreateArgsError,
+    PrCreateOptions,
+    parse_pr_create_args,
+    resolve_body,
+    unsupported_notes,
+)
+from bmsdna.devtools.pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 # `get_pr(fields=...)` selects keys of the dict one GraphQL query returns (see `_PR_QUERY`); `id` is the node id
 # (needed for the draft mutations), `body` the PR description.
@@ -905,7 +911,7 @@ def create(
                 print(f"  {key}: {value}")
         return 0, None
 
-    from . import gh_issue  # lazy: gh_issue imports this module
+    from bmsdna.devtools import gh_issue  # lazy: gh_issue imports this module
 
     try:
         assignees = gh_issue.resolve_assignees(gh, opts.assignees) if opts.assignees else []

@@ -15,8 +15,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .cli_tools import CLI_TIMEOUT_SECS
-from .gitrepo import AdoRemote, UnknownRemoteError, current_remote
+from bmsdna.devtools.cli_tools import CLI_TIMEOUT_SECS
+from bmsdna.devtools.gitrepo import AdoRemote, UnknownRemoteError, current_remote
 
 # Fetching objects over the network is slower than the metadata calls `CLI_TIMEOUT_SECS` is meant for.
 FETCH_TIMEOUT_SECS = CLI_TIMEOUT_SECS * 4

@@ -10,8 +10,8 @@ from typing import Any
 
 import requests
 
-from .azure_auth import get_azure_token
-from .cli_tools import HTTP_TIMEOUT_SECS
+from bmsdna.devtools.azure_auth import get_azure_token
+from bmsdna.devtools.cli_tools import HTTP_TIMEOUT_SECS
 
 ARM_URL = "https://management.azure.com"
 ARM_SCOPE = f"{ARM_URL}/.default"

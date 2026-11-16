@@ -22,8 +22,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import pull as pull_mod
-from . import testdb
+from bmsdna.devtools import pull as pull_mod
+from bmsdna.devtools import testdb
 
 # Heavy/vendor/build directories that are never themselves a separate repo
 # worth discovering when scanning for repos under a root. Dotdirs (.venv,

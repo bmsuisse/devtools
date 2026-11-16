@@ -59,6 +59,7 @@ pythonpath = ["."]
 line-length = 120
 indent-width = 4
 target-version = "py314"
+namespace-packages = ["bmsdna"]  # no bmsdna/__init__.py: imports are bmsdna.devtools.*, not devtools.*
 extend-exclude = ["*.md", ".worktrees", ".claude"]
 
 [tool.ruff.format]

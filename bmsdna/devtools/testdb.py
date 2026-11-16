@@ -49,8 +49,8 @@ from pgdevkit.testdb import constants as pgdevkit_constants
 from pgdevkit.testdb.config import load_config
 from pgdevkit.testdb.naming import slugify
 
-from .bdt_config import load_bdt_table
-from .cli_tools import require_psql
+from bmsdna.devtools.bdt_config import load_bdt_table
+from bmsdna.devtools.cli_tools import require_psql
 
 # A DB name ending in one of these (after stripping any configured
 # `extra_db_suffixes` entry) looks like it's named after a bare branch
@@ -163,8 +163,7 @@ def is_caution_db(db_name: str, project_name: str, sibling_suffixes: list[str]) 
         return False
     tail = db_name[len(prefix) :]
     for suffix in sibling_suffixes:
-        if tail.endswith(suffix):
-            tail = tail[: -len(suffix)]
+        tail = tail.removesuffix(suffix)
     return tail in CAUTION_BRANCH_NAMES
 
 

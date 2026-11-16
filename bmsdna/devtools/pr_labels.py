@@ -31,9 +31,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from . import ci_plan
-from .bdt_config import load_bdt_table
-
+from bmsdna.devtools import ci_plan
+from bmsdna.devtools.bdt_config import load_bdt_table
 
 TEST_AREA_GROUP = "test_area"
 

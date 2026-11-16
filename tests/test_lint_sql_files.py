@@ -3,8 +3,8 @@ from pathlib import Path
 import pytest
 
 from bmsdna.devtools import dead_code
-from bmsdna.devtools.bdt_config import load_bdt_table
 from bmsdna.devtools.api_usage import ApiUsageError
+from bmsdna.devtools.bdt_config import load_bdt_table
 from bmsdna.devtools.lint_sql_files import check_unreferenced_sql_files
 
 

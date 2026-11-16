@@ -26,7 +26,7 @@ from pathlib import Path
 
 import tomli_w
 
-from .bdt_config import find_pyproject, load_bdt_table
+from bmsdna.devtools.bdt_config import find_pyproject, load_bdt_table
 
 SCAN_SUFFIXES = {".ts", ".tsx", ".js", ".jsx", ".vue"}
 JINJA_SUFFIXES = {".jinja2", ".j2", ".html"}

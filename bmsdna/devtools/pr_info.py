@@ -12,11 +12,11 @@ from dataclasses import asdict, dataclass, field
 
 import requests
 
-from .ado_auth import AdoAuthError
-from .pr_cancel import Reason, Session
-from . import ado_issue, gh_pr, pr_build, pr_issue_link
-from .github_api import GitHubClient
-from .gitrepo import AdoRemote, GitHubRemote
+from bmsdna.devtools import ado_issue, gh_pr, pr_build, pr_issue_link
+from bmsdna.devtools.ado_auth import AdoAuthError
+from bmsdna.devtools.github_api import GitHubClient
+from bmsdna.devtools.gitrepo import AdoRemote, GitHubRemote
+from bmsdna.devtools.pr_cancel import Reason, Session
 
 # `build` values: aggregate of every check/pipeline on the PR. "unknown" means the state couldn't
 # be determined (Azure DevOps request failed), as opposed to "none": nothing ran at all.

@@ -44,10 +44,10 @@ from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
 
-from . import _api_dump
-from .lint import _DEFAULT_EXCLUDE_DIR_NAMES, _iter_files
-from .lint_findings import Finding
-from .lint_typescript import _mask, is_excluded_ts_file
+from bmsdna.devtools import _api_dump
+from bmsdna.devtools.lint import _DEFAULT_EXCLUDE_DIR_NAMES, _iter_files
+from bmsdna.devtools.lint_findings import Finding
+from bmsdna.devtools.lint_typescript import _mask, is_excluded_ts_file
 
 RULE = "api-route-uncalled"
 RULE_STALE_BASELINE = "api-route-baseline-stale"
@@ -74,7 +74,9 @@ _TEMPLATE_START_RE = re.compile(r"`(?=(?:\$\{[^}`\n]*\})*/)")
 _FETCH_METHOD_RE = re.compile(r"\.(GET|POST|PUT|PATCH|DELETE)\s*(?:<[^()]*?>)?\(\s*$")
 _IDENT_RE = re.compile(r"[A-Za-z_$][\w$]*")
 _SDK_FN_RE = re.compile(r"export const (\w+) = ")
-_SDK_URL_RE = re.compile(r"""\.(get|post|put|patch|delete|head|options)\b[^;]{0,4000}?url:\s*["']([^"']+)["']""", re.S)
+_SDK_URL_RE = re.compile(
+    r"""\.(get|post|put|patch|delete|head|options)\b[^;]{0,4000}?url:\s*["']([^"']+)["']""", re.DOTALL
+)
 
 
 class ApiUsageError(Exception):
@@ -261,7 +263,7 @@ def read_sdk_functions(directory: Path) -> dict[str, tuple[str, str]]:
         if "sdk.gen.ts" not in filenames:
             continue
         text = Path(dirpath, "sdk.gen.ts").read_text(encoding="utf-8", errors="ignore")
-        for chunk in re.split(r"(?=^export const \w+ = )", text, flags=re.M):
+        for chunk in re.split(r"(?=^export const \w+ = )", text, flags=re.MULTILINE):
             name, url = _SDK_FN_RE.match(chunk), _SDK_URL_RE.search(chunk)
             if name and url:
                 functions[name.group(1)] = (url.group(1).upper(), normalize_path(url.group(2)))

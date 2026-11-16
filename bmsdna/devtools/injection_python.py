@@ -11,7 +11,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from .lint_findings import Finding
+from bmsdna.devtools.lint_findings import Finding
 
 _SAFE_YAML_LOADERS = frozenset({"SafeLoader", "CSafeLoader", "BaseLoader"})
 _MARKUP_FUNCS = frozenset({"Markup", "mark_safe", "format_html_join"})

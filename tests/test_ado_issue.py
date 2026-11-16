@@ -3,10 +3,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from bmsdna.devtools.ado_issue import (
-    add_pr_available_tag,
-    add_tag,
     BLOCKED_BY_REL,
     PARENT_REL,
+    add_pr_available_tag,
+    add_tag,
     build_attach_ops,
     build_create_ops,
     build_relation_ops,

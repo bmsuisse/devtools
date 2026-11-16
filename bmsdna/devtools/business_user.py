@@ -21,7 +21,7 @@ from urllib.parse import quote
 
 import requests
 
-from .gitrepo import AdoRemote
+from bmsdna.devtools.gitrepo import AdoRemote
 
 DEFAULT_COMMIT_DEPTH = 1000
 STAKEHOLDER = "stakeholder"

@@ -24,15 +24,15 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from .bdt_config import load_bdt_table
-from .cli_tools import ensure_agent_session_note
-from .github_api import GitHubClient
-from .gh_args import Flag, open_in_browser, parse_flags, read_body_file
-from .gh_pr import push_assets
-from .issue_show import IssueDetails
-from .issue_watch import to_comments
-from .pr_issue_link import PR_AVAILABLE_LABEL
-from .pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
+from bmsdna.devtools.bdt_config import load_bdt_table
+from bmsdna.devtools.cli_tools import ensure_agent_session_note
+from bmsdna.devtools.gh_args import Flag, open_in_browser, parse_flags, read_body_file
+from bmsdna.devtools.gh_pr import push_assets
+from bmsdna.devtools.github_api import GitHubClient
+from bmsdna.devtools.issue_show import IssueDetails
+from bmsdna.devtools.issue_watch import to_comments
+from bmsdna.devtools.pr_issue_link import PR_AVAILABLE_LABEL
+from bmsdna.devtools.pr_markdown import build_attachments_section, build_comment_content, build_screenshots_section
 
 _COMMENT_ID_RE = re.compile(r"#issuecomment-(\d+)")
 

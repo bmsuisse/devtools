@@ -11,9 +11,9 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from .lockfiles import LockedPackage, LockfileContent, LockfileError, Unsupported, read_lockfile
-from .osv import DataError
-from .versions import Ecosystem, normalize_name
+from bmsdna.devtools.deps.lockfiles import LockedPackage, LockfileContent, LockfileError, Unsupported, read_lockfile
+from bmsdna.devtools.deps.osv import DataError
+from bmsdna.devtools.deps.versions import Ecosystem, normalize_name
 
 
 @dataclass(frozen=True, slots=True)

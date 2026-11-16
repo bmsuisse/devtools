@@ -11,8 +11,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .lint_findings import Finding
-from .lint_typescript import _line_of, _mask
+from bmsdna.devtools.lint_findings import Finding
+from bmsdna.devtools.lint_typescript import _line_of, _mask
 
 FRONTEND_SUFFIXES = (
     ".ts",

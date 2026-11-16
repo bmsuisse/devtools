@@ -3,8 +3,8 @@
 import json
 
 import pytest
-from fake_github import FakeGitHub
 import requests
+from fake_github import FakeGitHub
 from typer.testing import CliRunner
 
 from bmsdna.devtools import pr_info, pr_ref

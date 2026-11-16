@@ -35,10 +35,10 @@ from urllib.parse import quote, unquote, urlparse
 
 import requests
 
-from .ado_auth import auth_header
-from .cli_tools import HTTP_TIMEOUT_SECS, require_gh
-from .github_api import GitHubClient, resolve_token
-from .worktree import find_repos
+from bmsdna.devtools.ado_auth import auth_header
+from bmsdna.devtools.cli_tools import HTTP_TIMEOUT_SECS, require_gh
+from bmsdna.devtools.github_api import GitHubClient, resolve_token
+from bmsdna.devtools.worktree import find_repos
 
 T = TypeVar("T")
 

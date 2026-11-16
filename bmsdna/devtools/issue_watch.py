@@ -19,7 +19,7 @@ import time
 from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, replace
 
-from .agent_mentions import mentions_agent
+from bmsdna.devtools.agent_mentions import mentions_agent
 
 # `issue watch` exits with this code when --timeout passed without a (matching) new comment.
 # Deliberately not 1 (an error), 2 (usage error, Click/Typer) or 3 (`pr status --wait`: needs approval).

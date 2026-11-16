@@ -4,8 +4,8 @@ import pytest
 import requests
 from typer.testing import CliRunner
 
-from bmsdna.devtools.cli import app
 from bmsdna.devtools import find_repo as find_repo_mod
+from bmsdna.devtools.cli import app
 from bmsdna.devtools.find_repo import (
     CommitInfo,
     RemoteRepo,
@@ -13,8 +13,8 @@ from bmsdna.devtools.find_repo import (
     find_local,
     find_remote,
     list_local,
-    local_clones_by_web_url,
     list_remote,
+    local_clones_by_web_url,
     readme_summary,
     run,
     run_list,

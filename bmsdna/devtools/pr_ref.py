@@ -11,7 +11,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .gitrepo import AdoRemote, GitHubRemote, NotAzureDevOpsRemoteError, parse_ado_remote
+from bmsdna.devtools.gitrepo import AdoRemote, GitHubRemote, NotAzureDevOpsRemoteError, parse_ado_remote
 
 FORMS = "a number, owner/repo#N (GitHub), project/repo#N or org/project/repo#N (Azure DevOps), or the PR's URL"
 

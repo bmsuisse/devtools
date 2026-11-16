@@ -221,7 +221,7 @@ def test_pr_create_skips_commit_lookup_when_scope_labels_unconfigured(monkeypatc
     """Opt-in: no [tool.bdt.pr.scope_labels] table means no git log call at all,
     not just no label -- so repos that don't configure it see zero behavior change."""
     _github(monkeypatch)
-    monkeypatch.setattr("bmsdna.devtools.cli.pr_labels.scope_labels", lambda: {})
+    monkeypatch.setattr("bmsdna.devtools.cli.pr_labels.scope_labels", dict)
 
     def fail_if_called():
         raise AssertionError("head_commit_subject should not be called when scope_labels is empty")

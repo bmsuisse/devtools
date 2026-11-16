@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
-from .bdt_config import find_pyproject, load_bdt_table
+from bmsdna.devtools.bdt_config import find_pyproject, load_bdt_table
 
 Kind = Literal["full", "none", "areas", "error"]
 OnMissing = Literal["infer", "fail"]

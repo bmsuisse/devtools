@@ -23,9 +23,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
-from .lockfiles import LockedPackage, LockfileContent, Unsupported
-from .osv import AdvisorySource, DataError, PackageQuery
-from .versions import (
+from bmsdna.devtools.deps.lockfiles import LockedPackage, LockfileContent, Unsupported
+from bmsdna.devtools.deps.osv import AdvisorySource, DataError, PackageQuery
+from bmsdna.devtools.deps.versions import (
     Ecosystem,
     SemVer,
     VersionError,

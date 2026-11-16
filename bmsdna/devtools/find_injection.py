@@ -14,24 +14,19 @@ from __future__ import annotations
 
 import os
 import re
-from fnmatch import fnmatch
 import subprocess
 import sys
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path
 
-from .bdt_config import load_bdt_table
-from .injection_frontend import (
-    FRONTEND_SUFFIXES,
-    check_frontend_file,
-    find_csp_weakening,
-    has_csp,
-)
-from .injection_python import check_python_sinks
-from .lint import _DEFAULT_EXCLUDE_DIR_NAMES, _iter_files
-from .lint_findings import Finding, render_findings
-from .lint_sql import check_sql_file, load_sql_functions, require_sqlglot
-from .lint_typescript import DEFAULT_TS_EXCLUDE_DIR_NAMES, is_excluded_ts_file
+from bmsdna.devtools.bdt_config import load_bdt_table
+from bmsdna.devtools.injection_frontend import FRONTEND_SUFFIXES, check_frontend_file, find_csp_weakening, has_csp
+from bmsdna.devtools.injection_python import check_python_sinks
+from bmsdna.devtools.lint import _DEFAULT_EXCLUDE_DIR_NAMES, _iter_files
+from bmsdna.devtools.lint_findings import Finding, render_findings
+from bmsdna.devtools.lint_sql import check_sql_file, load_sql_functions, require_sqlglot
+from bmsdna.devtools.lint_typescript import DEFAULT_TS_EXCLUDE_DIR_NAMES, is_excluded_ts_file
 
 SQL_INJECTION_RULES = frozenset(
     {
@@ -195,8 +190,7 @@ class _ScanFilter:
         self._patterns: list[str] = []
         for entry in exclude:
             entry = entry.replace("\\", "/").strip().strip("/")
-            if entry.startswith("./"):
-                entry = entry[2:]
+            entry = entry.removeprefix("./")
             if not entry:
                 continue
             if "/" not in entry and not _GLOB_CHARS & set(entry):

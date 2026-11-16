@@ -441,7 +441,7 @@ def require_tool(name: str, install_hint: str) -> str:
 
 def require_gh():
     """An authenticated raw-HTTP GitHub client (see `github_api`); exits with a hint when no token is found."""
-    from .github_api import get_client
+    from bmsdna.devtools.github_api import get_client
 
     return get_client()
 
