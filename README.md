@@ -984,8 +984,8 @@ Order of decision, always logged with its reason:
 4. Anything unreadable (label API, change list) runs everything: a missing decision never silently skips tests.
 
 Outputs (Azure Pipelines variables with `isOutput=true`; plain `name=value` lines elsewhere): `runTests`, and per tier
-(`unit`, `e2e`, ...) `<tier>Run`, `<tier>Areas` and `<tier>Paths`, a shell-quoted argument list for the runner (repo-
-relative). A tier you do not configure and split by area (e.g. flat unit tests) is simply gated on `runTests`. For
+(`unit`, `e2e`, ...) `<tier>Run`, `<tier>Areas` and `<tier>Paths`, a shell-quoted argument list for the runner (relative to the
+`pyproject.toml` folder). A tier you do not configure and split by area (e.g. flat unit tests) is simply gated on `runTests`. For
 custom sharding or a runner that does not take paths, use `<tier>Areas` (a space-separated list: keep area names free
 of whitespace if you split it): in folder mode the `<tier>Paths` of a full run
 is the bare tier folder, which may also hold things that are not tests (`.venv`, `test-results`); in glob mode it is the
@@ -1015,26 +1015,10 @@ list of test files either way. A moved file counts as changed under both its old
 Dry run locally: `uv run bdt ci plan --pr-source feat/x --pr-target dev --label test-orders` (or without `--label` to
 see what the changed files select).
 
-### Monorepo: the project in a sub-folder
-
-When the repo holds several projects (`onesales/`, `ccmt/`, ...) next to shared folders (`infra/`, `database/`), run
-`bdt ci plan` in the project's folder, the one with its `pyproject.toml` (`workingDirectory: onesales` in a pipeline).
-The tiers' `dir`, `paths`, `non_code` and the printed `<tier>Paths` are relative to that folder, and so are the changed
-files: a file of the project is `backend/app.py`, one outside it keeps its place as a `../` path. Own or ignore those
-with the tables you already have; any other file outside the project (a shared folder such as `../database/**`)
-still selects everything, like any file no area owns:
-
-```toml
-# onesales/pyproject.toml
-[tool.bdt.ci.plan]
-non_code = ["docs/**", "*.md", "../ccmt/**"]   # another project's files cannot affect this one's tests
-
-[tool.bdt.ci.plan.paths]
-infra = ["../infra/**"]                          # the shared Bicep folder is the area `infra` (label `test-infra`)
-```
-
-The built-in `infra` default only looks for an `infra/` folder inside the project, so a shared one is listed explicitly.
-Nothing changes for a project at the repository root.
+A project in a sub-folder of a monorepo: run the plan and the test runner in that folder (where its `pyproject.toml`
+is). Changed files are matched relative to it, so a file outside is a `../` path: own it with `paths`
+(`infra = ["../infra/**"]`) or ignore it with `non_code` (`["../other-app/**"]`). Any other outside file (a shared
+folder) selects everything.
 
 ## `bdt lint`
 
