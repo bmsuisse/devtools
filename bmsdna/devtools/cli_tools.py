@@ -13,11 +13,13 @@ import math
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from types import FrameType, TracebackType
 from typing import NoReturn
 
 PSQL_INSTALL_HINT = "Install the PostgreSQL client tools (psql): https://www.postgresql.org/download/"
@@ -86,30 +88,100 @@ class PollHeartbeat:
         self._last_print = now
 
 
+# Windows: how long `WaitDeadline.sleep` sleeps at a time, so a stop signal is answered within about that long.
+WINDOWS_SLEEP_SLICE_SECS = 1.0
+
+# What asks a `--wait` loop to stop and report: SIGTERM (what `timeout`, `kill`, `docker stop` and most agent harnesses
+# send first) and, on Windows, where SIGTERM is never delivered by the OS, Ctrl+Break. Windows lacks the rest.
+_STOP_SIGNALS = tuple(sig for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGBREAK", None)) if sig is not None)
+
+
+_SignalHandler = Callable[[int, FrameType | None], object] | int | None  # what `signal.getsignal` returns
+
+
+class _WaitStopped(Exception):
+    """Raised by the stop-signal handler inside `WaitDeadline.sleep` to cut the sleep short."""
+
+
 class WaitDeadline:
     """Optional overall time limit of a `--wait` poll loop (`timeout_secs` of 0 / None = wait forever).
 
     Exists because a caller often can't wait as long as CI takes: an agent's shell tool kills a command
     after a few minutes and throws its output away. Giving up on our own terms lets us report where things
     stand and exit with `EXIT_WAIT_TIMEOUT` so the caller knows to re-run.
+
+    With `stop_on_signal` (use it as a context manager, which puts the previous signal handlers back) a stop signal
+    does the same thing at once: `expired()` turns true and a running `sleep` ends, so the loop reports and exits
+    on its own instead of dying silently. The handler only sets a flag, and a second signal terminates as usual --
+    a loop stuck in a slow request can still be killed.
     """
 
-    def __init__(self, timeout_secs: float | None) -> None:
+    def __init__(self, timeout_secs: float | None, *, stop_on_signal: bool = False) -> None:
         self.timeout_secs = timeout_secs or 0.0
         self._end = time.monotonic() + self.timeout_secs if self.timeout_secs else None
+        self.stopped_by_signal = False
+        self._sleeping = False
+        self._previous_handlers: dict[int, _SignalHandler] = {}
+        if stop_on_signal:
+            for sig in _STOP_SIGNALS:
+                try:
+                    self._previous_handlers[sig] = signal.signal(sig, self._on_stop_signal)
+                except (ValueError, OSError):  # not the main thread (ValueError), or the OS refuses this signal
+                    pass
+
+    def __enter__(self) -> WaitDeadline:
+        return self
+
+    def __exit__(self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None) -> None:
+        self._restore_handlers()
+
+    def _restore_handlers(self) -> None:
+        for sig, previous in self._previous_handlers.items():
+            try:
+                signal.signal(sig, previous if previous is not None else signal.SIG_DFL)
+            except (ValueError, OSError):
+                pass
+        self._previous_handlers.clear()
+
+    def _on_stop_signal(self, signum: int, frame: FrameType | None) -> None:
+        self.stopped_by_signal = True
+        self._restore_handlers()
+        if self._sleeping:
+            raise _WaitStopped
 
     def expired(self) -> bool:
-        return self._end is not None and time.monotonic() >= self._end
+        return self.stopped_by_signal or (self._end is not None and time.monotonic() >= self._end)
 
     def sleep(self, secs: float) -> None:
-        """`time.sleep(secs)`, cut short so the loop wakes up right at the deadline."""
-        time.sleep(secs if self._end is None else max(0.0, min(secs, self._end - time.monotonic())))
+        """`time.sleep(secs)`, cut short so the loop wakes up right at the deadline (or when a stop signal arrives).
+        `_sleeping` goes up before the signal check, so a signal landing anywhere in between still ends the sleep;
+        the outer `try` also covers one landing in the `finally` that puts it back down."""
+        try:
+            self._sleeping = True
+            try:
+                if not self.stopped_by_signal:
+                    self._sleep(secs if self._end is None else max(0.0, min(secs, self._end - time.monotonic())))
+            finally:
+                self._sleeping = False
+        except _WaitStopped:
+            pass
+
+    def _sleep(self, secs: float) -> None:
+        if sys.platform != "win32":
+            time.sleep(secs)
+            return
+        # Windows only runs a signal handler once `time.sleep` returns (it is woken by Ctrl+C alone): in slices, so
+        # a Ctrl+Break is answered within a second instead of after the full sleep
+        end = time.monotonic() + secs
+        while not self.stopped_by_signal and (left := end - time.monotonic()) > 0:
+            time.sleep(min(left, WINDOWS_SLEEP_SLICE_SECS))
 
 
 def status_rerun_cmd(pr_id: int | None, timeout_secs: float) -> str:
     """The command that keeps waiting where a timed-out `pr status --wait` stopped. Pins `--pr-id` to the PR that
     was being watched, so re-running can't resolve to a different PR (e.g. another branch checked out since)."""
-    return f"bdt pr status --pr-id {pr_id} --wait --timeout {timeout_secs:g}" if pr_id else f"bdt pr status --wait --timeout {timeout_secs:g}"
+    cmd = f"bdt pr status --pr-id {pr_id} --wait" if pr_id else "bdt pr status --wait"
+    return f"{cmd} --timeout {timeout_secs:g}" if timeout_secs else cmd
 
 
 def exit_wait_timeout(msg: str, print_details: Callable[[], object], deadline: WaitDeadline, rerun_cmd: str) -> NoReturn:
@@ -118,7 +190,10 @@ def exit_wait_timeout(msg: str, print_details: Callable[[], object], deadline: W
     print(msg)
     print("\nDetails:")
     print_details()
-    print(f"\nStill running after {deadline.timeout_secs:g} s. Re-run `{rerun_cmd}` to keep waiting.")
+    if deadline.stopped_by_signal:
+        print(f"\nTerminated while still running. Re-run `{rerun_cmd}` to keep waiting.")
+    else:
+        print(f"\nStill running after {deadline.timeout_secs:g} s. Re-run `{rerun_cmd}` to keep waiting.")
     sys.exit(EXIT_WAIT_TIMEOUT)
 
 

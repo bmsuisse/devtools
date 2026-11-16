@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import time
 from unittest.mock import MagicMock
 
@@ -14,7 +16,7 @@ import pytest
 from typer.testing import CliRunner
 
 from bmsdna.devtools.cli import app
-from bmsdna.devtools.cli_tools import ENCLOSING_TIMEOUT_MARGIN_SECS, EXIT_WAIT_TIMEOUT, WaitDeadline, enclosing_timeout_remaining, limit_by_enclosing_timeout, parse_timeout_command
+from bmsdna.devtools.cli_tools import ENCLOSING_TIMEOUT_MARGIN_SECS, EXIT_WAIT_TIMEOUT, WaitDeadline, enclosing_timeout_remaining, limit_by_enclosing_timeout, parse_timeout_command, status_rerun_cmd
 from bmsdna.devtools.gh_pr import run as gh_run
 from bmsdna.devtools.gitrepo import AdoRemote, GitHubRemote
 from bmsdna.devtools.issue_watch import EXIT_TIMEOUT
@@ -297,10 +299,201 @@ def test_pr_status_passes_the_limited_timeout_on(monkeypatch, args: list[str], e
 
 
 def test_a_real_timeout_process_is_found_above_us() -> None:
-    if shutil.which("timeout") is None or shutil.which("ps") is None:
-        pytest.skip("needs coreutils timeout and ps")
+    if sys.platform == "win32" or shutil.which("timeout") is None or shutil.which("ps") is None:
+        pytest.skip("needs coreutils timeout and ps")  # Windows' own timeout.exe is a different tool
     code = "from bmsdna.devtools.cli_tools import enclosing_timeout_remaining as r; print(r())"
     out = subprocess.run(["timeout", "600", sys.executable, "-c", code], capture_output=True, encoding="utf-8", check=True).stdout
 
     assert out.strip() != "None"
     assert 0 <= float(out) <= 600  # less if the test run itself is under a shorter `timeout`
+
+
+def test_no_ps_means_no_enclosing_timeout(monkeypatch) -> None:
+    """Windows has no `ps`: the detection quietly finds nothing instead of failing the command."""
+
+    def no_ps(*args, **kwargs):
+        raise FileNotFoundError("ps")
+
+    monkeypatch.setattr("subprocess.run", no_ps)
+
+    assert enclosing_timeout_remaining() is None
+
+
+def test_rerun_command_without_a_timeout() -> None:
+    assert status_rerun_cmd(42, 0) == "bdt pr status --pr-id 42 --wait"
+    assert status_rerun_cmd(None, 0) == "bdt pr status --wait"
+    assert status_rerun_cmd(42, 70) == "bdt pr status --pr-id 42 --wait --timeout 70"
+
+
+# -- a stop signal (SIGTERM from `timeout`, `kill`, an agent harness) ---------------
+# `signal.raise_signal` rather than `os.kill`: on Windows only the former runs the handler (the latter terminates us).
+
+
+STOP = signal.SIGTERM
+
+
+@pytest.fixture
+def sigterm_during_sleep(monkeypatch) -> list[float]:
+    """`time.sleep` that gets a SIGTERM instead of sleeping, once; records what it was asked for."""
+    asked: list[float] = []
+
+    def sleep(secs: float) -> None:
+        asked.append(secs)
+        if len(asked) == 1:
+            signal.raise_signal(STOP)
+        pytest.fail("kept sleeping after SIGTERM")
+
+    monkeypatch.setattr(time, "sleep", sleep)
+    return asked
+
+
+def test_stop_signal_ends_the_sleep_and_expires_the_deadline(sigterm_during_sleep) -> None:
+    before = signal.getsignal(STOP)
+    with WaitDeadline(0, stop_on_signal=True) as deadline:
+        assert signal.getsignal(STOP) != before
+        assert not deadline.expired()
+
+        deadline.sleep(30)
+
+        assert deadline.expired() and deadline.stopped_by_signal
+        assert signal.getsignal(STOP) == before  # a second signal terminates as usual
+    assert sigterm_during_sleep == [30]
+
+
+def test_stop_signal_outside_of_a_sleep_only_sets_the_flag(monkeypatch) -> None:
+    slept: list[float] = []
+    monkeypatch.setattr(time, "sleep", slept.append)
+    with WaitDeadline(0, stop_on_signal=True) as deadline:
+        signal.raise_signal(STOP)  # e.g. in the middle of a request
+
+        assert deadline.expired()
+        deadline.sleep(30)
+
+    assert slept == []
+
+
+def test_previous_handler_is_put_back_on_exit() -> None:
+    before = signal.getsignal(STOP)
+    with WaitDeadline(0, stop_on_signal=True):
+        pass
+
+    assert signal.getsignal(STOP) == before
+
+
+def test_no_handler_without_stop_on_signal() -> None:
+    before = signal.getsignal(STOP)
+    with WaitDeadline(0):
+        assert signal.getsignal(STOP) == before
+
+
+def test_stop_on_signal_off_the_main_thread_is_a_no_op() -> None:
+    """`signal.signal` raises ValueError outside the main thread."""
+    errors: list[BaseException] = []
+
+    def target() -> None:
+        try:
+            with WaitDeadline(0, stop_on_signal=True) as deadline:
+                assert not deadline.expired()
+        except BaseException as e:
+            errors.append(e)
+
+    t = threading.Thread(target=target)
+    t.start()
+    t.join()
+
+    assert errors == []
+
+
+def test_stop_on_signal_survives_an_os_that_refuses_the_handler(monkeypatch) -> None:
+    def refuse(*args, **kwargs):
+        raise OSError("invalid argument")
+
+    monkeypatch.setattr(signal, "signal", refuse)
+    with WaitDeadline(0, stop_on_signal=True) as deadline:
+        assert not deadline.expired()
+
+
+def test_gh_wait_reports_and_exits_4_on_sigterm(monkeypatch, sigterm_during_sleep, capsys) -> None:
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: _gh_pr([PASSED, PENDING]))
+
+    with pytest.raises(SystemExit) as exc:
+        gh_run("gh", wait=True)
+
+    out = capsys.readouterr().out
+    assert exc.value.code == EXIT_WAIT_TIMEOUT
+    assert "[✓ PASS] CI / lint" in out and "[… PENDING] CI / build" in out
+    assert out.rstrip().endswith("Terminated while still running. Re-run `bdt pr status --pr-id 42 --wait` to keep waiting.")
+
+
+def test_ado_wait_reports_and_exits_4_on_sigterm(monkeypatch, sigterm_during_sleep, capsys) -> None:
+    _ado_env(monkeypatch, [{"id": 200, "status": "inProgress", "result": None, "definition": {"id": 2, "name": "ci"}}])
+
+    with pytest.raises(SystemExit) as exc:
+        ado_run(AdoRemote("myorg", "MyProj", "myrepo"), None, "main", wait=True, source_branch="feature-x")
+
+    out = capsys.readouterr().out
+    assert exc.value.code == EXIT_WAIT_TIMEOUT
+    assert "build #200 inProgress" in out
+    assert out.rstrip().endswith("Terminated while still running. Re-run `bdt pr status --pr-id 42 --wait` to keep waiting.")
+
+
+def test_status_without_wait_leaves_sigterm_alone(monkeypatch) -> None:
+    """Nothing would ever look at the flag there, so a SIGTERM must keep killing the command."""
+    seen: list[object] = []
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: seen.append(signal.getsignal(STOP)) or _gh_pr([PASSED]))
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.deploy_run_hint", lambda gh, base: None)
+    before = signal.getsignal(STOP)
+
+    gh_run("gh", wait=False)
+
+    assert seen == [before]
+
+
+def test_gh_wait_stops_on_sigterm_while_mergeability_is_unknown(monkeypatch, sigterm_during_sleep, capsys) -> None:
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: {**_gh_pr([PENDING]), "mergeable": "UNKNOWN"})
+
+    with pytest.raises(SystemExit) as exc:
+        gh_run("gh", wait=True)
+
+    out = capsys.readouterr().out
+    assert exc.value.code == EXIT_WAIT_TIMEOUT
+    assert sigterm_during_sleep == [3]
+    assert "mergeability not computed yet" in out
+    assert out.rstrip().endswith("Terminated while still running. Re-run `bdt pr status --pr-id 42 --wait` to keep waiting.")
+
+
+def test_gh_wait_timeout_applies_while_mergeability_is_unknown(monkeypatch, sleeps, capsys) -> None:
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: {**_gh_pr([PENDING]), "mergeable": "UNKNOWN"})
+
+    with pytest.raises(SystemExit) as exc:
+        gh_run("gh", wait=True, timeout=10)
+
+    assert exc.value.code == EXIT_WAIT_TIMEOUT
+    assert sleeps == [3, 3, 3, 1]
+
+
+def test_windows_sleeps_in_slices_so_a_signal_is_answered_promptly(monkeypatch) -> None:
+    now = [0.0]
+    slept: list[float] = []
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(time, "sleep", lambda secs: (slept.append(secs), now.__setitem__(0, now[0] + secs))[0])
+
+    WaitDeadline(0).sleep(2.5)
+
+    assert slept == [1.0, 1.0, 0.5]
+
+
+def test_windows_stops_slicing_once_signalled(monkeypatch) -> None:
+    slept: list[float] = []
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    def sleep(secs: float) -> None:
+        slept.append(secs)
+        signal.raise_signal(STOP)  # the handler runs once the sleep returns
+
+    monkeypatch.setattr(time, "sleep", sleep)
+    with WaitDeadline(0, stop_on_signal=True) as deadline:
+        deadline.sleep(30)
+
+    assert slept == [1.0]
