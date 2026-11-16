@@ -369,3 +369,170 @@ def test_changed_files_keeps_non_ascii_names_unquoted(clone, monkeypatch) -> Non
     git(clone, "add", "-A")
     git(clone, "commit", "-q", "-m", "umlaut")
     assert ci_plan_env.changed_files("main", merge_checkout=False) == ["tests/test_über.py"]
+
+
+# --- a project in a sub-folder of a monorepo ----------------------------------------------------------------------
+
+
+def test_changed_files_are_relative_to_the_project_folder(clone, monkeypatch) -> None:
+    """The project lives in app/: its files are listed relative to it, all others keep their place as `../` paths."""
+    git(clone, "checkout", "-q", "-b", "feat")
+    for name in ("app/code.py", "infra/main.bicep", "other/x.txt"):
+        (clone / name).parent.mkdir(exist_ok=True)
+        (clone / name).write_text(name)
+    git(clone, "add", "-A")
+    git(clone, "commit", "-q", "-m", "mono")
+    monkeypatch.chdir(clone / "app")
+
+    inside = ci_plan_env.changed_files("main", merge_checkout=False, root=clone / "app")
+    assert sorted(inside) == ["../infra/main.bicep", "../other/x.txt", "code.py"]
+    at_top = ci_plan_env.changed_files("main", merge_checkout=False, root=clone)
+    assert sorted(at_top) == ["app/code.py", "infra/main.bicep", "other/x.txt"]  # root == repository root: unchanged
+    assert sorted(ci_plan_env.changed_files("main", merge_checkout=False)) == sorted(at_top)  # no root: unchanged
+
+
+@pytest.fixture
+def monorepo(clone, monkeypatch):
+    """dev holds a project in app/ (config: shared infra/ owned by `infra`, other-app/ ignored) next to infra/,
+    other-app/ and a shared database/; HEAD is a feature branch cut from it, the cwd is the project folder."""
+    git(clone, "checkout", "-q", "dev")
+    files = {
+        "app/pyproject.toml": (
+            '[tool.bdt.ci.plan]\nnon_code = ["../other-app/**"]\n\n[tool.bdt.ci.plan.paths]\ninfra = ["../infra/**"]\n'
+        ),
+        "app/tests/unit/orders/test_a.py": "",
+        "infra/main.bicep": "a",
+        "other-app/x.py": "a",
+        "database/a.sql": "a",
+    }
+    for name, content in files.items():
+        (clone / name).parent.mkdir(parents=True, exist_ok=True)
+        (clone / name).write_text(content)
+    git(clone, "add", "-A")
+    git(clone, "commit", "-q", "-m", "monorepo")
+    git(clone, "push", "-q", "origin", "dev")
+    git(clone, "checkout", "-q", "-b", "feat")
+    for key in (*PR_ENV, "BUILD_REASON"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.chdir(clone / "app")
+    return clone
+
+
+def _dry_run_changing(monorepo, name: str) -> str:
+    (monorepo / name).write_text("changed")
+    git(monorepo, "add", "-A")
+    git(monorepo, "commit", "-q", "-m", "change")
+    result = CliRunner().invoke(app, ["ci", "plan", "--pr-source", "feat", "--pr-target", "dev"])
+    assert result.exit_code == 0, result.output
+    return result.output
+
+
+def test_monorepo_shared_infra_selects_the_infra_area_only(monorepo) -> None:
+    output = _dry_run_changing(monorepo, "infra/main.bicep")
+    assert "test plan: areas (changed area tests: infra)" in output
+    assert "runTests=true" in output and "unitRun=false" in output
+
+
+def test_monorepo_other_app_changes_run_no_tests(monorepo) -> None:
+    output = _dry_run_changing(monorepo, "other-app/x.py")
+    assert "test plan: none" in output and "runTests=false" in output
+
+
+def test_monorepo_shared_folder_changes_run_everything(monorepo) -> None:
+    output = _dry_run_changing(monorepo, "database/a.sql")
+    assert "test plan: full (../database/a.sql is not owned by an area" in output
+    assert "unitPaths=tests/unit" in output
+
+
+def test_monorepo_own_test_file_selects_its_area(monorepo) -> None:
+    output = _dry_run_changing(monorepo, "app/tests/unit/orders/test_a.py")
+    assert "test plan: areas (changed area tests: orders)" in output
+    assert "unitPaths=tests/unit/orders" in output
+
+
+def test_changed_files_ignore_a_configured_diff_relative(clone, monkeypatch) -> None:
+    """`git config diff.relative true` would make git itself drop what is outside the folder and re-root the rest."""
+    git(clone, "config", "diff.relative", "true")
+    git(clone, "checkout", "-q", "-b", "feat")
+    for name in ("app/code.py", "infra/main.bicep"):
+        (clone / name).parent.mkdir(exist_ok=True)
+        (clone / name).write_text(name)
+    git(clone, "add", "-A")
+    git(clone, "commit", "-q", "-m", "mono")
+    monkeypatch.chdir(clone / "app")
+    assert sorted(ci_plan_env.changed_files("main", merge_checkout=False, root=clone / "app")) == [
+        "../infra/main.bicep",
+        "code.py",
+    ]
+
+
+def test_changed_files_of_a_project_nested_two_levels_deep(clone, monkeypatch) -> None:
+    git(clone, "checkout", "-q", "-b", "feat")
+    for name in ("apps/app/code.py", "apps/other/x.py", "apps/app/sub/y.py", "infra/main.bicep"):
+        (clone / name).parent.mkdir(parents=True, exist_ok=True)
+        (clone / name).write_text(name)
+    git(clone, "add", "-A")
+    git(clone, "commit", "-q", "-m", "mono")
+    monkeypatch.chdir(clone)  # the process cwd does not matter, the project root does
+    files = ci_plan_env.changed_files("main", merge_checkout=False, root=clone / "apps" / "app")
+    assert sorted(files) == ["../../infra/main.bicep", "../other/x.py", "code.py", "sub/y.py"]
+
+
+def test_changed_files_for_a_repository_folder_ending_in_a_space(tmp_path, monkeypatch) -> None:
+    """Paths come from git's own spelling, not from comparing file-system paths: odd folder names change nothing."""
+    work = tmp_path / "repo "
+    work.mkdir()
+    git(work, "init", "-q", "-b", "main")
+    commit(work, "m1")
+    git(work, "update-ref", "refs/remotes/origin/main", "HEAD")
+    git(work, "checkout", "-q", "-b", "feat")
+    (work / "app").mkdir()
+    (work / "app/code.py").write_text("x")
+    git(work, "add", "-A")
+    git(work, "commit", "-q", "-m", "app")
+    monkeypatch.chdir(work / "app")
+    assert ci_plan_env.changed_files("main", merge_checkout=False, root=work / "app") == ["code.py"]
+    assert ci_plan_env.changed_files("main", merge_checkout=False, root=work) == ["app/code.py"]
+
+
+def test_changed_files_of_the_merge_commit_in_ci_for_a_sub_folder_project(clone, monkeypatch) -> None:
+    """The CI path (HEAD is the PR merge commit, compared with its first parent), with the project in a sub-folder."""
+    git(clone, "checkout", "-q", "-b", "feat")
+    for name in ("app/code.py", "infra/main.bicep"):
+        (clone / name).parent.mkdir(exist_ok=True)
+        (clone / name).write_text(name)
+    git(clone, "add", "-A")
+    git(clone, "commit", "-q", "-m", "mono")
+    git(clone, "checkout", "-q", "main")
+    git(clone, "merge", "-q", "--no-ff", "-m", "merge", "feat")
+    monkeypatch.chdir(clone)
+    files = ci_plan_env.changed_files("main", merge_checkout=True, root=clone / "app")
+    assert sorted(files) == ["../infra/main.bicep", "code.py"]
+
+
+def test_a_sibling_folder_sharing_the_project_folder_name_as_a_prefix_stays_outside(clone, monkeypatch) -> None:
+    git(clone, "checkout", "-q", "-b", "feat")
+    for name in ("app/code.py", "app2/code.py"):
+        (clone / name).parent.mkdir(exist_ok=True)
+        (clone / name).write_text(name)
+    git(clone, "add", "-A")
+    git(clone, "commit", "-q", "-m", "mono")
+    monkeypatch.chdir(clone / "app")
+    assert sorted(ci_plan_env.changed_files("main", merge_checkout=False, root=clone / "app")) == [
+        "../app2/code.py",
+        "code.py",
+    ]
+
+
+def test_the_diff_runs_in_the_project_repository_not_the_process_cwd(clone, tmp_path, monkeypatch) -> None:
+    """cwd is another repository: the prefix and the diff must both come from the project's."""
+    git(clone, "checkout", "-q", "-b", "feat")
+    (clone / "app").mkdir()
+    (clone / "app/code.py").write_text("x")
+    git(clone, "add", "-A")
+    git(clone, "commit", "-q", "-m", "app")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    git(elsewhere, "init", "-q", "-b", "main")
+    monkeypatch.chdir(elsewhere)
+    assert ci_plan_env.changed_files("main", merge_checkout=False, root=clone / "app") == ["code.py"]

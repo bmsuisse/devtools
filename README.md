@@ -984,8 +984,8 @@ Order of decision, always logged with its reason:
 4. Anything unreadable (label API, change list) runs everything: a missing decision never silently skips tests.
 
 Outputs (Azure Pipelines variables with `isOutput=true`; plain `name=value` lines elsewhere): `runTests`, and per tier
-(`unit`, `e2e`, ...) `<tier>Run`, `<tier>Areas` and `<tier>Paths`, a shell-quoted argument list for the runner (repo-
-relative). A tier you do not configure and split by area (e.g. flat unit tests) is simply gated on `runTests`. For
+(`unit`, `e2e`, ...) `<tier>Run`, `<tier>Areas` and `<tier>Paths`, a shell-quoted argument list for the runner (relative to the
+`pyproject.toml` folder). A tier you do not configure and split by area (e.g. flat unit tests) is simply gated on `runTests`. For
 custom sharding or a runner that does not take paths, use `<tier>Areas` (a space-separated list: keep area names free
 of whitespace if you split it): in folder mode the `<tier>Paths` of a full run
 is the bare tier folder, which may also hold things that are not tests (`.venv`, `test-results`); in glob mode it is the
@@ -1014,6 +1014,11 @@ list of test files either way. A moved file counts as changed under both its old
 
 Dry run locally: `uv run bdt ci plan --pr-source feat/x --pr-target dev --label test-orders` (or without `--label` to
 see what the changed files select).
+
+A project in a sub-folder of a monorepo: run the plan and the test runner in that folder (where its `pyproject.toml`
+is). Changed files are matched relative to it, so a file outside is a `../` path: own it with `paths`
+(`infra = ["../infra/**"]`) or ignore it with `non_code` (`["../other-app/**"]`). Any other outside file (a shared
+folder) selects everything.
 
 ## `bdt lint`
 
