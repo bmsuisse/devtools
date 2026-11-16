@@ -142,6 +142,11 @@ def create(
     _run(["git", "worktree", "add", *(["--no-track"] if remote_start else []), str(path), "-b", name, start], cwd=root)
     _ensure_worktree_gitignore(root)
 
+    # Run from a sub-folder of a monorepo, the worktree still holds the whole repository: the env file and the install
+    # command belong in the same sub-folder of it (`<worktree>/app`), the project, not in the worktree's top level.
+    prefix = _run_capture(["git", "rev-parse", "--show-prefix"], cwd=root).stdout.removesuffix("\n")
+    project = path / prefix if prefix else path
+
     if submodules and (root / ".gitmodules").exists():
         _run(["git", "submodule", "update", "--init"], cwd=path)
 
@@ -152,12 +157,12 @@ def create(
                 break
 
     if env_file and (root / env_file).exists():
-        shutil.copy(root / env_file, path / ".env")
+        shutil.copy(root / env_file, project / ".env")
 
     if install_cmd:
-        _run(install_cmd, cwd=path)
+        _run(install_cmd, cwd=project)
 
-    print(f"worktree ready at {path}")
+    print(f"worktree ready at {project}")
     # A worktree based on the remote's actual DEFAULT branch makes `bdt pull`'s
     # separate default-branch step redundant. base in ("main", "master") is
     # only a *guess* at that (wrong on a repo whose configured default is e.g.
