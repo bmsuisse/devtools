@@ -93,7 +93,9 @@ WINDOWS_SLEEP_SLICE_SECS = 1.0
 
 # What asks a `--wait` loop to stop and report: SIGTERM (what `timeout`, `kill`, `docker stop` and most agent harnesses
 # send first) and, on Windows, where SIGTERM is never delivered by the OS, Ctrl+Break. Windows lacks the rest.
-_STOP_SIGNALS = tuple(sig for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGBREAK", None)) if sig is not None)
+_STOP_SIGNALS = tuple(
+    sig for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGBREAK", None)) if sig is not None
+)
 
 
 _SignalHandler = Callable[[int, FrameType | None], object] | int | None  # what `signal.getsignal` returns
@@ -126,20 +128,22 @@ class WaitDeadline:
             for sig in _STOP_SIGNALS:
                 try:
                     self._previous_handlers[sig] = signal.signal(sig, self._on_stop_signal)
-                except (ValueError, OSError):  # not the main thread (ValueError), or the OS refuses this signal
+                except ValueError, OSError:  # not the main thread (ValueError), or the OS refuses this signal
                     pass
 
     def __enter__(self) -> WaitDeadline:
         return self
 
-    def __exit__(self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None) -> None:
+    def __exit__(
+        self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
+    ) -> None:
         self._restore_handlers()
 
     def _restore_handlers(self) -> None:
         for sig, previous in self._previous_handlers.items():
             try:
                 signal.signal(sig, previous if previous is not None else signal.SIG_DFL)
-            except (ValueError, OSError):
+            except ValueError, OSError:
                 pass
         self._previous_handlers.clear()
 
@@ -184,7 +188,9 @@ def status_rerun_cmd(pr_id: int | None, timeout_secs: float) -> str:
     return f"{cmd} --timeout {timeout_secs:g}" if timeout_secs else cmd
 
 
-def exit_wait_timeout(msg: str, print_details: Callable[[], object], deadline: WaitDeadline, rerun_cmd: str) -> NoReturn:
+def exit_wait_timeout(
+    msg: str, print_details: Callable[[], object], deadline: WaitDeadline, rerun_cmd: str
+) -> NoReturn:
     """Report where a `--wait` loop stands when its `deadline` ran out (status line, per-item details), then
     exit `EXIT_WAIT_TIMEOUT`. The last line tells the caller what to run to keep waiting."""
     print(msg)
@@ -253,8 +259,14 @@ def _process_info(pid: int) -> tuple[int, float, list[str]] | None:
     """(parent pid, seconds since it started, command line) of process `pid`, via `ps` (Linux and macOS; None
     anywhere it isn't available, e.g. Windows)."""
     try:
-        r = subprocess.run(["ps", "-o", "ppid=,etime=,args=", "-p", str(pid)], capture_output=True, encoding="utf-8", timeout=CLI_TIMEOUT_SECS, check=False)
-    except (OSError, subprocess.SubprocessError):
+        r = subprocess.run(
+            ["ps", "-o", "ppid=,etime=,args=", "-p", str(pid)],
+            capture_output=True,
+            encoding="utf-8",
+            timeout=CLI_TIMEOUT_SECS,
+            check=False,
+        )
+    except OSError, subprocess.SubprocessError:
         return None
     parts = r.stdout.split(None, 2)
     if r.returncode != 0 or len(parts) < 3 or not parts[0].isdigit():
@@ -291,7 +303,10 @@ def limit_by_enclosing_timeout(timeout_secs: float) -> float:
     limit = max(remaining - ENCLOSING_TIMEOUT_MARGIN_SECS, 1.0)
     if timeout_secs and timeout_secs <= limit:
         return timeout_secs
-    print(f"Enclosing `timeout` ends in {remaining:.0f} s: giving up waiting after {limit:.0f} s so the status gets printed first.", file=sys.stderr)
+    print(
+        f"Enclosing `timeout` ends in {remaining:.0f} s: giving up waiting after {limit:.0f} s so the status gets printed first.",
+        file=sys.stderr,
+    )
     return limit
 
 

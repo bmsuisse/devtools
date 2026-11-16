@@ -63,7 +63,9 @@ def make_session(get_map: dict[str, dict] | None = None, wiql_ids: list[int] | N
         if url.endswith("/comments"):
             return FakeResponse({"id": 1, "text": kwargs["json"]["text"]})
         if "/_apis/wit/workitems/$" in url:
-            return FakeResponse({"id": 123, "_links": {"html": {"href": "https://dev.azure.com/myorg/web/wi.aspx?id=123"}}})
+            return FakeResponse(
+                {"id": 123, "_links": {"html": {"href": "https://dev.azure.com/myorg/web/wi.aspx?id=123"}}}
+            )
         raise AssertionError(f"unexpected POST {url}")
 
     def fake_patch(url, params: dict | None = None, **kwargs):
@@ -126,7 +128,10 @@ def test_create_with_screenshots_uploads_links_and_comments(tmp_path) -> None:
     # <img> tag renders either way. It must also carry `?fileName=...` in its src — without it
     # Azure DevOps serves the attachment as application/octet-stream with
     # Content-Disposition: attachment instead of e.g. image/png.
-    assert '<img src="https://dev.azure.com/myorg/_apis/wit/attachments/attach-1?fileName=00-shot.png" alt="shot.png"' in comment_text
+    assert (
+        '<img src="https://dev.azure.com/myorg/_apis/wit/attachments/attach-1?fileName=00-shot.png" alt="shot.png"'
+        in comment_text
+    )
 
 
 def test_create_with_files_uploads_links_and_comments(tmp_path) -> None:
@@ -142,7 +147,10 @@ def test_create_with_files_uploads_links_and_comments(tmp_path) -> None:
     assert post_urls[2] == "https://dev.azure.com/myorg/MyProj/_apis/wit/workItems/123/comments"
 
     comment_text = session.post.call_args_list[2].kwargs["json"]["text"]
-    assert '<a href="https://dev.azure.com/myorg/_apis/wit/attachments/attach-1?fileName=00-report.pdf">report.pdf</a>' in comment_text
+    assert (
+        '<a href="https://dev.azure.com/myorg/_apis/wit/attachments/attach-1?fileName=00-report.pdf">report.pdf</a>'
+        in comment_text
+    )
     assert "<img" not in comment_text
 
 
@@ -174,7 +182,10 @@ def test_add_files_links_attachment_and_comments(tmp_path) -> None:
 
     session.patch.assert_called_once()
     comment_text = session.post.call_args_list[-1].kwargs["json"]["text"]
-    assert '<a href="https://dev.azure.com/myorg/_apis/wit/attachments/attach-1?fileName=00-report.pdf">report.pdf</a>' in comment_text
+    assert (
+        '<a href="https://dev.azure.com/myorg/_apis/wit/attachments/attach-1?fileName=00-report.pdf">report.pdf</a>'
+        in comment_text
+    )
 
 
 def test_comment_with_screenshots_message_only() -> None:
@@ -222,7 +233,10 @@ def test_comment_with_screenshots_links_attachments_before_commenting(tmp_path) 
 
     session.patch.assert_called_once()
     comment_text = session.post.call_args_list[-1].kwargs["json"]["text"]
-    assert '<img src="https://dev.azure.com/myorg/_apis/wit/attachments/attach-1?fileName=00-after.png" alt="after.png"' in comment_text
+    assert (
+        '<img src="https://dev.azure.com/myorg/_apis/wit/attachments/attach-1?fileName=00-after.png" alt="after.png"'
+        in comment_text
+    )
     assert "Fixed" in comment_text
 
 
@@ -353,7 +367,11 @@ def test_delete_comment_hits_comment_id_endpoint() -> None:
 
 def test_search_runs_wiql_then_batch_fetches_matched_fields() -> None:
     session = make_session(
-        get_map={"/_apis/wit/workitems": {"value": [{"id": 42, "fields": {"System.Title": "Auth timeout bug", "System.State": "Active"}}]}},
+        get_map={
+            "/_apis/wit/workitems": {
+                "value": [{"id": 42, "fields": {"System.Title": "Auth timeout bug", "System.State": "Active"}}]
+            }
+        },
         wiql_ids=[42],
     )
 
@@ -496,17 +514,25 @@ def test_update_with_nothing_given_still_errors() -> None:
 
 
 def _parent_link(work_item_id: int) -> dict:
-    return {"rel": "System.LinkTypes.Hierarchy-Reverse", "url": f"https://dev.azure.com/myorg/guid/_apis/wit/workItems/{work_item_id}"}
+    return {
+        "rel": "System.LinkTypes.Hierarchy-Reverse",
+        "url": f"https://dev.azure.com/myorg/guid/_apis/wit/workItems/{work_item_id}",
+    }
 
 
 def _blocker_link(work_item_id: int) -> dict:
-    return {"rel": "System.LinkTypes.Dependency-Reverse", "url": f"https://dev.azure.com/myorg/guid/_apis/wit/workItems/{work_item_id}"}
+    return {
+        "rel": "System.LinkTypes.Dependency-Reverse",
+        "url": f"https://dev.azure.com/myorg/guid/_apis/wit/workItems/{work_item_id}",
+    }
 
 
 def test_create_sets_iteration_parent_and_blockers_in_the_create_patch() -> None:
     session = make_session()
 
-    create(session, REMOTE, "Task", "Do it", None, None, [], [], iteration="MyProj\\Sprint 1", parent=5, blocked_by=[7, 8])
+    create(
+        session, REMOTE, "Task", "Do it", None, None, [], [], iteration="MyProj\\Sprint 1", parent=5, blocked_by=[7, 8]
+    )
 
     ops = session.post.call_args.kwargs["json"]
     assert {"op": "add", "path": "/fields/System.IterationPath", "value": "MyProj\\Sprint 1"} in ops
@@ -574,7 +600,13 @@ def test_update_only_adds_the_blockers_that_are_missing() -> None:
 
 
 def test_update_replaces_a_different_parent() -> None:
-    session = make_session(get_map={"/_apis/wit/workitems/123": {"relations": [{"rel": "AttachedFile", "url": "https://x/attachments/1"}, _parent_link(4)]}})
+    session = make_session(
+        get_map={
+            "/_apis/wit/workitems/123": {
+                "relations": [{"rel": "AttachedFile", "url": "https://x/attachments/1"}, _parent_link(4)]
+            }
+        }
+    )
 
     update(session, REMOTE, 123, parent=5)
 
@@ -588,7 +620,9 @@ def test_update_relations_already_present_still_applies_other_given_fields() -> 
 
     update(session, REMOTE, 123, title="New title", parent=5)
 
-    assert session.patch.call_args.kwargs["json"] == [{"op": "add", "path": "/fields/System.Title", "value": "New title"}]
+    assert session.patch.call_args.kwargs["json"] == [
+        {"op": "add", "path": "/fields/System.Title", "value": "New title"}
+    ]
 
 
 def test_update_rejects_linking_a_work_item_to_itself() -> None:
@@ -617,14 +651,26 @@ def test_get_details_collects_fields_links_and_comments() -> None:
         "relations": [
             {"rel": "AttachedFile", "url": "https://dev.azure.com/myorg/_apis/wit/attachments/abc"},
             _parent_link(5),
-            {"rel": "System.LinkTypes.Hierarchy-Forward", "url": "https://dev.azure.com/myorg/guid/_apis/wit/workItems/9"},
+            {
+                "rel": "System.LinkTypes.Hierarchy-Forward",
+                "url": "https://dev.azure.com/myorg/guid/_apis/wit/workItems/9",
+            },
             _blocker_link(7),
-            {"rel": "System.LinkTypes.Dependency-Forward", "url": "https://dev.azure.com/myorg/guid/_apis/wit/workItems/10"},
+            {
+                "rel": "System.LinkTypes.Dependency-Forward",
+                "url": "https://dev.azure.com/myorg/guid/_apis/wit/workItems/10",
+            },
             {"rel": "System.LinkTypes.Related", "url": "https://dev.azure.com/myorg/guid/_apis/wit/workItems/11"},
         ],
     }
-    comments = {"comments": [{"id": 2, "text": "<div>second</div>", "createdBy": {"displayName": "Bob"}, "createdDate": "2026-01-02"}]}
-    session = make_session(get_map={"/_apis/wit/workitems/123": work_item, "/_apis/wit/workItems/123/comments": comments})
+    comments = {
+        "comments": [
+            {"id": 2, "text": "<div>second</div>", "createdBy": {"displayName": "Bob"}, "createdDate": "2026-01-02"}
+        ]
+    }
+    session = make_session(
+        get_map={"/_apis/wit/workitems/123": work_item, "/_apis/wit/workItems/123/comments": comments}
+    )
 
     details = get_details(session, REMOTE, 123)
 
@@ -632,14 +678,28 @@ def test_get_details_collects_fields_links_and_comments() -> None:
     assert details.url == "https://dev.azure.com/myorg/MyProj/_workitems/edit/123"
     assert details.tags == ["a", "b"]
     assert details.body == "It breaks\noften"
-    assert details.fields == {"Type": "Bug", "Area": "MyProj\\Team", "Iteration": "MyProj\\Sprint 1", "Assigned to": "Jane Doe"}
-    assert (details.parent, details.children, details.blocked_by, details.blocks, details.related) == (5, [9], [7], [10], [11])
+    assert details.fields == {
+        "Type": "Bug",
+        "Area": "MyProj\\Team",
+        "Iteration": "MyProj\\Sprint 1",
+        "Assigned to": "Jane Doe",
+    }
+    assert (details.parent, details.children, details.blocked_by, details.blocks, details.related) == (
+        5,
+        [9],
+        [7],
+        [10],
+        [11],
+    )
     assert [(c.id, c.author, c.body) for c in details.comments] == [(2, "Bob", "second")]
 
 
 def test_get_details_of_a_bare_work_item() -> None:
     session = make_session(
-        get_map={"/_apis/wit/workitems/123": {"fields": {"System.Title": "t", "System.State": "New"}}, "/_apis/wit/workItems/123/comments": {"comments": []}}
+        get_map={
+            "/_apis/wit/workitems/123": {"fields": {"System.Title": "t", "System.State": "New"}},
+            "/_apis/wit/workItems/123/comments": {"comments": []},
+        }
     )
 
     details = get_details(session, REMOTE, 123)

@@ -38,7 +38,14 @@ def check_sql_roots(config: dict, *, repo_root: Path) -> list[Finding]:
         if candidate.is_dir() and candidate.resolve().is_relative_to(repo_root.resolve()):
             roots.append(candidate)
         else:
-            findings.append(Finding(candidate, 0, "lint-path-not-found", f"sql_roots entry '{root}' is not a directory inside {repo_root}."))
+            findings.append(
+                Finding(
+                    candidate,
+                    0,
+                    "lint-path-not-found",
+                    f"sql_roots entry '{root}' is not a directory inside {repo_root}.",
+                )
+            )
     sql_files, _ = _iter_files(roots, exclude_dir_names, (".sql",))
     python_files, _ = _iter_python_files([repo_root], exclude_dir_names)
     findings.extend(

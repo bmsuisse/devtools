@@ -21,7 +21,9 @@ def test_build_screenshots_section_handles_no_existing_text() -> None:
 
 
 def test_build_screenshots_section_html_uses_img_tags_not_markdown() -> None:
-    text = build_screenshots_section_html("existing text", [("before.png", "https://x/1"), ("after.png", "https://x/2")])
+    text = build_screenshots_section_html(
+        "existing text", [("before.png", "https://x/1"), ("after.png", "https://x/2")]
+    )
     assert text.startswith("existing text\n\n<h2>Screenshots</h2>\n\n")
     assert '<img src="https://x/1" alt="before.png" style="max-width:100%;">' in text
     assert '<img src="https://x/2" alt="after.png" style="max-width:100%;">' in text

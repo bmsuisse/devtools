@@ -78,7 +78,19 @@ class FakeGH:
         return self._answer("PATCH", path, body)
 
     def graphql(self, query, **variables):
-        op = next((n for n in ("markPullRequestReadyForReview", "convertPullRequestToDraft", "enablePullRequestAutoMerge", "query ContextsPage") if n in query), "query")
+        op = next(
+            (
+                n
+                for n in (
+                    "markPullRequestReadyForReview",
+                    "convertPullRequestToDraft",
+                    "enablePullRequestAutoMerge",
+                    "query ContextsPage",
+                )
+                if n in query
+            ),
+            "query",
+        )
         return self._answer("GRAPHQL", op, variables)
 
     def request(self, method, path, *, ok=(), **kwargs):
@@ -96,8 +108,25 @@ def _on_branch(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.gh_pr.current_branch", lambda: "feature-x")
 
 
-def rest_pr(number: int = 7, body: str = "existing body", title: str = "Fix bug", head: str = "feature-x", state: str = "open", draft: bool = True) -> dict:
-    return {"number": number, "title": title, "body": body, "state": state, "node_id": f"PR_node_{number}", "draft": draft, "head": {"ref": head}, "base": {"ref": "main"}, "html_url": f"https://github.com/owner/repo/pull/{number}"}
+def rest_pr(
+    number: int = 7,
+    body: str = "existing body",
+    title: str = "Fix bug",
+    head: str = "feature-x",
+    state: str = "open",
+    draft: bool = True,
+) -> dict:
+    return {
+        "number": number,
+        "title": title,
+        "body": body,
+        "state": state,
+        "node_id": f"PR_node_{number}",
+        "draft": draft,
+        "head": {"ref": head},
+        "base": {"ref": "main"},
+        "html_url": f"https://github.com/owner/repo/pull/{number}",
+    }
 
 
 def view_routes(number: int = 7, **kwargs) -> dict:
@@ -120,7 +149,9 @@ def pr_graphql_response(**overrides) -> dict:
         "mergeable": "MERGEABLE",
         "baseRefName": "main",
         "headRefName": "feature-x",
-        "closingIssuesReferences": {"nodes": [{"number": 3, "url": "u", "repository": {"name": "repo", "owner": {"login": "owner"}}}]},
+        "closingIssuesReferences": {
+            "nodes": [{"number": 3, "url": "u", "repository": {"name": "repo", "owner": {"login": "owner"}}}]
+        },
         "statusCheckRollup": {
             "contexts": {
                 "nodes": [
@@ -208,7 +239,13 @@ def test_run_wait_exits_1_not_2_when_a_check_already_failed_and_another_needs_ap
         "isDraft": False,
         "statusCheckRollup": [
             {"__typename": "CheckRun", "name": "deploy", "status": "WAITING", "workflowName": "Deploy"},
-            {"__typename": "CheckRun", "name": "build", "status": "COMPLETED", "conclusion": "FAILURE", "workflowName": "CI"},
+            {
+                "__typename": "CheckRun",
+                "name": "build",
+                "status": "COMPLETED",
+                "conclusion": "FAILURE",
+                "workflowName": "CI",
+            },
         ],
     }
     monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: pr)
@@ -232,12 +269,20 @@ def test_run_wait_does_not_hang_when_a_stuck_pending_check_also_exists(monkeypat
         "isDraft": False,
         "statusCheckRollup": [
             {"__typename": "CheckRun", "name": "deploy", "status": "WAITING", "workflowName": "Deploy"},
-            {"__typename": "CheckRun", "name": "build", "status": "COMPLETED", "conclusion": "FAILURE", "workflowName": "CI"},
+            {
+                "__typename": "CheckRun",
+                "name": "build",
+                "status": "COMPLETED",
+                "conclusion": "FAILURE",
+                "workflowName": "CI",
+            },
             {"__typename": "CheckRun", "name": "downstream", "status": "QUEUED", "workflowName": "CI"},
         ],
     }
     monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: pr)
-    monkeypatch.setattr("bmsdna.devtools.gh_pr.time.sleep", lambda s: pytest.fail("must not poll — would hang --wait forever"))
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.time.sleep", lambda s: pytest.fail("must not poll — would hang --wait forever")
+    )
 
     with pytest.raises(SystemExit) as exc_info:
         run("gh", wait=True)
@@ -304,8 +349,6 @@ def test_protection_requires_status_checks_false_when_absent(protection: dict) -
     assert protection_requires_status_checks(protection) is False
 
 
-
-
 def test_resolve_pr_id_uses_given_id_without_any_request() -> None:
     gh = FakeGH()
     assert resolve_pr_id(gh, 99) == 99  # type: ignore[arg-type]
@@ -326,7 +369,9 @@ def test_get_pr_without_pr_id_uses_the_current_branchs_pr() -> None:
 
     get_pr(gh)  # type: ignore[arg-type]
 
-    assert gh.sent("GET", PULLS) == [{"head": "owner:feature-x", "state": "all", "sort": "created", "direction": "desc"}]
+    assert gh.sent("GET", PULLS) == [
+        {"head": "owner:feature-x", "state": "all", "sort": "created", "direction": "desc"}
+    ]
     assert gh.sent("GRAPHQL", "query") == [{"owner": "owner", "repo": "repo", "number": 7}]
 
 
@@ -355,11 +400,15 @@ def test_get_pr_exits_when_the_branch_has_no_pr() -> None:
 def test_get_pr_keeps_the_gh_pr_view_shape() -> None:
     gh = FakeGH({("GRAPHQL", "query"): pr_graphql_response()})
 
-    pr = get_pr(gh, 7, fields="number,title,url,state,isDraft,mergeable,baseRefName,closingIssuesReferences,statusCheckRollup")  # type: ignore[arg-type]
+    pr = get_pr(
+        gh, 7, fields="number,title,url,state,isDraft,mergeable,baseRefName,closingIssuesReferences,statusCheckRollup"
+    )  # type: ignore[arg-type]
 
     assert pr["number"] == 7
     assert pr["mergeable"] == "MERGEABLE"
-    assert pr["closingIssuesReferences"] == [{"number": 3, "url": "u", "repository": {"name": "repo", "owner": {"login": "owner"}}}]
+    assert pr["closingIssuesReferences"] == [
+        {"number": 3, "url": "u", "repository": {"name": "repo", "owner": {"login": "owner"}}}
+    ]
     build, ctx = pr["statusCheckRollup"]
     assert build["workflowName"] == "CI" and "checkSuite" not in build
     assert check_bucket(build) == "fail" and failed_run_ids(pr["statusCheckRollup"]) == [5]
@@ -404,7 +453,9 @@ def test_create_fills_title_and_body_from_a_single_commit(monkeypatch) -> None:
 
     create(gh, "main", [], draft=True)  # type: ignore[arg-type]
 
-    assert gh.sent("POST", PULLS) == [{"title": "feat: x", "body": "because y", "head": "feature-x", "base": "main", "draft": True}]
+    assert gh.sent("POST", PULLS) == [
+        {"title": "feat: x", "body": "because y", "head": "feature-x", "base": "main", "draft": True}
+    ]
 
 
 def test_create_fills_from_branch_name_and_subjects_for_several_commits(monkeypatch) -> None:
@@ -453,7 +504,12 @@ def test_create_missing_flag_value_exits() -> None:
 
 def _created(monkeypatch, commits=(("feat: x", "because y"),), extra_routes=None):
     monkeypatch.setattr("bmsdna.devtools.gh_pr._branch_commits", lambda target: list(commits))
-    return FakeGH({("POST", PULLS): {"number": 7, "node_id": "PR_node_7", "html_url": "https://github.com/owner/repo/pull/7"}, **(extra_routes or {})})
+    return FakeGH(
+        {
+            ("POST", PULLS): {"number": 7, "node_id": "PR_node_7", "html_url": "https://github.com/owner/repo/pull/7"},
+            **(extra_routes or {}),
+        }
+    )
 
 
 def test_create_description_is_only_a_long_alias_of_body(monkeypatch) -> None:
@@ -521,7 +577,9 @@ def test_create_assignee_milestone_reviewer_flags(monkeypatch) -> None:
     create(gh, "main", ["-a", "jane,@me", "-m", "V1", "-r", "bob,acme/core", "--reviewer=eve"])  # type: ignore[arg-type]
     assert gh.sent("POST", "repos/owner/repo/issues/7/assignees") == [{"assignees": ["jane", "me"]}]
     assert gh.sent("PATCH", "repos/owner/repo/issues/7") == [{"milestone": 3}]
-    assert gh.sent("POST", f"{PULLS}/7/requested_reviewers") == [{"reviewers": ["bob", "eve"], "team_reviewers": ["core"]}]
+    assert gh.sent("POST", f"{PULLS}/7/requested_reviewers") == [
+        {"reviewers": ["bob", "eve"], "team_reviewers": ["core"]}
+    ]
 
 
 def test_create_unknown_milestone_fails_before_creating(monkeypatch) -> None:
@@ -547,7 +605,9 @@ def test_create_project_flag_adds_the_pr_to_the_board(monkeypatch) -> None:
     gh = _created(monkeypatch)
     added: list[tuple[str, str]] = []
     monkeypatch.setattr("bmsdna.devtools.gh_issue.find_project", lambda gh, owner, b: {"id": f"P_{b}"})
-    monkeypatch.setattr("bmsdna.devtools.gh_issue.add_to_project", lambda gh, project, node: added.append((project["id"], node)))
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_issue.add_to_project", lambda gh, project, node: added.append((project["id"], node))
+    )
     create(gh, "main", ["--project", "Roadmap"])  # type: ignore[arg-type]
     assert added == [("P_Roadmap", "PR_node_7")]
 
@@ -555,7 +615,9 @@ def test_create_project_flag_adds_the_pr_to_the_board(monkeypatch) -> None:
 def test_create_auto_complete_enables_auto_merge_with_squash(monkeypatch) -> None:
     gh = _created(monkeypatch, extra_routes={("GRAPHQL", "enablePullRequestAutoMerge"): {}})
     create(gh, "main", ["--auto-complete", "--squash", "--merge-commit-message", "msg"])  # type: ignore[arg-type]
-    assert gh.sent("GRAPHQL", "enablePullRequestAutoMerge") == [{"pr": "PR_node_7", "method": "SQUASH", "headline": "msg"}]
+    assert gh.sent("GRAPHQL", "enablePullRequestAutoMerge") == [
+        {"pr": "PR_node_7", "method": "SQUASH", "headline": "msg"}
+    ]
 
 
 def test_create_auto_merge_failure_is_a_warning(monkeypatch, capsys) -> None:
@@ -567,7 +629,9 @@ def test_create_auto_merge_failure_is_a_warning(monkeypatch, capsys) -> None:
 def test_create_work_items_link_the_pr_with_fixes(monkeypatch) -> None:
     gh = _created(monkeypatch)
     linked: list[tuple[int, str, int]] = []
-    monkeypatch.setattr("bmsdna.devtools.gh_pr.link_issue_to_pr", lambda gh, n, body, issue: linked.append((n, body, issue)) or body)
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.link_issue_to_pr", lambda gh, n, body, issue: linked.append((n, body, issue)) or body
+    )
     create(gh, "main", ["--work-items", "12,#13"])  # type: ignore[arg-type]
     assert [(n, i) for n, _, i in linked] == [(7, 12), (7, 13)]
 
@@ -646,7 +710,10 @@ def test_create_returns_none_url_on_failure(monkeypatch, capsys) -> None:
 def test_create_still_succeeds_when_a_label_cannot_be_added(monkeypatch, capsys) -> None:
     monkeypatch.setattr("bmsdna.devtools.gh_pr._branch_commits", lambda target: [])
     gh = FakeGH(
-        {("POST", PULLS): {"number": 7, "html_url": "u"}, ("POST", "repos/owner/repo/issues/7/labels"): SystemExit("forbidden")}
+        {
+            ("POST", PULLS): {"number": 7, "html_url": "u"},
+            ("POST", "repos/owner/repo/issues/7/labels"): SystemExit("forbidden"),
+        }
     )
 
     assert create(gh, "main", [], labels=["x"]) == (0, "u")  # type: ignore[arg-type]
@@ -746,13 +813,18 @@ def test_create_appends_agent_session_note_when_detected(monkeypatch) -> None:
 
     create(gh, "main", [])  # type: ignore[arg-type]
 
-    assert gh.sent("PATCH", f"{PULLS}/7") == [{"body": "PR body\n\nClaude Session: https://claude.ai/code/session_abc123"}]
+    assert gh.sent("PATCH", f"{PULLS}/7") == [
+        {"body": "PR body\n\nClaude Session: https://claude.ai/code/session_abc123"}
+    ]
 
 
 def _fake_push_assets(monkeypatch) -> None:
     monkeypatch.setattr(
         "bmsdna.devtools.gh_pr.push_assets",
-        lambda owner, repo, branch, paths, **kwargs: [f"https://github.com/{owner}/{repo}/blob/pr-assets/{branch}/{i:02d}-{p.split('/')[-1]}?raw=true" for i, p in enumerate(paths)],
+        lambda owner, repo, branch, paths, **kwargs: [
+            f"https://github.com/{owner}/{repo}/blob/pr-assets/{branch}/{i:02d}-{p.split('/')[-1]}?raw=true"
+            for i, p in enumerate(paths)
+        ],
     )
 
 
@@ -772,7 +844,9 @@ def test_add_attachments_edits_pr_body_once_for_both_kinds(monkeypatch) -> None:
     _fake_push_assets(monkeypatch)
     gh = FakeGH({**view_routes(7), ("PATCH", f"{PULLS}/7"): {}})
 
-    add_attachments(gh, "owner", "repo", "feature-x", screenshot_paths=["/tmp/shot.png"], file_paths=["/tmp/report.pdf"])  # type: ignore[arg-type]
+    add_attachments(
+        gh, "owner", "repo", "feature-x", screenshot_paths=["/tmp/shot.png"], file_paths=["/tmp/report.pdf"]
+    )  # type: ignore[arg-type]
 
     assert len(gh.sent("GET", f"{PULLS}/7")) == 1
     edits = gh.sent("PATCH", f"{PULLS}/7")
@@ -897,7 +971,6 @@ def test_retry_hint_tells_claude_code_to_run_it(monkeypatch) -> None:
     assert "bdt pr retry" in retry_hint()
 
 
-
 RERUN_99 = "repos/owner/repo/actions/runs/34882319228/rerun-failed-jobs"
 
 
@@ -916,7 +989,10 @@ def test_retry_reruns_each_distinct_failed_run(monkeypatch) -> None:
 
 def test_retry_with_pr_id_reads_that_pr_instead_of_the_current_branch(monkeypatch) -> None:
     seen: list[int | None] = []
-    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: seen.append(pr_id) or {"statusCheckRollup": [FAILED_CHECK_RUN]})
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.get_pr",
+        lambda gh, pr_id=None: seen.append(pr_id) or {"statusCheckRollup": [FAILED_CHECK_RUN]},
+    )
 
     retry(FakeGH({("POST", RERUN_99): None}), pr_id=99)  # type: ignore[arg-type]
 
@@ -940,9 +1016,17 @@ def test_retry_exits_on_rerun_failure(monkeypatch) -> None:
 def test_retry_still_attempts_remaining_runs_after_one_fails(monkeypatch, capsys) -> None:
     """A failure reranning one run shouldn't stop bdt from attempting the others."""
     # Make the two failed checks belong to *different* runs so both get a rerun attempt.
-    other_run_check = {**FAILED_CHECK_RUN_SAME_RUN, "detailsUrl": "https://github.com/owner/repo/actions/runs/999/job/1"}
+    other_run_check = {
+        **FAILED_CHECK_RUN_SAME_RUN,
+        "detailsUrl": "https://github.com/owner/repo/actions/runs/999/job/1",
+    }
     monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", _pr_with([FAILED_CHECK_RUN, other_run_check]))
-    gh = FakeGH({("POST", RERUN_99): SystemExit("run is already in progress"), ("POST", "repos/owner/repo/actions/runs/999/rerun-failed-jobs"): None})
+    gh = FakeGH(
+        {
+            ("POST", RERUN_99): SystemExit("run is already in progress"),
+            ("POST", "repos/owner/repo/actions/runs/999/rerun-failed-jobs"): None,
+        }
+    )
 
     with pytest.raises(SystemExit) as exc_info:
         retry(gh)  # type: ignore[arg-type]
@@ -986,7 +1070,15 @@ def test_print_failed_step_logs_prints_failed_steps_and_job_log(capsys) -> None:
             ("GET", f"{RUNS}/556/jobs"): {
                 "jobs": [
                     {"id": 1, "name": "ok", "conclusion": "success", "steps": []},
-                    {"id": 2, "name": "build", "conclusion": "failure", "steps": [{"name": "Run tests", "conclusion": "failure"}, {"name": "Setup", "conclusion": "success"}]},
+                    {
+                        "id": 2,
+                        "name": "build",
+                        "conclusion": "failure",
+                        "steps": [
+                            {"name": "Run tests", "conclusion": "failure"},
+                            {"name": "Setup", "conclusion": "success"},
+                        ],
+                    },
                 ]
             },
             ("GET", "repos/owner/repo/actions/jobs/2/logs"): FakeResponse("line1\nboom\n"),
@@ -1023,7 +1115,17 @@ def test_print_failed_step_logs_without_downloadable_log(capsys) -> None:
 
 def _runs_gh(runs_json: list[dict], **extra) -> FakeGH:
     """A fake whose `actions/runs` answers `runs_json` (given in the `DEPLOY_RUN` shape)."""
-    rest = [{"id": r["databaseId"], "name": r["workflowName"], "status": r["status"], "conclusion": r["conclusion"], "html_url": r["url"], "head_branch": "main"} for r in runs_json]
+    rest = [
+        {
+            "id": r["databaseId"],
+            "name": r["workflowName"],
+            "status": r["status"],
+            "conclusion": r["conclusion"],
+            "html_url": r["url"],
+            "head_branch": "main",
+        }
+        for r in runs_json
+    ]
     return FakeGH({("GET", RUNS): {"workflow_runs": rest}, **extra})
 
 
@@ -1081,7 +1183,14 @@ def test_run_watch_deploy_wait_exits_1_not_2_when_another_run_already_failed(mon
 
 
 def _pr_view(checks: list[dict]) -> dict:
-    return {"number": 7, "title": "feat: x", "baseRefName": "main", "mergeable": "MERGEABLE", "statusCheckRollup": checks, "isDraft": False}
+    return {
+        "number": 7,
+        "title": "feat: x",
+        "baseRefName": "main",
+        "mergeable": "MERGEABLE",
+        "statusCheckRollup": checks,
+        "isDraft": False,
+    }
 
 
 def test_run_prints_deploy_hint_after_checks_pass(monkeypatch, capsys) -> None:
@@ -1112,8 +1221,13 @@ def test_run_skips_deploy_hint_when_checks_still_pending_without_wait(monkeypatc
     """Regression: without --wait, a still-pending check must not be mistaken for
     'checks succeeded' -- the hint should only ever follow a genuinely settled result."""
     hint_calls: list[str] = []
-    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: _pr_view([{"__typename": "CheckRun", "status": "IN_PROGRESS", "name": "build"}]))
-    monkeypatch.setattr("bmsdna.devtools.gh_pr.deploy_run_hint", lambda gh, branch: hint_calls.append(branch) or "should not print")
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.get_pr",
+        lambda gh, pr_id=None: _pr_view([{"__typename": "CheckRun", "status": "IN_PROGRESS", "name": "build"}]),
+    )
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.deploy_run_hint", lambda gh, branch: hint_calls.append(branch) or "should not print"
+    )
 
     run(FakeGH(), wait=False)  # type: ignore[arg-type]
 
@@ -1125,7 +1239,9 @@ def test_run_skips_deploy_hint_when_check_failed(monkeypatch, capsys) -> None:
     hint_calls: list[str] = []
     failing = {"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "FAILURE", "name": "build"}
     monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: _pr_view([failing]))
-    monkeypatch.setattr("bmsdna.devtools.gh_pr.deploy_run_hint", lambda gh, branch: hint_calls.append(branch) or "should not print")
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.deploy_run_hint", lambda gh, branch: hint_calls.append(branch) or "should not print"
+    )
 
     with pytest.raises(SystemExit):
         run(FakeGH(), wait=False)  # type: ignore[arg-type]
@@ -1135,7 +1251,9 @@ def test_run_skips_deploy_hint_when_check_failed(monkeypatch, capsys) -> None:
 
 
 def test_has_build_policy_true_when_status_checks_required() -> None:
-    gh = FakeGH({("GET", "repos/owner/repo/branches/main/protection"): {"required_status_checks": {"contexts": ["build"]}}})
+    gh = FakeGH(
+        {("GET", "repos/owner/repo/branches/main/protection"): {"required_status_checks": {"contexts": ["build"]}}}
+    )
     assert has_build_policy(gh, "main") is True  # type: ignore[arg-type]
 
 
@@ -1228,7 +1346,6 @@ def test_push_assets_bounds_fetch_and_push_with_a_longer_upload_timeout(monkeypa
     assert ls_remote_kwargs["timeout"] == CLI_TIMEOUT_SECS
 
 
-
 # -- get_pr_body / link_issue_to_pr -----------------------------------------
 
 
@@ -1281,11 +1398,28 @@ def test_link_issue_to_pr_raises_on_api_failure() -> None:
 
 def test_get_pr_pages_through_more_than_100_check_contexts() -> None:
     def ctx(i: int) -> dict:
-        return {"__typename": "CheckRun", "name": f"job-{i}", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "u", "checkSuite": None}
+        return {
+            "__typename": "CheckRun",
+            "name": f"job-{i}",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "detailsUrl": "u",
+            "checkSuite": None,
+        }
 
     first = pr_graphql_response()
-    first["repository"]["pullRequest"]["statusCheckRollup"] = {"contexts": {"pageInfo": {"hasNextPage": True, "endCursor": "c1"}, "nodes": [ctx(i) for i in range(100)]}}
-    page2 = {"repository": {"pullRequest": {"statusCheckRollup": {"contexts": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [ctx(100), ctx(101)]}}}}}
+    first["repository"]["pullRequest"]["statusCheckRollup"] = {
+        "contexts": {"pageInfo": {"hasNextPage": True, "endCursor": "c1"}, "nodes": [ctx(i) for i in range(100)]}
+    }
+    page2 = {
+        "repository": {
+            "pullRequest": {
+                "statusCheckRollup": {
+                    "contexts": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [ctx(100), ctx(101)]}
+                }
+            }
+        }
+    }
     gh = FakeGH({("GRAPHQL", "query"): first, ("GRAPHQL", "query ContextsPage"): page2})
 
     pr = get_pr(gh, 7, fields="statusCheckRollup")  # type: ignore[arg-type]

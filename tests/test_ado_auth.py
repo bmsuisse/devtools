@@ -18,7 +18,9 @@ def test_auth_header_uses_pat_without_azure_credential(monkeypatch) -> None:
 
 def test_get_az_devops_token_asks_for_the_ado_scope(monkeypatch) -> None:
     scopes: list[str] = []
-    monkeypatch.setattr("bmsdna.devtools.ado_auth.get_azure_token", lambda scope, hint=None: scopes.append(scope) or "tokenvalue")
+    monkeypatch.setattr(
+        "bmsdna.devtools.ado_auth.get_azure_token", lambda scope, hint=None: scopes.append(scope) or "tokenvalue"
+    )
 
     assert get_az_devops_token() == "tokenvalue"
     assert scopes == [f"{ADO_RESOURCE_ID}/.default"]
@@ -72,7 +74,14 @@ def test_credential_is_built_once_with_the_cli_process_timeout(monkeypatch) -> N
     assert built == [{"process_timeout": CLI_TIMEOUT_SECS}]
 
 
-def _response(status: int, url: str, body: bytes = b"", content_type: str = "application/json", method: str = "POST", history: list | None = None):
+def _response(
+    status: int,
+    url: str,
+    body: bytes = b"",
+    content_type: str = "application/json",
+    method: str = "POST",
+    history: list | None = None,
+):
     import requests
 
     response = requests.Response()
@@ -108,7 +117,9 @@ def test_rejected_pat_error_names_scope_pat_sources_and_where_to_fix_it() -> Non
 def test_403_blames_the_scope_or_the_account_not_an_expired_pat() -> None:
     from bmsdna.devtools.ado_auth import AdoAuthError, _check_auth_hook
 
-    response = _check_auth_hook(True)(_response(403, "https://dev.azure.com/bmeurope/p/_apis/git/repositories/r/pullRequests/1/threads"))
+    response = _check_auth_hook(True)(
+        _response(403, "https://dev.azure.com/bmeurope/p/_apis/git/repositories/r/pullRequests/1/threads")
+    )
 
     with pytest.raises(AdoAuthError) as exc_info:
         response.raise_for_status()
@@ -179,7 +190,9 @@ def test_missing_credentials_message_explains_both_ways_out(monkeypatch) -> None
 
     class FailingCredential:
         def get_token(self, *scopes, **kwargs):
-            raise ClientAuthenticationError("DefaultAzureCredential failed\nEnvironmentCredential: no env vars\nAzureCliCredential: not logged in")
+            raise ClientAuthenticationError(
+                "DefaultAzureCredential failed\nEnvironmentCredential: no env vars\nAzureCliCredential: not logged in"
+            )
 
     monkeypatch.setattr(azure_auth, "_credential", lambda: FailingCredential())
     monkeypatch.setattr("bmsdna.devtools.ado_auth.current_remote", lambda: AdoRemote("bmeurope", "p", "r"))

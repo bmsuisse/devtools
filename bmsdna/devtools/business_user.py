@@ -64,8 +64,14 @@ def read_commit_authors(depth: int = DEFAULT_COMMIT_DEPTH, cwd: Path | None = No
         return None
     rows = [fields for line in log.stdout.split("\n") if len(fields := line.split("\x1f")) == 4]
     # `--is-shallow-repository` needs git 2.15; the shallow file's presence works everywhere
-    shallow_file = subprocess.run(["git", "rev-parse", "--git-path", "shallow"], capture_output=True, text=True, cwd=cwd, check=False)
-    if shallow_file.returncode == 0 and (cwd or Path()).joinpath(shallow_file.stdout.strip()).exists() and len(rows) < depth:
+    shallow_file = subprocess.run(
+        ["git", "rev-parse", "--git-path", "shallow"], capture_output=True, text=True, cwd=cwd, check=False
+    )
+    if (
+        shallow_file.returncode == 0
+        and (cwd or Path()).joinpath(shallow_file.stdout.strip()).exists()
+        and len(rows) < depth
+    ):
         return None
     return CommitAuthors(
         emails=frozenset(v.casefold() for row in rows for v in (row[0], row[2]) if v),
@@ -141,4 +147,6 @@ class BusinessUserDetector:
             return Verdict(None, "not a person")
         identity_id = creator.get("id")
         license_type = self._license(identity_id if isinstance(identity_id, str) else None)
-        return classify(license_type, lambda: self._commit_authors, creator.get("uniqueName"), creator.get("displayName"))
+        return classify(
+            license_type, lambda: self._commit_authors, creator.get("uniqueName"), creator.get("displayName")
+        )

@@ -34,7 +34,7 @@ def _token_from_gh_cli() -> str | None:
         return None
     try:
         r = subprocess.run([gh, "auth", "token"], capture_output=True, encoding="utf-8", timeout=CLI_TIMEOUT_SECS)
-    except (subprocess.TimeoutExpired, OSError):
+    except subprocess.TimeoutExpired, OSError:
         return None
     return r.stdout.strip() or None if r.returncode == 0 else None
 
@@ -96,7 +96,9 @@ class GitHubClient:
         remote = parse_github_remote(origin_url())
         self._owner, self._repo = remote.owner, remote.repo
 
-    def request(self, method: str, path: str, *, ok: tuple[int, ...] = (), retry: bool | None = None, **kwargs: Any) -> requests.Response:
+    def request(
+        self, method: str, path: str, *, ok: tuple[int, ...] = (), retry: bool | None = None, **kwargs: Any
+    ) -> requests.Response:
         """`method path` (relative to the API root, or a full URL); exits with GitHub's error message on a non-2xx
         status (except those listed in `ok`, which are returned for the caller to inspect).
 
@@ -147,7 +149,9 @@ class GitHubClient:
     def delete(self, path: str, **kwargs: Any) -> None:
         self.request("DELETE", path, **kwargs)
 
-    def paginate(self, path: str, params: dict[str, Any] | None = None, *, items_key: str | None = None, limit: int | None = None) -> list[Any]:
+    def paginate(
+        self, path: str, params: dict[str, Any] | None = None, *, items_key: str | None = None, limit: int | None = None
+    ) -> list[Any]:
         """Every item of a list endpoint, following `Link: rel="next"`. `items_key` for the
         wrapped shape (e.g. search's `{"items": [...]}`); stops early once `limit` items are in."""
         out: list[Any] = []
@@ -165,7 +169,9 @@ class GitHubClient:
 
     def graphql(self, query: str, **variables: Any) -> dict[str, Any]:
         # a query is safe to repeat; a mutation is not
-        data = self.post("graphql", {"query": query, "variables": variables}, retry=not query.lstrip().startswith("mutation"))
+        data = self.post(
+            "graphql", {"query": query, "variables": variables}, retry=not query.lstrip().startswith("mutation")
+        )
         if data.get("errors"):
             sys.exit(f"GitHub GraphQL failed: {'; '.join(e.get('message', '?') for e in data['errors'])}")
         return data["data"]
@@ -177,7 +183,9 @@ def _error_message(r: requests.Response) -> str:
     except ValueError:
         return r.text.strip() or r.reason or "request failed"
     msg = body.get("message", r.reason) if isinstance(body, dict) else str(body)
-    details = "; ".join(str(e.get("message") or e) for e in body.get("errors", []) if e) if isinstance(body, dict) else ""
+    details = (
+        "; ".join(str(e.get("message") or e) for e in body.get("errors", []) if e) if isinstance(body, dict) else ""
+    )
     return f"{msg} ({details})" if details else msg
 
 

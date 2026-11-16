@@ -67,7 +67,9 @@ def _iter_python_files(paths: list[Path], exclude_dir_names: frozenset[str]) -> 
     return _iter_files(paths, exclude_dir_names, (".py",))
 
 
-def _iter_files(paths: list[Path], exclude_dir_names: frozenset[str], suffixes: tuple[str, ...]) -> tuple[list[Path], list[Path]]:
+def _iter_files(
+    paths: list[Path], exclude_dir_names: frozenset[str], suffixes: tuple[str, ...]
+) -> tuple[list[Path], list[Path]]:
     """`paths` with directories expanded to every non-excluded file ending in one of `suffixes` under them
     (sorted, for stable output); a path that's already such a file is used as-is
     regardless of exclude_dir_names -- an explicit file (e.g. from a pre-commit hook's
@@ -141,7 +143,8 @@ def run(paths: list[str], *, root: Path | None = None, skip_tooling_check: bool 
         require_sqlglot()
 
     findings: list[Finding] = [
-        Finding(path, 0, "lint-path-not-found", f"'{path}' doesn't exist -- nothing was scanned for it.") for path in missing_paths
+        Finding(path, 0, "lint-path-not-found", f"'{path}' doesn't exist -- nothing was scanned for it.")
+        for path in missing_paths
     ]
     sql_functions = load_sql_functions(root)
     for path in python_files:

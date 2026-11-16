@@ -143,7 +143,9 @@ def _find_project(gh: GitHubClient, owner: str, board: str) -> dict:
         number = _find_project_number(projects, board)
         found = next((p for p in projects if p.get("number") == number), None) if number is not None else None
     if found is None:
-        sys.exit(f"GitHub Project board '{board}' not found for owner '{owner}'. Pass its number instead, or check the name.")
+        sys.exit(
+            f"GitHub Project board '{board}' not found for owner '{owner}'. Pass its number instead, or check the name."
+        )
     return found
 
 
@@ -153,7 +155,9 @@ def resolve_project_number(gh: GitHubClient, owner: str, board: str) -> int:
         return int(board)
     number = _find_project_number(_list_projects(gh, owner), board)
     if number is None:
-        sys.exit(f"GitHub Project board '{board}' not found for owner '{owner}'. Pass its number instead, or check the name.")
+        sys.exit(
+            f"GitHub Project board '{board}' not found for owner '{owner}'. Pass its number instead, or check the name."
+        )
     return number
 
 
@@ -189,7 +193,12 @@ def _board_items(gh: GitHubClient, owner: str, project_number: int) -> list[dict
         for node in connection.get("nodes") or []:
             content = (node or {}).get("content") or {}
             if content.get("__typename") == "Issue":
-                items.append({"type": "Issue", "url": f"https://github.com/{content['repository']['nameWithOwner']}/issues/{content['number']}"})
+                items.append(
+                    {
+                        "type": "Issue",
+                        "url": f"https://github.com/{content['repository']['nameWithOwner']}/issues/{content['number']}",
+                    }
+                )
             else:
                 items.append({"type": content.get("__typename") or "DraftIssue"})
         page = connection.get("pageInfo") or {}
@@ -324,7 +333,9 @@ def create(
     if screenshot_paths or file_paths:
         new_body: str = body or ""
         if screenshot_paths:
-            new_body = build_screenshots_section(new_body, _screenshot_images(owner, repo, f"issue-{number}", screenshot_paths))
+            new_body = build_screenshots_section(
+                new_body, _screenshot_images(owner, repo, f"issue-{number}", screenshot_paths)
+            )
         if file_paths:
             new_body = build_attachments_section(new_body, _file_links(owner, repo, f"issue-{number}", file_paths))
         gh.patch(f"repos/{owner}/{repo}/issues/{number}", {"body": new_body})
@@ -406,7 +417,12 @@ def _search_issues(gh: GitHubClient, query: str, scope: str, state: str, labels:
         parts.append(f"is:{state}")
     parts += [f"label:{_quote_qualifier(label)}" for label in labels]
     # the search API serves at most the first 1000 results: asking for page 11 is an HTTP 422
-    raw = gh.paginate("search/issues", {"q": " ".join(parts), "sort": "updated", "order": "desc"}, items_key="items", limit=min(limit, SEARCH_RESULT_CAP))
+    raw = gh.paginate(
+        "search/issues",
+        {"q": " ".join(parts), "sort": "updated", "order": "desc"},
+        items_key="items",
+        limit=min(limit, SEARCH_RESULT_CAP),
+    )
     return [
         {
             "number": item["number"],
@@ -549,7 +565,9 @@ def _current_parent(gh: GitHubClient, number: int) -> int | None:
     return None if r.status_code == 404 else r.json().get("number")
 
 
-def _link_changes(gh: GitHubClient, number: int, parent: int | None, blocked_by: list[int] | None) -> tuple[int | None, list[int]]:
+def _link_changes(
+    gh: GitHubClient, number: int, parent: int | None, blocked_by: list[int] | None
+) -> tuple[int | None, list[int]]:
     """The parent still to set (None if it already is) and the blockers still to add for issue `number`."""
     new_parent = parent if parent is not None and parent != _current_parent(gh, number) else None
     wanted = list(dict.fromkeys(blocked_by or []))
@@ -678,7 +696,9 @@ def comment(
     url = created["html_url"]
     comment_id = parse_comment_id(url) or str(created.get("id") or "") or None
     suffix = f" (comment #{comment_id})" if comment_id else ""
-    print(f"Added comment ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) to issue #{number}{suffix}")
+    print(
+        f"Added comment ({len(screenshot_paths)} screenshot(s), {len(file_paths)} file(s)) to issue #{number}{suffix}"
+    )
     print(url)
 
 

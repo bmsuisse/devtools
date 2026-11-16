@@ -83,7 +83,7 @@ def auth_header(pat: str | None) -> dict[str, str]:
 def _ado_message(response: requests.Response) -> str | None:
     try:
         message = response.json().get("message")
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         return None
     return one_line(message) if isinstance(message, str) and message.strip() else None
 
@@ -124,7 +124,10 @@ def auth_failure_message(response: requests.Response, pat_used: bool) -> str:
         lines.append(f"Credentials: the PAT from {PAT_SOURCES}.")
         causes: list[str] = ["it lacks the scope this call needs" + (f" ({scope})" if scope else "")]
         if response.status_code != 403:
-            causes += ["it has expired or was revoked", "it was created for a different organization" + (f" than '{org}'" if org else "")]
+            causes += [
+                "it has expired or was revoked",
+                "it was created for a different organization" + (f" than '{org}'" if org else ""),
+            ]
         else:
             causes += ["your account itself lacks the permission"]
         lines.append("Most likely " + ", or ".join(causes) + ".")
@@ -132,7 +135,8 @@ def auth_failure_message(response: requests.Response, pat_used: bool) -> str:
     else:
         lines.append("Credentials: your `az login` token (no PAT given).")
         lines.append(
-            "Run `az login` as a user with access to " + (f"organization '{org}'" if org else "the organization")
+            "Run `az login` as a user with access to "
+            + (f"organization '{org}'" if org else "the organization")
             + f", or use a PAT instead: create one at {pat_settings_url(org)} (scopes: {BDT_PAT_SCOPES}) and set AZURE_DEVOPS_EXT_PAT / pass --pat."
         )
     return "\n".join(lines)

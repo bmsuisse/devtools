@@ -236,7 +236,9 @@ def _is_arg_list(node: ast.expr | None, scope: _Scope) -> bool:
 
 
 def _shell_true(call: ast.Call) -> bool:
-    return any(kw.arg == "shell" and isinstance(kw.value, ast.Constant) and kw.value.value is True for kw in call.keywords)
+    return any(
+        kw.arg == "shell" and isinstance(kw.value, ast.Constant) and kw.value.value is True for kw in call.keywords
+    )
 
 
 def _finding(path: Path, node: ast.Call, rule: str, message: str, severity: str) -> Finding:
@@ -246,7 +248,9 @@ def _finding(path: Path, node: ast.Call, rule: str, message: str, severity: str)
 def _check_call(path: Path, node: ast.Call, aliases: dict[str, str], scope: _Scope) -> list[Finding]:
     name = _dotted(node.func, aliases)
     last = name.rsplit(".", 1)[-1]
-    first_arg = node.args[0] if node.args else next((kw.value for kw in node.keywords if kw.arg in _FIRST_ARG_KEYWORDS), None)
+    first_arg = (
+        node.args[0] if node.args else next((kw.value for kw in node.keywords if kw.arg in _FIRST_ARG_KEYWORDS), None)
+    )
     dynamic = first_arg is not None and not _is_const(first_arg, scope)
 
     if name in ("eval", "exec") and dynamic:
@@ -311,7 +315,11 @@ def _check_call(path: Path, node: ast.Call, aliases: dict[str, str], scope: _Sco
         loader = next((kw.value for kw in node.keywords if kw.arg == "Loader"), None)
         if loader is None and len(node.args) > 1:
             loader = node.args[1]
-        if name == "yaml.unsafe_load" or loader is None or _dotted(loader, aliases).rsplit(".", 1)[-1] not in _SAFE_YAML_LOADERS:
+        if (
+            name == "yaml.unsafe_load"
+            or loader is None
+            or _dotted(loader, aliases).rsplit(".", 1)[-1] not in _SAFE_YAML_LOADERS
+        ):
             return [
                 _finding(
                     path,
@@ -332,7 +340,8 @@ def _check_call(path: Path, node: ast.Call, aliases: dict[str, str], scope: _Sco
             )
         ]
     if last in ("Environment", "Jinja2Templates") and any(
-        kw.arg == "autoescape" and isinstance(kw.value, ast.Constant) and kw.value.value is False for kw in node.keywords
+        kw.arg == "autoescape" and isinstance(kw.value, ast.Constant) and kw.value.value is False
+        for kw in node.keywords
     ):
         return [
             _finding(

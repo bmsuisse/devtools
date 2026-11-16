@@ -16,7 +16,15 @@ import pytest
 from typer.testing import CliRunner
 
 from bmsdna.devtools.cli import app
-from bmsdna.devtools.cli_tools import ENCLOSING_TIMEOUT_MARGIN_SECS, EXIT_WAIT_TIMEOUT, WaitDeadline, enclosing_timeout_remaining, limit_by_enclosing_timeout, parse_timeout_command, status_rerun_cmd
+from bmsdna.devtools.cli_tools import (
+    ENCLOSING_TIMEOUT_MARGIN_SECS,
+    EXIT_WAIT_TIMEOUT,
+    WaitDeadline,
+    enclosing_timeout_remaining,
+    limit_by_enclosing_timeout,
+    parse_timeout_command,
+    status_rerun_cmd,
+)
 from bmsdna.devtools.gh_pr import run as gh_run
 from bmsdna.devtools.gitrepo import AdoRemote, GitHubRemote
 from bmsdna.devtools.issue_watch import EXIT_TIMEOUT
@@ -74,11 +82,24 @@ def test_deadline_cuts_the_last_sleep_short(sleeps) -> None:
 
 
 def _gh_pr(checks: list[dict]) -> dict:
-    return {"number": 42, "title": "feat: widgets", "baseRefName": "main", "mergeable": "MERGEABLE", "isDraft": False, "statusCheckRollup": checks}
+    return {
+        "number": 42,
+        "title": "feat: widgets",
+        "baseRefName": "main",
+        "mergeable": "MERGEABLE",
+        "isDraft": False,
+        "statusCheckRollup": checks,
+    }
 
 
 PENDING = {"__typename": "CheckRun", "name": "build", "status": "IN_PROGRESS", "workflowName": "CI"}
-PASSED = {"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "SUCCESS", "workflowName": "CI"}
+PASSED = {
+    "__typename": "CheckRun",
+    "name": "lint",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS",
+    "workflowName": "CI",
+}
 
 
 def test_gh_wait_times_out_with_exit_4_and_reports_every_check(monkeypatch, sleeps, capsys) -> None:
@@ -91,7 +112,9 @@ def test_gh_wait_times_out_with_exit_4_and_reports_every_check(monkeypatch, slee
     assert exc.value.code == EXIT_WAIT_TIMEOUT
     assert sleeps == [30, 30, 10]
     assert "[✓ PASS] CI / lint" in out and "[… PENDING] CI / build" in out
-    assert out.rstrip().endswith("Still running after 70 s. Re-run `bdt pr status --pr-id 42 --wait --timeout 70` to keep waiting.")
+    assert out.rstrip().endswith(
+        "Still running after 70 s. Re-run `bdt pr status --pr-id 42 --wait --timeout 70` to keep waiting."
+    )
 
 
 def test_gh_wait_without_timeout_keeps_polling(monkeypatch, sleeps) -> None:
@@ -130,10 +153,15 @@ def test_gh_wait_returns_normally_when_checks_finish_before_the_deadline(monkeyp
 def _ado_env(monkeypatch, builds: list[dict]) -> None:
     monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock())
     monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
-    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda *a, **k: {"pullRequestId": 42, "title": "feat: widgets", "status": "active", "isDraft": False})
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.get_pr",
+        lambda *a, **k: {"pullRequestId": 42, "title": "feat: widgets", "status": "active", "isDraft": False},
+    )
     monkeypatch.setattr("bmsdna.devtools.pr_build.get_builds_for_pr", lambda *a, **k: builds)
     monkeypatch.setattr("bmsdna.devtools.pr_build.find_pending_approvals", lambda *a, **k: [])
-    monkeypatch.setattr("bmsdna.devtools.pr_build.print_build", lambda session, remote, b: print(f"  build #{b['id']} {b['status']}"))
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.print_build", lambda session, remote, b: print(f"  build #{b['id']} {b['status']}")
+    )
 
 
 def test_ado_wait_times_out_with_exit_4_and_reports_the_running_builds(monkeypatch, sleeps, capsys) -> None:
@@ -146,7 +174,9 @@ def test_ado_wait_times_out_with_exit_4_and_reports_the_running_builds(monkeypat
     assert exc.value.code == EXIT_WAIT_TIMEOUT
     assert sleeps == [30, 15]
     assert "ci #200 inProgress" in out and "build #200 inProgress" in out
-    assert out.rstrip().endswith("Still running after 45 s. Re-run `bdt pr status --pr-id 42 --wait --timeout 45` to keep waiting.")
+    assert out.rstrip().endswith(
+        "Still running after 45 s. Re-run `bdt pr status --pr-id 42 --wait --timeout 45` to keep waiting."
+    )
 
 
 def test_ado_wait_times_out_while_no_build_has_been_queued_yet(monkeypatch, sleeps, capsys) -> None:
@@ -168,7 +198,9 @@ def test_cli_passes_timeout_on(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.resolve_pr_id", lambda gh, pr_id, target: pr_id)
     seen: dict = {}
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.run", lambda gh, wait, pr_id=None, timeout=0: seen.update(wait=wait, timeout=timeout))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.run", lambda gh, wait, pr_id=None, timeout=0: seen.update(wait=wait, timeout=timeout)
+    )
 
     result = runner.invoke(app, ["pr", "status", "--wait", "--timeout", "540"])
 
@@ -182,7 +214,9 @@ def _plain(output: str) -> str:
 
 
 def test_cli_timeout_needs_wait(monkeypatch) -> None:
-    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: pytest.fail("must be rejected before anything runs"))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.current_remote", lambda: pytest.fail("must be rejected before anything runs")
+    )
 
     result = runner.invoke(app, ["pr", "status", "--timeout", "540"])
 
@@ -192,7 +226,9 @@ def test_cli_timeout_needs_wait(monkeypatch) -> None:
 
 @pytest.mark.parametrize("bad", ["-1", "nan", "inf"])
 def test_cli_rejects_a_timeout_that_is_not_a_finite_number(monkeypatch, bad) -> None:
-    monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: pytest.fail("must be rejected before anything runs"))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.current_remote", lambda: pytest.fail("must be rejected before anything runs")
+    )
 
     result = runner.invoke(app, ["pr", "status", "--wait", "--timeout", bad])
 
@@ -237,13 +273,22 @@ def _fake_ancestors(monkeypatch, chain: list[tuple[int, float, list[str]]]) -> N
 
 def test_remaining_time_of_the_enclosing_timeout_counts_what_already_ran(monkeypatch) -> None:
     # bdt <- timeout 590 (running for 3 s) <- bash
-    _fake_ancestors(monkeypatch, [(101, 3.0, ["timeout", "590", "bdt", "pr", "status", "--wait"]), (1, 900.0, ["bash"])])
+    _fake_ancestors(
+        monkeypatch, [(101, 3.0, ["timeout", "590", "bdt", "pr", "status", "--wait"]), (1, 900.0, ["bash"])]
+    )
 
     assert enclosing_timeout_remaining() == 587
 
 
 def test_the_closest_of_several_nested_timeouts_wins(monkeypatch) -> None:
-    _fake_ancestors(monkeypatch, [(101, 0.0, ["timeout", "590", "bdt"]), (102, 0.0, ["bash", "-c", "..."]), (1, 50.0, ["timeout", "300", "bash"])])
+    _fake_ancestors(
+        monkeypatch,
+        [
+            (101, 0.0, ["timeout", "590", "bdt"]),
+            (102, 0.0, ["bash", "-c", "..."]),
+            (1, 50.0, ["timeout", "300", "bash"]),
+        ],
+    )
 
     assert enclosing_timeout_remaining() == 250
 
@@ -251,7 +296,9 @@ def test_the_closest_of_several_nested_timeouts_wins(monkeypatch) -> None:
 def test_a_timeout_that_is_pid_1_is_found_too(monkeypatch) -> None:
     # `docker run image timeout 590 bdt pr status --wait`
     monkeypatch.setattr("os.getppid", lambda: 1)
-    monkeypatch.setattr("bmsdna.devtools.cli_tools._process_info", lambda pid: (0, 2.0, ["timeout", "590", "bdt"]) if pid == 1 else None)
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli_tools._process_info", lambda pid: (0, 2.0, ["timeout", "590", "bdt"]) if pid == 1 else None
+    )
 
     assert enclosing_timeout_remaining() == 588
 
@@ -285,7 +332,10 @@ def test_limit_by_enclosing_timeout(monkeypatch, enclosing: float | None, own: f
     assert limit_by_enclosing_timeout(own) == expected
 
 
-@pytest.mark.parametrize(("args", "expected"), [(["--wait"], 70), (["--wait", "--timeout", "30"], 30), (["--wait", "--timeout", "0"], 70), ([], 0)])
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [(["--wait"], 70), (["--wait", "--timeout", "30"], 30), (["--wait", "--timeout", "0"], 70), ([], 0)],
+)
 def test_pr_status_passes_the_limited_timeout_on(monkeypatch, args: list[str], expected: float) -> None:
     run = MagicMock()
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: AdoRemote("myorg", "MyProj", "myrepo"))
@@ -302,7 +352,9 @@ def test_a_real_timeout_process_is_found_above_us() -> None:
     if sys.platform == "win32" or shutil.which("timeout") is None or shutil.which("ps") is None:
         pytest.skip("needs coreutils timeout and ps")  # Windows' own timeout.exe is a different tool
     code = "from bmsdna.devtools.cli_tools import enclosing_timeout_remaining as r; print(r())"
-    out = subprocess.run(["timeout", "600", sys.executable, "-c", code], capture_output=True, encoding="utf-8", check=True).stdout
+    out = subprocess.run(
+        ["timeout", "600", sys.executable, "-c", code], capture_output=True, encoding="utf-8", check=True
+    ).stdout
 
     assert out.strip() != "None"
     assert 0 <= float(out) <= 600  # less if the test run itself is under a shorter `timeout`
@@ -422,7 +474,9 @@ def test_gh_wait_reports_and_exits_4_on_sigterm(monkeypatch, sigterm_during_slee
     out = capsys.readouterr().out
     assert exc.value.code == EXIT_WAIT_TIMEOUT
     assert "[✓ PASS] CI / lint" in out and "[… PENDING] CI / build" in out
-    assert out.rstrip().endswith("Terminated while still running. Re-run `bdt pr status --pr-id 42 --wait` to keep waiting.")
+    assert out.rstrip().endswith(
+        "Terminated while still running. Re-run `bdt pr status --pr-id 42 --wait` to keep waiting."
+    )
 
 
 def test_ado_wait_reports_and_exits_4_on_sigterm(monkeypatch, sigterm_during_sleep, capsys) -> None:
@@ -434,13 +488,17 @@ def test_ado_wait_reports_and_exits_4_on_sigterm(monkeypatch, sigterm_during_sle
     out = capsys.readouterr().out
     assert exc.value.code == EXIT_WAIT_TIMEOUT
     assert "build #200 inProgress" in out
-    assert out.rstrip().endswith("Terminated while still running. Re-run `bdt pr status --pr-id 42 --wait` to keep waiting.")
+    assert out.rstrip().endswith(
+        "Terminated while still running. Re-run `bdt pr status --pr-id 42 --wait` to keep waiting."
+    )
 
 
 def test_status_without_wait_leaves_sigterm_alone(monkeypatch) -> None:
     """Nothing would ever look at the flag there, so a SIGTERM must keep killing the command."""
     seen: list[object] = []
-    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: seen.append(signal.getsignal(STOP)) or _gh_pr([PASSED]))
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: seen.append(signal.getsignal(STOP)) or _gh_pr([PASSED])
+    )
     monkeypatch.setattr("bmsdna.devtools.gh_pr.deploy_run_hint", lambda gh, base: None)
     before = signal.getsignal(STOP)
 
@@ -450,7 +508,9 @@ def test_status_without_wait_leaves_sigterm_alone(monkeypatch) -> None:
 
 
 def test_gh_wait_stops_on_sigterm_while_mergeability_is_unknown(monkeypatch, sigterm_during_sleep, capsys) -> None:
-    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: {**_gh_pr([PENDING]), "mergeable": "UNKNOWN"})
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: {**_gh_pr([PENDING]), "mergeable": "UNKNOWN"}
+    )
 
     with pytest.raises(SystemExit) as exc:
         gh_run("gh", wait=True)
@@ -459,11 +519,15 @@ def test_gh_wait_stops_on_sigterm_while_mergeability_is_unknown(monkeypatch, sig
     assert exc.value.code == EXIT_WAIT_TIMEOUT
     assert sigterm_during_sleep == [3]
     assert "mergeability not computed yet" in out
-    assert out.rstrip().endswith("Terminated while still running. Re-run `bdt pr status --pr-id 42 --wait` to keep waiting.")
+    assert out.rstrip().endswith(
+        "Terminated while still running. Re-run `bdt pr status --pr-id 42 --wait` to keep waiting."
+    )
 
 
 def test_gh_wait_timeout_applies_while_mergeability_is_unknown(monkeypatch, sleeps, capsys) -> None:
-    monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: {**_gh_pr([PENDING]), "mergeable": "UNKNOWN"})
+    monkeypatch.setattr(
+        "bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: {**_gh_pr([PENDING]), "mergeable": "UNKNOWN"}
+    )
 
     with pytest.raises(SystemExit) as exc:
         gh_run("gh", wait=True, timeout=10)

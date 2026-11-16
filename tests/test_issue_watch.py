@@ -235,7 +235,9 @@ def test_format_comment_text() -> None:
 
 
 def test_html_to_text_strips_tags_and_unescapes() -> None:
-    assert html_to_text('<div>Hi <a href="x">@Claude</a><br>a &amp; b</div><div>next</div>') == "Hi @Claude\na & b\nnext"
+    assert (
+        html_to_text('<div>Hi <a href="x">@Claude</a><br>a &amp; b</div><div>next</div>') == "Hi @Claude\na & b\nnext"
+    )
 
 
 def test_to_comments_converts_html_only_when_asked() -> None:
@@ -307,7 +309,11 @@ def test_follow_survives_a_transient_error_but_raises_repeated_ones() -> None:
 
     clock = FakeClock()
     with pytest.raises(RuntimeError):
-        list(run_follow(sequence([c(1)], *[RuntimeError("down")] * MAX_CONSECUTIVE_ERRORS), clock, timeout=500, interval=10))
+        list(
+            run_follow(
+                sequence([c(1)], *[RuntimeError("down")] * MAX_CONSECUTIVE_ERRORS), clock, timeout=500, interval=10
+            )
+        )
 
 
 def test_follow_polls_once_more_at_the_deadline_after_a_batch() -> None:

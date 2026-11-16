@@ -130,7 +130,10 @@ def test_commit_and_push_allows_staged_deletion_in_subrepo(tmp_path, monkeypatch
         subrepos=["database"],
     )
 
-    assert result.error != "File not found: database/schema.sql — did you typo the path? Run `git status` to see changed files"
+    assert (
+        result.error
+        != "File not found: database/schema.sql — did you typo the path? Run `git status` to see changed files"
+    )
 
 
 def test_commit_and_push_warns_on_no_verify(tmp_path, monkeypatch):

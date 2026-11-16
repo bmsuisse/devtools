@@ -44,16 +44,12 @@ def test_generates_json_with_fallbacks(tmp_path):
 
 def test_new_keys_from_code_are_added_and_block_generation(tmp_path):
     make_repo(tmp_path, '[A]\nen = "a"\n')
-    (tmp_path / "src" / "x.tsx").write_text(
-        "t('A'); t(\"NEW_KEY\"); foo.t('IGNORED'); $t('VUE_KEY')"
-    )
+    (tmp_path / "src" / "x.tsx").write_text("t('A'); t(\"NEW_KEY\"); foo.t('IGNORED'); $t('VUE_KEY')")
     (tmp_path / "print" / "r.jinja2").write_text("{{ 'JKEY' | tr }}")
     res = run(load_config(tmp_path))
     assert res.new_keys == ["JKEY", "NEW_KEY", "VUE_KEY"]
     assert not (tmp_path / "out").exists()
-    assert load_translations(tmp_path / "translations.toml")["NEW_KEY"] == {
-        "en": "NEW_KEY"
-    }
+    assert load_translations(tmp_path / "translations.toml")["NEW_KEY"] == {"en": "NEW_KEY"}
 
 
 def test_check_does_not_write(tmp_path):

@@ -47,8 +47,5 @@ def resolve_env(name: str, start: Path | None = None) -> dict[str, str]:
     env = envs[name]
     missing = [k for k in REQUIRED_KEYS if k not in env]
     if missing:
-        sys.exit(
-            f"ERROR: [tool.bdt.envs.{name}] in pyproject.toml is missing required "
-            f"key(s): {', '.join(missing)}"
-        )
+        sys.exit(f"ERROR: [tool.bdt.envs.{name}] in pyproject.toml is missing required key(s): {', '.join(missing)}")
     return env

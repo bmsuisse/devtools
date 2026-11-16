@@ -54,7 +54,9 @@ def test_token_missing_exits_with_hint(monkeypatch) -> None:
 
 
 def test_error_status_exits_with_api_message(monkeypatch) -> None:
-    client, _ = client_with(monkeypatch, [FakeResponse(422, {"message": "Validation Failed", "errors": [{"message": "bad label"}]})])
+    client, _ = client_with(
+        monkeypatch, [FakeResponse(422, {"message": "Validation Failed", "errors": [{"message": "bad label"}]})]
+    )
     with pytest.raises(SystemExit, match="Validation Failed.*bad label"):
         client.get("repos/o/r/issues")
 
@@ -175,6 +177,8 @@ def test_post_is_not_retried_but_a_graphql_query_is(monkeypatch) -> None:
 
 def test_503_is_retried(monkeypatch) -> None:
     monkeypatch.setattr(github_api, "RETRY_BACKOFF_SECS", 0)
-    client, calls = client_with(monkeypatch, [FakeResponse(503, {"message": "unavailable"}), FakeResponse(200, {"ok": 1})])
+    client, calls = client_with(
+        monkeypatch, [FakeResponse(503, {"message": "unavailable"}), FakeResponse(200, {"ok": 1})]
+    )
     assert client.get("x") == {"ok": 1}
     assert len(calls) == 2

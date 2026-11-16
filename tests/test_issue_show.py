@@ -25,8 +25,17 @@ def test_format_details_text_shows_everything_that_is_set() -> None:
 
     assert text.splitlines()[:2] == ["#12 [Active] Widget is broken", "https://example.test/12"]
     for line in (
-        "Type: Bug", "Iteration: MyProj\\Sprint 1", "Tags: a, b", "Parent: #5", "Children: #9, #10",
-        "Blocked by: #7", "Blocks: #11", "Related: #3", "It breaks", "Comments (1):", "Comment #1 by Bob at 2026-01-02",
+        "Type: Bug",
+        "Iteration: MyProj\\Sprint 1",
+        "Tags: a, b",
+        "Parent: #5",
+        "Children: #9, #10",
+        "Blocked by: #7",
+        "Blocks: #11",
+        "Related: #3",
+        "It breaks",
+        "Comments (1):",
+        "Comment #1 by Bob at 2026-01-02",
     ):
         assert line in text.splitlines()
     assert "Assigned to" not in text  # empty values are left out
@@ -45,7 +54,9 @@ def test_format_details_json_is_one_document_with_all_fields() -> None:
     assert data["parent"] == 5
     assert data["blocked_by"] == [7]
     assert data["fields"]["Type"] == "Bug"
-    assert data["comments"] == [{"id": 1, "author": "Bob", "created_at": "2026-01-02", "url": "https://example.test/12#c1", "body": "first"}]
+    assert data["comments"] == [
+        {"id": 1, "author": "Bob", "created_at": "2026-01-02", "url": "https://example.test/12#c1", "body": "first"}
+    ]
 
 
 def test_format_details_text_escapes_terminal_control_characters_but_json_keeps_them() -> None:

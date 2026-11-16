@@ -29,7 +29,10 @@ def long_lived_branches(start: Path | None = None) -> tuple[str, ...]:
     if raw is None:
         return DEFAULT_LONG_LIVED_BRANCHES
     if not isinstance(raw, list) or not all(isinstance(name, str) for name in raw):
-        print("Warning: [tool.bdt.pr].long_lived_branches must be a list of branch names; using the defaults", file=sys.stderr)
+        print(
+            "Warning: [tool.bdt.pr].long_lived_branches must be a list of branch names; using the defaults",
+            file=sys.stderr,
+        )
         return DEFAULT_LONG_LIVED_BRANCHES
     return tuple(name.removeprefix("refs/heads/") for name in raw)
 

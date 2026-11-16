@@ -48,7 +48,9 @@ GH_PR = {
     "url": "https://github.com/owner/repo/pull/69",
     "state": "OPEN",
     "isDraft": True,
-    "closingIssuesReferences": [{"number": 68, "url": "https://github.com/owner/repo/issues/68", "repository": {"name": "repo"}}],
+    "closingIssuesReferences": [
+        {"number": 68, "url": "https://github.com/owner/repo/issues/68", "repository": {"name": "repo"}}
+    ],
     "statusCheckRollup": [PASS, RUNNING],
 }
 
@@ -86,8 +88,16 @@ def test_github_info_ignores_closed_issues_of_other_repos() -> None:
 
 
 def test_github_info_ignores_same_named_repo_of_another_owner() -> None:
-    other = {"number": 9, "url": "https://github.com/otherorg/repo/issues/9", "repository": {"name": "repo", "owner": {"login": "otherorg"}}}
-    mine = {"number": 8, "url": "https://github.com/Owner/repo/issues/8", "repository": {"name": "repo", "owner": {"login": "Owner"}}}
+    other = {
+        "number": 9,
+        "url": "https://github.com/otherorg/repo/issues/9",
+        "repository": {"name": "repo", "owner": {"login": "otherorg"}},
+    }
+    mine = {
+        "number": 8,
+        "url": "https://github.com/Owner/repo/issues/8",
+        "repository": {"name": "repo", "owner": {"login": "Owner"}},
+    }
     info = pr_info.github_info({**GH_PR, "closingIssuesReferences": [other, mine]}, GITHUB_REMOTE)
     assert [i.number for i in info.issues] == [8]
 
@@ -108,7 +118,12 @@ ADO_PR = {
 
 
 def _build(status: str, result: str | None = None, pipeline: int = 1) -> dict:
-    return {"id": 100 + pipeline, "definition": {"id": pipeline, "name": f"p{pipeline}"}, "status": status, "result": result}
+    return {
+        "id": 100 + pipeline,
+        "definition": {"id": pipeline, "name": f"p{pipeline}"},
+        "status": status,
+        "result": result,
+    }
 
 
 @pytest.mark.parametrize(
@@ -129,7 +144,9 @@ def test_ado_build_state_matches_pr_status(builds, approval, expected) -> None:
 def _ado_builds(monkeypatch, builds: list[dict], approvals: list | None = None) -> list[str]:
     """Stub the ADO build lookups; returns the source branches asked about."""
     asked: list[str] = []
-    monkeypatch.setattr("bmsdna.devtools.pr_info.pr_build.get_builds_for_pr", lambda s, r, branch, pr_id: asked.append(branch) or builds)
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_info.pr_build.get_builds_for_pr", lambda s, r, branch, pr_id: asked.append(branch) or builds
+    )
     monkeypatch.setattr("bmsdna.devtools.pr_info.pr_build.find_pending_approvals", lambda s, r, b: approvals or [])
     return asked
 
@@ -193,7 +210,9 @@ def test_pr_info_passes_pr_id(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     seen = {}
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.get_pr", lambda gh, pr_id=None, fields="": seen.update(pr_id=pr_id) or GH_PR)
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.get_pr", lambda gh, pr_id=None, fields="": seen.update(pr_id=pr_id) or GH_PR
+    )
 
     assert runner.invoke(app, ["pr", "info", "--json", "--pr-id", "5"]).exit_code == 0
     assert seen == {"pr_id": 5}
@@ -251,7 +270,9 @@ def test_pr_info_all_passes_target_branch(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: GITHUB_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     targets: list = []
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.open_pr_numbers", lambda gh, target=None: targets.append(target) or [])
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.open_pr_numbers", lambda gh, target=None: targets.append(target) or []
+    )
 
     assert runner.invoke(app, ["pr", "info", "--json", "--all", "--target-branch", "main"]).exit_code == 0
     assert targets == ["main"]
@@ -271,7 +292,9 @@ def test_pr_info_all_on_azure_devops_lists_active_prs(monkeypatch) -> None:
     asked: list = []
     monkeypatch.setattr(
         "bmsdna.devtools.cli.pr_build.get_active_prs",
-        lambda session, remote, source, target: asked.append((source, target)) or [ADO_PR, {**ADO_PR, "pullRequestId": 43}],
+        lambda session, remote, source, target: (
+            asked.append((source, target)) or [ADO_PR, {**ADO_PR, "pullRequestId": 43}]
+        ),
     )
     _ado_builds(monkeypatch, [_build("completed", "succeeded")])
 
@@ -287,7 +310,13 @@ def test_gh_open_pr_numbers_lists_open_prs_of_the_branch(monkeypatch) -> None:
 
     monkeypatch.setattr(gh_pr, "current_branch", lambda: "feat")
     asked: list = []
-    monkeypatch.setattr(gh_pr, "_branch_prs", lambda gh, branch, state="all", base=None: asked.append((branch, state, base)) or [{"number": 3}, {"number": 2}])
+    monkeypatch.setattr(
+        gh_pr,
+        "_branch_prs",
+        lambda gh, branch, state="all", base=None: (
+            asked.append((branch, state, base)) or [{"number": 3}, {"number": 2}]
+        ),
+    )
 
     assert gh_pr.open_pr_numbers(None, "main") == [3, 2]  # ty: ignore[invalid-argument-type]
     assert asked == [("feat", "open", "main")]
@@ -341,9 +370,18 @@ def test_parse_pr_ref_on_a_github_checkout(text, expected) -> None:
         ("12", pr_ref.PrRef(12, None)),
         ("OtherProj/api#7", pr_ref.PrRef(7, AdoRemote("myorg", "OtherProj", "api"))),
         ("otherorg/OtherProj/api#7", pr_ref.PrRef(7, AdoRemote("otherorg", "OtherProj", "api"))),
-        ("https://dev.azure.com/otherorg/BMS%20-%20Data/_git/api/pullrequest/7", pr_ref.PrRef(7, AdoRemote("otherorg", "BMS - Data", "api"))),
-        ("https://otherorg.visualstudio.com/Proj/_git/api/pullrequest/7?_a=files", pr_ref.PrRef(7, AdoRemote("otherorg", "Proj", "api"))),
-        ("https://otherorg.visualstudio.com/DefaultCollection/Proj/_git/api/pullrequest/7", pr_ref.PrRef(7, AdoRemote("otherorg", "Proj", "api"))),
+        (
+            "https://dev.azure.com/otherorg/BMS%20-%20Data/_git/api/pullrequest/7",
+            pr_ref.PrRef(7, AdoRemote("otherorg", "BMS - Data", "api")),
+        ),
+        (
+            "https://otherorg.visualstudio.com/Proj/_git/api/pullrequest/7?_a=files",
+            pr_ref.PrRef(7, AdoRemote("otherorg", "Proj", "api")),
+        ),
+        (
+            "https://otherorg.visualstudio.com/DefaultCollection/Proj/_git/api/pullrequest/7",
+            pr_ref.PrRef(7, AdoRemote("otherorg", "Proj", "api")),
+        ),
         ("https://github.com/other/api/pull/7", pr_ref.PrRef(7, GitHubRemote("other", "api"))),
     ],
 )
@@ -351,7 +389,18 @@ def test_parse_pr_ref_on_an_azure_devops_checkout(text, expected) -> None:
     assert _parse(text, ADO_REMOTE) == expected
 
 
-@pytest.mark.parametrize("text", ["abc", "owner/repo", "owner/repo#", "a/b/c/d#1", "/repo#1", "https://example.com/x/y/pull/1", "https://github.com/o/r/issues/1"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "abc",
+        "owner/repo",
+        "owner/repo#",
+        "a/b/c/d#1",
+        "/repo#1",
+        "https://example.com/x/y/pull/1",
+        "https://github.com/o/r/issues/1",
+    ],
+)
 def test_parse_pr_ref_rejects_what_is_not_a_pr(text) -> None:
     with pytest.raises(pr_ref.PrRefError, match="can't read"):
         _parse(text)
@@ -417,11 +466,26 @@ def test_pr_id_several_entries_are_a_list_in_order_whatever_the_repo(monkeypatch
     seen = _ref_cli(monkeypatch)
 
     result = runner.invoke(
-        app, ["pr", "info", "--json", "--pr-id", "5,other/api#7", "--pr-id", "https://github.com/third/web/pull/9", "--pr-id", "5"]
+        app,
+        [
+            "pr",
+            "info",
+            "--json",
+            "--pr-id",
+            "5,other/api#7",
+            "--pr-id",
+            "https://github.com/third/web/pull/9",
+            "--pr-id",
+            "5",
+        ],
     )
 
     assert result.exit_code == 0, result.output
-    assert [(d["repo"], d["number"]) for d in json.loads(result.output)] == [("owner/repo", 5), ("other/api", 7), ("third/web", 9)]
+    assert [(d["repo"], d["number"]) for d in json.loads(result.output)] == [
+        ("owner/repo", 5),
+        ("other/api", 7),
+        ("third/web", 9),
+    ]
     assert seen == [("owner", "repo", 5), ("other", "api", 7), ("third", "web", 9)]  # the duplicate asked once
 
 
@@ -440,7 +504,9 @@ def test_pr_id_one_failing_entry_does_not_hide_the_others(monkeypatch) -> None:
     result = runner.invoke(app, ["pr", "info", "--json", "--pr-id", "5", "--pr-id", "other/api#7", "--pr-id", "6"])
 
     assert result.exit_code == 1
-    assert result.stdout.strip().startswith("[") and [d["number"] for d in json.loads(result.stdout.splitlines()[0])] == [5, 6]
+    assert result.stdout.strip().startswith("[") and [
+        d["number"] for d in json.loads(result.stdout.splitlines()[0])
+    ] == [5, 6]
     assert "error: other/api#7: Pull request #7 not found in other/api" in result.stderr
 
 
@@ -564,7 +630,9 @@ def test_issue_take_without_number_uses_issue_the_pr_closes(monkeypatch) -> None
 
 def test_issue_take_without_number_and_without_pr_issue_fails(monkeypatch) -> None:
     calls = _take_cli(monkeypatch)
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.get_pr", lambda gh, pr_id=None, fields="": {**GH_PR, "closingIssuesReferences": []})
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.get_pr", lambda gh, pr_id=None, fields="": {**GH_PR, "closingIssuesReferences": []}
+    )
 
     result = runner.invoke(app, ["issue", "take"])
 
@@ -574,7 +642,16 @@ def test_issue_take_without_number_and_without_pr_issue_fails(monkeypatch) -> No
 
 def test_issue_take_with_several_closed_issues_is_ambiguous(monkeypatch) -> None:
     calls = _take_cli(monkeypatch)
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.get_pr", lambda gh, pr_id=None, fields="": {**GH_PR, "closingIssuesReferences": [{"number": 1, "url": "u1", "repository": {"name": "repo"}}, {"number": 2, "url": "u2", "repository": {"name": "repo"}}]})
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.get_pr",
+        lambda gh, pr_id=None, fields="": {
+            **GH_PR,
+            "closingIssuesReferences": [
+                {"number": 1, "url": "u1", "repository": {"name": "repo"}},
+                {"number": 2, "url": "u2", "repository": {"name": "repo"}},
+            ],
+        },
+    )
 
     result = runner.invoke(app, ["issue", "take"])
 
@@ -590,20 +667,29 @@ def test_issue_take_note_includes_session_link_under_claude(monkeypatch) -> None
     _github_cli(monkeypatch)
     monkeypatch.setattr("bmsdna.devtools.cli._current_user", lambda remote: "octocat")
     monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: None)
-    fake = FakeGitHub({"POST repos/owner/repo/issues/12/comments": {"id": 1, "html_url": "https://x/issues/12#issuecomment-1"}})
+    fake = FakeGitHub(
+        {"POST repos/owner/repo/issues/12/comments": {"id": 1, "html_url": "https://x/issues/12#issuecomment-1"}}
+    )
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: fake)
 
     result = runner.invoke(app, ["issue", "take", "12"])
 
     assert result.exit_code == 0, result.output
-    assert [p["body"] for p in fake.calls_to("POST")] == ["Taken by octocat\n\nClaude Session: https://claude.ai/code/session_abc"]
+    assert [p["body"] for p in fake.calls_to("POST")] == [
+        "Taken by octocat\n\nClaude Session: https://claude.ai/code/session_abc"
+    ]
 
 
 def test_pr_info_on_azure_devops_passes_the_session_through(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
-    monkeypatch.setattr("bmsdna.devtools.cli._resolve_ado_pr", lambda pat, remote, target, pr_id=None: ("session", ADO_PR))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli._resolve_ado_pr", lambda pat, remote, target, pr_id=None: ("session", ADO_PR)
+    )
     seen = {}
-    monkeypatch.setattr("bmsdna.devtools.pr_info.pr_build.get_builds_for_pr", lambda s, r, branch, pr_id: seen.update(session=s) or [_build("completed", "succeeded")])
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_info.pr_build.get_builds_for_pr",
+        lambda s, r, branch, pr_id: seen.update(session=s) or [_build("completed", "succeeded")],
+    )
 
     result = runner.invoke(app, ["pr", "info", "--json"])
 
@@ -627,10 +713,35 @@ def test_target_options_default_to_dev_except_lookups_which_do_not_filter() -> N
 
     found = dict(_target_options(typer.main.get_command(app)))
 
-    assert {"pr create", "pr status", "pr info", "pr retry", "pr cancel-build", "pr requeue-build", "pr abandon", "pr publish", "pr update", "pr comment", "pr watch-deploy", "issue take"} <= set(found)
+    assert {
+        "pr create",
+        "pr status",
+        "pr info",
+        "pr retry",
+        "pr cancel-build",
+        "pr requeue-build",
+        "pr abandon",
+        "pr publish",
+        "pr update",
+        "pr comment",
+        "pr watch-deploy",
+        "issue take",
+    } <= set(found)
     # these only look an existing PR up (by the current branch): no target given means no filter on it, so a
     # PR into `main` is found without `--target main`. Only commands that create a PR or watch a branch need a target.
-    lookups = {"pr status", "pr info", "pr retry", "pr cancel-build", "pr requeue-build", "pr abandon", "pr publish", "pr update", "pr comment", "issue take", "commit"}
+    lookups = {
+        "pr status",
+        "pr info",
+        "pr retry",
+        "pr cancel-build",
+        "pr requeue-build",
+        "pr abandon",
+        "pr publish",
+        "pr update",
+        "pr comment",
+        "issue take",
+        "commit",
+    }
     assert {k for k, v in found.items() if v is None} == lookups
     assert {k: v for k, v in found.items() if v is not None} == {"pr create": "dev", "pr watch-deploy": "dev"}
 
@@ -674,7 +785,9 @@ def test_issue_do_takes_the_issue_with_the_new_session_before_starting_the_agent
 
     assert seen["events"] == ["comment", "agent"], result.output
     session_id = seen["cmd"][seen["cmd"].index("--session-id") + 1]
-    assert seen["bodies"] == [f"Taken by octocat\n\nClaude Session: {session_id} (resume with `claude --resume {session_id}`)"]
+    assert seen["bodies"] == [
+        f"Taken by octocat\n\nClaude Session: {session_id} (resume with `claude --resume {session_id}`)"
+    ]
     assert "bdt issue take" in seen["cmd"][2]  # the prompt says not to run it again
 
 
@@ -709,7 +822,11 @@ def test_issue_do_other_agent_is_taken_without_a_session(monkeypatch) -> None:
 
 @pytest.mark.parametrize(
     "last",
-    ["Taken by octocat", "Taken by octocat\n\nClaude Session: https://claude.ai/code/session_x", "  Taken by OctoCat (via codex)"],
+    [
+        "Taken by octocat",
+        "Taken by octocat\n\nClaude Session: https://claude.ai/code/session_x",
+        "  Taken by OctoCat (via codex)",
+    ],
 )
 def test_issue_take_skips_when_the_last_comment_is_already_a_take(monkeypatch, last) -> None:
     calls = _take_cli(monkeypatch)
@@ -723,7 +840,9 @@ def test_issue_take_skips_when_the_last_comment_is_already_a_take(monkeypatch, l
 
 def test_issue_take_refuses_someone_elses_claim_without_force(monkeypatch) -> None:
     calls = _take_cli(monkeypatch)
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: "Taken by someone-else\n\nClaude Session: x")
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_issue.last_comment", lambda *args: "Taken by someone-else\n\nClaude Session: x"
+    )
 
     result = runner.invoke(app, ["issue", "take", "12"])
 
@@ -753,7 +872,9 @@ def test_issue_take_on_azure_devops_reads_the_html_comment(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: ADO_REMOTE)
     monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr("bmsdna.devtools.cli._current_user", lambda remote: "me")
-    monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.last_comment", lambda session, remote, n: "<div>Taken by <b>someone</b></div>")
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.ado_issue.last_comment", lambda session, remote, n: "<div>Taken by <b>someone</b></div>"
+    )
     posted = []
     monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.comment_with_screenshots", lambda *a, **k: posted.append(a))
 

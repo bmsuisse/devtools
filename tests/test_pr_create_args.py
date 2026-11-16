@@ -3,7 +3,13 @@ import io
 import pytest
 
 from bmsdna.devtools import pr_create_args as m
-from bmsdna.devtools.pr_create_args import PrCreateArgsError, PrCreateOptions, parse_pr_create_args, resolve_body, unsupported_notes
+from bmsdna.devtools.pr_create_args import (
+    PrCreateArgsError,
+    PrCreateOptions,
+    parse_pr_create_args,
+    resolve_body,
+    unsupported_notes,
+)
 
 
 def gh(*args: str) -> PrCreateOptions:
@@ -47,7 +53,10 @@ def test_union_of_gh_and_az_spellings() -> None:
     assert gh("--label", "a", "-l", "b,c").labels == ["a", "b", "c"]
     assert ado("--labels", "a", "b").labels == ["a", "b"]
     assert gh("--reviewer", "a").reviewers == ["a"]
-    assert ado("--reviewers", "a@x.com", "b@x.com", "--required-reviewers", "c@x.com").reviewers == ["a@x.com", "b@x.com"]
+    assert ado("--reviewers", "a@x.com", "b@x.com", "--required-reviewers", "c@x.com").reviewers == [
+        "a@x.com",
+        "b@x.com",
+    ]
     assert ado("--required-reviewers", "c@x.com").required_reviewers == ["c@x.com"]
     assert gh("-a", "@me").assignees == ["@me"]
     assert gh("--milestone", "v1").milestone == "v1"
@@ -60,7 +69,15 @@ def test_union_of_gh_and_az_spellings() -> None:
 
 
 def test_booleans_flag_value_and_equals_forms() -> None:
-    o = ado("--squash", "--delete-source-branch", "false", "--auto-complete=true", "--bypass-policy", "--transition-work-items", "no")
+    o = ado(
+        "--squash",
+        "--delete-source-branch",
+        "false",
+        "--auto-complete=true",
+        "--bypass-policy",
+        "--transition-work-items",
+        "no",
+    )
     assert o.squash is True
     assert o.delete_source_branch is False
     assert o.auto_complete is True

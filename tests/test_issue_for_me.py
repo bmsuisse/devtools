@@ -26,10 +26,19 @@ REMOTE = AdoRemote("myorg", "MyProj", "myrepo")
 
 
 def _gh_issues(n: int) -> list[dict]:
-    return [{"number": i, "title": f"issue {i}", "url": f"https://github.com/o/r/issues/{i}", "state": "OPEN"} for i in range(1, n + 1)]
+    return [
+        {"number": i, "title": f"issue {i}", "url": f"https://github.com/o/r/issues/{i}", "state": "OPEN"}
+        for i in range(1, n + 1)
+    ]
 
 
-def _fake_gh(monkeypatch, issues: list[dict], last_comments: dict[int, str | None], graphql_calls: list[dict] | None = None, list_cmds: list[dict] | None = None) -> FakeGitHub:
+def _fake_gh(
+    monkeypatch,
+    issues: list[dict],
+    last_comments: dict[int, str | None],
+    graphql_calls: list[dict] | None = None,
+    list_cmds: list[dict] | None = None,
+) -> FakeGitHub:
     def graphql(query: str, variables: dict) -> dict:
         if graphql_calls is not None:
             graphql_calls.append(variables)
@@ -48,7 +57,13 @@ def _fake_gh(monkeypatch, issues: list[dict], last_comments: dict[int, str | Non
 def _hit(issue: dict) -> dict:
     """A `/search/issues` item for a `gh_issue.search`-shaped result dict."""
     repo = issue.get("repository", {}).get("nameWithOwner", "o/r")
-    return {"number": issue["number"], "title": issue["title"], "html_url": issue["url"], "state": issue["state"], "repository_url": f"https://api.github.com/repos/{repo}"}
+    return {
+        "number": issue["number"],
+        "title": issue["title"],
+        "html_url": issue["url"],
+        "state": issue["state"],
+        "repository_url": f"https://api.github.com/repos/{repo}",
+    }
 
 
 def test_gh_search_keeps_only_issues_whose_last_comment_matches(monkeypatch, capsys) -> None:
@@ -125,7 +140,12 @@ def test_ado_list_comments_is_oldest_first_with_normalized_fields() -> None:
     session = MagicMock()
     session.get.return_value.json.return_value = {
         "comments": [
-            {"id": 12, "text": "<div>newer</div>", "createdBy": {"displayName": "Bob"}, "createdDate": "2026-10-13T09:00:00Z"},
+            {
+                "id": 12,
+                "text": "<div>newer</div>",
+                "createdBy": {"displayName": "Bob"},
+                "createdDate": "2026-10-13T09:00:00Z",
+            },
             {"id": 11, "text": "older", "createdBy": {"displayName": "Alice"}, "createdDate": "2026-10-13T08:00:00Z"},
         ]
     }
@@ -147,7 +167,7 @@ def test_ado_search_keeps_only_items_whose_last_comment_matches(capsys) -> None:
     session = MagicMock()
     session.post.return_value.json.return_value = {"workItems": [{"id": 1}, {"id": 2}, {"id": 3}]}
     work_items = {i: {"id": i, "fields": {"System.Title": f"item {i}", "System.State": "Active"}} for i in (1, 2, 3)}
-    last = {1: "<div><a href=\"x\">@Claude</a> look</div>", 2: "<div>done</div>", 3: "@Agent"}
+    last = {1: '<div><a href="x">@Claude</a> look</div>', 2: "<div>done</div>", 3: "@Agent"}
 
     def fake_get(url, params=None, **kwargs):
         resp = MagicMock()
@@ -178,7 +198,11 @@ def test_ado_search_org_wide_checks_comments_in_the_items_own_project() -> None:
             urls.append(url)
             resp.json.return_value = {"comments": [{"id": 1, "text": "@claude"}]}
         else:
-            resp.json.return_value = {"value": [{"id": 1, "fields": {"System.Title": "t", "System.State": "Active", "System.TeamProject": "Other"}}]}
+            resp.json.return_value = {
+                "value": [
+                    {"id": 1, "fields": {"System.Title": "t", "System.State": "Active", "System.TeamProject": "Other"}}
+                ]
+            }
         return resp
 
     session.get.side_effect = fake_get
@@ -205,7 +229,9 @@ def test_gh_search_scan_limit_widens_the_scanned_pool_but_not_the_result(monkeyp
 def _clean_agent_env(monkeypatch) -> None:
     """The suite itself may run inside a coding agent, whose markers must not leak into detection."""
     for var in list(os.environ):
-        if var in ("BDT_AGENT", "CLAUDECODE", "AI_AGENT", "GEMINI_CLI", "OPENCODE") or var.startswith(("CLAUDE_CODE_", "CODEX_", "GOOSE_")):
+        if var in ("BDT_AGENT", "CLAUDECODE", "AI_AGENT", "GEMINI_CLI", "OPENCODE") or var.startswith(
+            ("CLAUDE_CODE_", "CODEX_", "GOOSE_")
+        ):
             monkeypatch.delenv(var)
 
 
@@ -214,7 +240,9 @@ def _capture_gh_search(monkeypatch) -> dict:
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
     captured: dict = {}
 
-    def fake_search(gh, owner, repo, keywords, since, limit, state, board=None, org_wide=False, labels=None, comment_filter=None):
+    def fake_search(
+        gh, owner, repo, keywords, since, limit, state, board=None, org_wide=False, labels=None, comment_filter=None
+    ):
         captured["comment_filter"] = comment_filter
         return []
 
@@ -289,7 +317,18 @@ def test_issue_search_for_me_on_azure_devops(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     captured: dict = {}
 
-    def fake_search(session, remote, keywords, since=None, board=None, top=10, state="open", org_wide=False, tags=None, comment_filter=None):
+    def fake_search(
+        session,
+        remote,
+        keywords,
+        since=None,
+        board=None,
+        top=10,
+        state="open",
+        org_wide=False,
+        tags=None,
+        comment_filter=None,
+    ):
         captured["comment_filter"] = comment_filter
         return []
 
@@ -301,7 +340,9 @@ def test_issue_search_for_me_on_azure_devops(monkeypatch) -> None:
     assert captured["comment_filter"]("@Claude look")
 
 
-def _patch_take(monkeypatch, items: list[dict], remote=None, taken: list | None = None, search_limits: list | None = None) -> None:
+def _patch_take(
+    monkeypatch, items: list[dict], remote=None, taken: list | None = None, search_limits: list | None = None
+) -> None:
     _clean_agent_env(monkeypatch)
     monkeypatch.setenv("CLAUDECODE", "1")
     monkeypatch.setattr("bmsdna.devtools.cli.current_remote", lambda: remote or GitHubRemote("o", "r"))
@@ -316,7 +357,12 @@ def _patch_take(monkeypatch, items: list[dict], remote=None, taken: list | None 
     monkeypatch.setattr("bmsdna.devtools.cli.gh_issue.search", fake_search)
     monkeypatch.setattr("bmsdna.devtools.cli.ado_issue.search", fake_search)
     monkeypatch.setattr("bmsdna.devtools.cli._current_user", lambda remote: "claude-bot")
-    monkeypatch.setattr("bmsdna.devtools.cli._take", lambda remote, number, message, pat, **kw: (taken.append((remote, number, message)) if taken is not None else None) or True)
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli._take",
+        lambda remote, number, message, pat, **kw: (
+            (taken.append((remote, number, message)) if taken is not None else None) or True
+        ),
+    )
 
 
 def test_issue_search_take_claims_the_first_match(monkeypatch) -> None:
@@ -402,7 +448,9 @@ def _git_clone_stub(path, origin: str) -> None:
 def test_issue_search_take_org_wide_names_the_local_clone_when_there_is_one(monkeypatch, tmp_path) -> None:
     clone = tmp_path / "github" / "otherrepo"
     _git_clone_stub(clone, "https://github.com/otherorg/otherrepo.git")
-    _git_clone_stub(tmp_path / "github" / "otherrepo-docs", "https://github.com/otherorg/otherrepo-docs.git")  # a substring match is not the repo
+    _git_clone_stub(
+        tmp_path / "github" / "otherrepo-docs", "https://github.com/otherorg/otherrepo-docs.git"
+    )  # a substring match is not the repo
     item = {"number": 7, "repository": {"nameWithOwner": "otherorg/otherrepo"}}
     _patch_take(monkeypatch, [item])
     monkeypatch.setattr("bmsdna.devtools.cli.find_repo_mod.work_dir", lambda: tmp_path)
@@ -449,7 +497,9 @@ def test_issue_search_take_org_wide_on_azure_devops_claims_in_the_items_project(
 
 
 def test_gh_comment_names_its_repo_explicitly() -> None:
-    gh = FakeGitHub({"POST repos/o/r/issues/7/comments": {"id": 1, "html_url": "https://github.com/o/r/issues/7#issuecomment-1"}})
+    gh = FakeGitHub(
+        {"POST repos/o/r/issues/7/comments": {"id": 1, "html_url": "https://github.com/o/r/issues/7#issuecomment-1"}}
+    )
 
     gh_issue.comment(gh, "o", "r", 7, "Taken by me", [], agent_note=False)
 
@@ -531,7 +581,9 @@ def test_issue_search_wait_output_equals_a_plain_search(monkeypatch) -> None:
 def test_issue_search_wait_times_out_with_exit_4_and_claims_nothing(monkeypatch) -> None:
     env = _WaitEnv(monkeypatch, [[]])
 
-    result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--wait", "--timeout", "50", "--interval", "20"])
+    result = runner.invoke(
+        app, ["issue", "search", "--for-me", "--take", "--wait", "--timeout", "50", "--interval", "20"]
+    )
 
     assert result.exit_code == 4
     assert env.sleeps == [20, 20, 10]  # the last sleep is cut to the deadline
@@ -575,7 +627,9 @@ def test_issue_search_wait_take_claims_exactly_once_and_only_after_a_match(monke
 
     monkeypatch.setattr(
         "bmsdna.devtools.cli._take",
-        lambda remote, number, message, pat, **kw: (claims_at_search.append(env.search_calls), real_take((remote, number, message))) and True,
+        lambda remote, number, message, pat, **kw: (
+            (claims_at_search.append(env.search_calls), real_take((remote, number, message))) and True
+        ),
     )
 
     result = runner.invoke(app, ["issue", "search", "--for-me", "--take", "--wait"])
@@ -891,7 +945,10 @@ def test_issue_watch_github_fetch_lists_the_issues_comments(monkeypatch) -> None
     calls: list[tuple] = []
     monkeypatch.setattr(
         "bmsdna.devtools.cli.gh_issue.list_comments",
-        lambda gh, owner, repo, number: calls.append((gh, owner, repo, number)) or [{"id": 9, "author": "a", "created_at": "t", "url": "u", "body": "b"}],
+        lambda gh, owner, repo, number: (
+            calls.append((gh, owner, repo, number))
+            or [{"id": 9, "author": "a", "created_at": "t", "url": "u", "body": "b"}]
+        ),
     )
 
     runner.invoke(app, ["issue", "watch", "84"])
@@ -905,7 +962,9 @@ def test_issue_watch_ado_fetch_converts_html_bodies(monkeypatch) -> None:
     captured = _patch_watch(monkeypatch, [_comment(5)], remote=REMOTE)
     monkeypatch.setattr(
         "bmsdna.devtools.cli.ado_issue.list_comments",
-        lambda session, remote, number: [{"id": 9, "author": "a", "created_at": "t", "url": "u", "body": "<div>hi &amp; bye</div>"}],
+        lambda session, remote, number: [
+            {"id": 9, "author": "a", "created_at": "t", "url": "u", "body": "<div>hi &amp; bye</div>"}
+        ],
     )
 
     runner.invoke(app, ["issue", "watch", "84"])

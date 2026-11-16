@@ -52,7 +52,12 @@ def test_reviewers_resolved_by_mail_guid_and_marked_required() -> None:
 
 
 def test_reviewer_no_match_and_ambiguous_exit_clearly() -> None:
-    session = _session({"nobody": [], "bob": [{"id": "1", "providerDisplayName": "Bob A"}, {"id": "2", "providerDisplayName": "Bob B"}]})
+    session = _session(
+        {
+            "nobody": [],
+            "bob": [{"id": "1", "providerDisplayName": "Bob A"}, {"id": "2", "providerDisplayName": "Bob B"}],
+        }
+    )
     with pytest.raises(SystemExit, match="No Azure DevOps user or group matches 'nobody'"):
         _create(session, options=PrCreateOptions(reviewers=["nobody"]))
     with pytest.raises(SystemExit, match="ambiguous"):
@@ -99,15 +104,24 @@ def test_no_extra_fields_and_no_follow_up_by_default() -> None:
 def test_completion_options_and_auto_complete_are_patched_after_creation() -> None:
     session = _session()
     opts = PrCreateOptions(
-        auto_complete=True, squash=True, delete_source_branch=False, bypass_policy=True,
-        bypass_policy_reason="hotfix", transition_work_items=True, merge_commit_message="msg",
+        auto_complete=True,
+        squash=True,
+        delete_source_branch=False,
+        bypass_policy=True,
+        bypass_policy_reason="hotfix",
+        transition_work_items=True,
+        merge_commit_message="msg",
     )
     pr = _create(session, options=opts)
     assert session.patch.call_args.args[0].endswith("/pullRequests/7")
     assert session.patch.call_args.kwargs["json"] == {
         "completionOptions": {
-            "squashMerge": True, "deleteSourceBranch": False, "bypassPolicy": True, "transitionWorkItems": True,
-            "mergeCommitMessage": "msg", "bypassReason": "hotfix",
+            "squashMerge": True,
+            "deleteSourceBranch": False,
+            "bypassPolicy": True,
+            "transitionWorkItems": True,
+            "mergeCommitMessage": "msg",
+            "bypassReason": "hotfix",
         },
         "autoCompleteSetBy": {"id": "me-id"},
     }
@@ -146,7 +160,9 @@ def test_current_user_lookup_failure_exits_with_hint() -> None:
 
 def test_build_create_body_makes_no_post() -> None:
     session = _session({"a@x.com": [{"id": "id-a"}]})
-    body = pr_build.build_create_body(session, REMOTE, "feat", "dev", title="t", draft=True, options=PrCreateOptions(reviewers=["a@x.com"]))
+    body = pr_build.build_create_body(
+        session, REMOTE, "feat", "dev", title="t", draft=True, options=PrCreateOptions(reviewers=["a@x.com"])
+    )
     assert body["reviewers"] == [{"id": "id-a"}] and body["isDraft"] is True
     session.post.assert_not_called()
 

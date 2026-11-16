@@ -21,7 +21,11 @@ runner = CliRunner()
 
 def git(cwd: Path, *args: str) -> str:
     return subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, check=True, capture_output=True, encoding="utf-8"
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        encoding="utf-8",
     ).stdout.strip()
 
 
@@ -97,7 +101,15 @@ def test_check_is_none_while_the_target_has_not_moved(repo: Repo) -> None:
     assert pr_drift.check(REMOTE, repo.pr(), repo.base) is None
 
 
-@pytest.mark.parametrize("pr_extra", [{"status": "completed"}, {"status": "abandoned"}, {"lastMergeTargetCommit": None}, {"lastMergeSourceCommit": None}])
+@pytest.mark.parametrize(
+    "pr_extra",
+    [
+        {"status": "completed"},
+        {"status": "abandoned"},
+        {"lastMergeTargetCommit": None},
+        {"lastMergeSourceCommit": None},
+    ],
+)
 def test_check_is_none_for_a_pr_that_has_nothing_to_merge_or_no_merge_data(repo: Repo, pr_extra: dict) -> None:
     tip = repo.advance_dev("a.txt", "dev\n")
 
@@ -176,7 +188,9 @@ def test_messages_say_what_moved_and_what_to_do() -> None:
 
 def session_with_tip(tip: str | None, name: str = "refs/heads/dev") -> MagicMock:
     session = MagicMock()
-    session.get.return_value.json.return_value = {"value": [{"name": "refs/heads/dev-old", "objectId": "x"}, *([{"name": name, "objectId": tip}] if tip else [])]}
+    session.get.return_value.json.return_value = {
+        "value": [{"name": "refs/heads/dev-old", "objectId": "x"}, *([{"name": name, "objectId": tip}] if tip else [])]
+    }
     return session
 
 
@@ -225,7 +239,10 @@ def test_status_notes_a_moved_target_that_still_merges(repo: Repo, monkeypatch, 
     run(REMOTE, "pat", "dev", wait=False, source_branch="feat")
 
     out = capsys.readouterr().out
-    assert "Note: 'dev' has moved on by 1 commit since the PR's merge status and builds were computed; the PR still merges cleanly." in out
+    assert (
+        "Note: 'dev' has moved on by 1 commit since the PR's merge status and builds were computed; the PR still merges cleanly."
+        in out
+    )
     assert "No builds found" in out
 
 
@@ -291,7 +308,9 @@ def test_ado_info_merge_is_unknown_when_the_target_cannot_be_looked_up(monkeypat
 
 
 @pytest.mark.parametrize("merge_status", ["failure", "rejectedByPolicy"])
-def test_ado_info_merge_is_unknown_not_conflicts_when_the_merge_failed_for_another_reason(monkeypatch, merge_status: str) -> None:
+def test_ado_info_merge_is_unknown_not_conflicts_when_the_merge_failed_for_another_reason(
+    monkeypatch, merge_status: str
+) -> None:
     _no_builds(monkeypatch)
 
     assert pr_info.ado_info(None, {**ADO_PR, "mergeStatus": merge_status}, REMOTE).merge == pr_info.MERGE_UNKNOWN  # ty: ignore[invalid-argument-type]
@@ -315,7 +334,12 @@ def test_ado_info_has_no_merge_state_for_a_pr_that_is_not_open(monkeypatch, stat
 
 @pytest.mark.parametrize(
     "mergeable,state,expected",
-    [("CONFLICTING", "OPEN", "conflicts"), ("MERGEABLE", "OPEN", "clean"), ("UNKNOWN", "OPEN", "clean"), ("CONFLICTING", "MERGED", "none")],
+    [
+        ("CONFLICTING", "OPEN", "conflicts"),
+        ("MERGEABLE", "OPEN", "clean"),
+        ("UNKNOWN", "OPEN", "clean"),
+        ("CONFLICTING", "MERGED", "none"),
+    ],
 )
 def test_github_info_merge_state_is_githubs_mergeable(mergeable: str, state: str, expected: str) -> None:
     pr = {"number": 1, "title": "t", "url": "u", "state": state, "baseRefName": "main", "mergeable": mergeable}
@@ -326,7 +350,9 @@ def test_github_info_merge_state_is_githubs_mergeable(mergeable: str, state: str
 
 
 def _info(merge: str, **kw) -> pr_info.PrInfo:
-    return pr_info.PrInfo(42, "feat: widgets", "https://x/42", "open", False, "passing", merge=merge, target="dev", **kw)
+    return pr_info.PrInfo(
+        42, "feat: widgets", "https://x/42", "open", False, "passing", merge=merge, target="dev", **kw
+    )
 
 
 def test_info_text_lists_the_conflicts_and_the_drift() -> None:
@@ -338,11 +364,16 @@ def test_info_text_lists_the_conflicts_and_the_drift() -> None:
         "https://x/42",
         "Conflicts with 'dev': a.txt, b.txt",
     ]
-    assert _info_text(_info("behind", target_behind=1)).splitlines()[2] == "'dev' moved on by 1 commit since the PR's last merge check"
+    assert (
+        _info_text(_info("behind", target_behind=1)).splitlines()[2]
+        == "'dev' moved on by 1 commit since the PR's last merge check"
+    )
 
 
 def test_info_json_carries_the_merge_state(monkeypatch) -> None:
-    monkeypatch.setattr("bmsdna.devtools.cli._current_pr_info", lambda *a: _info("conflicts", conflicts=["a.txt"], target_behind=3))
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli._current_pr_info", lambda *a: _info("conflicts", conflicts=["a.txt"], target_behind=3)
+    )
 
     result = runner.invoke(app, ["pr", "info", "--json"])
 
@@ -350,4 +381,9 @@ def test_info_json_carries_the_merge_state(monkeypatch) -> None:
     import json
 
     data = json.loads(result.output)
-    assert (data["merge"], data["target"], data["conflicts"], data["target_behind"]) == ("conflicts", "dev", ["a.txt"], 3)
+    assert (data["merge"], data["target"], data["conflicts"], data["target_behind"]) == (
+        "conflicts",
+        "dev",
+        ["a.txt"],
+        3,
+    )

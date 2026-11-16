@@ -32,8 +32,7 @@ def download_logs(webapp: str, resource_group: str, slot: str | None, archive: p
     try:
         sub = azure_arm.default_subscription_id()
         site = (
-            f"/subscriptions/{sub}/resourceGroups/{quote(resource_group)}"
-            f"/providers/Microsoft.Web/sites/{quote(webapp)}"
+            f"/subscriptions/{sub}/resourceGroups/{quote(resource_group)}/providers/Microsoft.Web/sites/{quote(webapp)}"
         )
         if slot:
             site += f"/slots/{quote(slot)}"

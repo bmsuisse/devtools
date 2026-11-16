@@ -70,32 +70,23 @@ def test_parse_labels_keeps_active_names_only() -> None:
     assert ci_plan_env.parse_labels(payload) == ["test-orders", "x"]
 
 
-@pytest.mark.parametrize(
-    "payload", [None, {}, {"value": "x"}, {"value": [{"nom": "a"}]}, {"value": [3]}]
-)
+@pytest.mark.parametrize("payload", [None, {}, {"value": "x"}, {"value": [{"nom": "a"}]}, {"value": [3]}])
 def test_parse_labels_rejects_unexpected_shapes(payload) -> None:
     with pytest.raises(ValueError):
         ci_plan_env.parse_labels(payload)
 
 
 def test_fetch_labels_calls_the_pr_labels_api_with_the_build_token(api) -> None:
-    api.routes["pullrequests/7/labels"] = FakeResponse(
-        {"value": [{"name": "test-full"}]}
-    )
+    api.routes["pullrequests/7/labels"] = FakeResponse({"value": [{"name": "test-full"}]})
     assert ci_plan_env.fetch_labels(PR_ENV, 7) == ["test-full"]
     url, auth = api.calls[0]
-    assert (
-        url
-        == "https://dev.azure.com/org/proj/_apis/git/repositories/repo/pullrequests/7/labels?api-version=7.1"
-    )
+    assert url == "https://dev.azure.com/org/proj/_apis/git/repositories/repo/pullrequests/7/labels?api-version=7.1"
     assert auth == ("", "tok")
 
 
 def test_fetch_labels_without_token_is_a_value_error() -> None:
     with pytest.raises(ValueError, match="SYSTEM_ACCESSTOKEN"):
-        ci_plan_env.fetch_labels(
-            {k: v for k, v in PR_ENV.items() if k != "SYSTEM_ACCESSTOKEN"}, 7
-        )
+        ci_plan_env.fetch_labels({k: v for k, v in PR_ENV.items() if k != "SYSTEM_ACCESSTOKEN"}, 7)
 
 
 def test_context_for_pr_validation_build() -> None:
@@ -109,9 +100,7 @@ def test_context_for_pr_validation_build() -> None:
 
 
 def test_context_for_branch_build() -> None:
-    ctx = ci_plan_env.context_from_env(
-        {"BUILD_REASON": "Schedule", "BUILD_SOURCEBRANCH": "refs/heads/dev"}
-    )
+    ctx = ci_plan_env.context_from_env({"BUILD_REASON": "Schedule", "BUILD_SOURCEBRANCH": "refs/heads/dev"})
     assert (ctx.pr_id, ctx.branch, ctx.reason) == (None, "dev", "Schedule")
 
 
@@ -119,9 +108,7 @@ def test_manual_run_of_a_pr_merge_ref_is_planned_like_that_pr(api) -> None:
     api.routes["pullrequests/9"] = FakeResponse(
         {"sourceRefName": "refs/heads/feat/y", "targetRefName": "refs/heads/dev"}
     )
-    ctx = ci_plan_env.context_from_env(
-        {**ADO_ENV, "BUILD_REASON": "Manual", "BUILD_SOURCEBRANCH": "refs/pull/9/merge"}
-    )
+    ctx = ci_plan_env.context_from_env({**ADO_ENV, "BUILD_REASON": "Manual", "BUILD_SOURCEBRANCH": "refs/pull/9/merge"})
     assert (ctx.pr_id, ctx.source, ctx.target) == (9, "feat/y", "dev")
 
 
@@ -133,9 +120,7 @@ def test_manual_run_of_a_fork_pr_merge_ref_keeps_the_fork_flag(api) -> None:
             "forkSource": {"name": "x"},
         }
     )
-    ctx = ci_plan_env.context_from_env(
-        {**ADO_ENV, "BUILD_REASON": "Manual", "BUILD_SOURCEBRANCH": "refs/pull/9/merge"}
-    )
+    ctx = ci_plan_env.context_from_env({**ADO_ENV, "BUILD_REASON": "Manual", "BUILD_SOURCEBRANCH": "refs/pull/9/merge"})
     assert ctx.is_fork
 
 
@@ -219,9 +204,7 @@ def test_fix_check_needs_a_merge_commit(clone, monkeypatch) -> None:
         ci_plan_env.verify_fix_base({})
 
 
-def test_changed_files_in_ci_use_the_first_parent_and_locally_origin_target(
-    clone, monkeypatch
-) -> None:
+def test_changed_files_in_ci_use_the_first_parent_and_locally_origin_target(clone, monkeypatch) -> None:
     monkeypatch.chdir(clone)
     git(clone, "checkout", "-q", "-b", "feat")
     commit(clone, "a.txt")
@@ -231,9 +214,7 @@ def test_changed_files_in_ci_use_the_first_parent_and_locally_origin_target(
     assert ci_plan_env.changed_files("main", merge_checkout=True) == ["a.txt"]
 
 
-def test_local_dry_run_does_not_mistake_an_ordinary_merge_for_the_pr_merge(
-    clone, monkeypatch
-) -> None:
+def test_local_dry_run_does_not_mistake_an_ordinary_merge_for_the_pr_merge(clone, monkeypatch) -> None:
     """feature changes code, then merges main (docs only): the local diff must still see the code change."""
     monkeypatch.chdir(clone)
     git(clone, "checkout", "-q", "-b", "feat")
@@ -246,9 +227,7 @@ def test_local_dry_run_does_not_mistake_an_ordinary_merge_for_the_pr_merge(
     assert "code.py" in ci_plan_env.changed_files("main", merge_checkout=False)
 
 
-def test_fix_check_in_a_shallow_checkout_only_warns(
-    tmp_path, clone, monkeypatch
-) -> None:
+def test_fix_check_in_a_shallow_checkout_only_warns(tmp_path, clone, monkeypatch) -> None:
     shallow = tmp_path / "shallow"
     git(
         tmp_path,
@@ -279,24 +258,15 @@ def project(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_plan_in_azure_pipelines_sets_output_variables(
-    project, monkeypatch, api, capsys
-) -> None:
+def test_plan_in_azure_pipelines_sets_output_variables(project, monkeypatch, api, capsys) -> None:
     for key, value in PR_ENV.items():
         monkeypatch.setenv(key, value)
-    api.routes["pullrequests/7/labels"] = FakeResponse(
-        {"value": [{"name": "test-orders"}]}
-    )
+    api.routes["pullrequests/7/labels"] = FakeResponse({"value": [{"name": "test-orders"}]})
     result = CliRunner().invoke(app, ["ci", "plan"])
     assert result.exit_code == 0, result.output
     assert "test plan: areas (PR labels select orders)" in result.output
-    assert (
-        "##vso[task.setvariable variable=runTests;isOutput=true]true" in result.output
-    )
-    assert (
-        "##vso[task.setvariable variable=unitPaths;isOutput=true]tests/unit/orders"
-        in result.output
-    )
+    assert "##vso[task.setvariable variable=runTests;isOutput=true]true" in result.output
+    assert "##vso[task.setvariable variable=unitPaths;isOutput=true]tests/unit/orders" in result.output
 
 
 def test_plan_branch_flow_violation_fails_the_build(project, monkeypatch, api) -> None:
@@ -315,16 +285,11 @@ def test_plan_label_api_outage_runs_everything(project, monkeypatch, api) -> Non
         monkeypatch.setenv(key, value)
     result = CliRunner().invoke(app, ["ci", "plan"])
     assert result.exit_code == 0
-    assert (
-        "test plan: full" in result.output
-        and "runTests;isOutput=true]true" in result.output
-    )
+    assert "test plan: full" in result.output and "runTests;isOutput=true]true" in result.output
 
 
 def test_dry_run_prints_plain_variables(project) -> None:
-    result = CliRunner().invoke(
-        app, ["ci", "plan", "--pr-source", "dev", "--pr-target", "test"]
-    )
+    result = CliRunner().invoke(app, ["ci", "plan", "--pr-source", "dev", "--pr-target", "test"])
     assert result.exit_code == 0
     assert "runTests=false" in result.output and "##vso" not in result.output
 
@@ -371,14 +336,10 @@ def test_vso_commands_cannot_be_split_by_untrusted_text(capsys) -> None:
     assert "%0A" in lines[0] and "%0A" in lines[1] and "100%AZP25" in lines[1]
 
 
-def test_changed_files_lists_a_moved_file_under_its_old_path_too(
-    clone, monkeypatch
-) -> None:
+def test_changed_files_lists_a_moved_file_under_its_old_path_too(clone, monkeypatch) -> None:
     """Rename detection would show only docs/app.py: code moved into a non_code folder must not look like a docs change."""
     monkeypatch.chdir(clone)
-    git(
-        clone, "config", "diff.renames", "true"
-    )  # the detection --no-renames must override, whatever the user has set
+    git(clone, "config", "diff.renames", "true")  # the detection --no-renames must override, whatever the user has set
     (clone / "src").mkdir()
     (clone / "docs").mkdir()
     (clone / "src/app.py").write_text("def f():\n    return 1\n")
@@ -407,6 +368,4 @@ def test_changed_files_keeps_non_ascii_names_unquoted(clone, monkeypatch) -> Non
     (clone / "tests/test_über.py").write_text("")
     git(clone, "add", "-A")
     git(clone, "commit", "-q", "-m", "umlaut")
-    assert ci_plan_env.changed_files("main", merge_checkout=False) == [
-        "tests/test_über.py"
-    ]
+    assert ci_plan_env.changed_files("main", merge_checkout=False) == ["tests/test_über.py"]

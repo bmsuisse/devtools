@@ -109,7 +109,7 @@ def _ado_get(url: str, headers: dict[str, str], params: dict[str, str | int] | N
     if r.status_code >= 400:
         try:
             msg = r.json().get("message") or r.reason
-        except (ValueError, AttributeError):
+        except ValueError, AttributeError:
             msg = r.reason
         if r.status_code in (401, 203):
             msg = f"{msg} (not authorized -- pass --pat / set AZURE_DEVOPS_EXT_PAT, or `az login`)"
@@ -253,7 +253,9 @@ def _ado_details(org: str, repo: RemoteRepo, headers: dict[str, str]) -> RemoteR
     last_commit = CommitInfo()  # also what a failed commit request leaves; the README may still be readable
     if commit_list:
         c = commit_list[0]
-        last_commit = CommitInfo(c.get("commitId", ""), c.get("committer", {}).get("date", ""), c.get("author", {}).get("name", ""))
+        last_commit = CommitInfo(
+            c.get("commitId", ""), c.get("committer", {}).get("date", ""), c.get("author", {}).get("name", "")
+        )
     # JSON is requested explicitly: without it the items API answers with the raw file instead of `content`.
     description = ""
     for name in README_NAMES:
@@ -297,13 +299,23 @@ def _github_repos_with_commits(client: GitHubClient, org: str) -> list[RemoteRep
         for r in page["nodes"]:
             commit = ((r.get("defaultBranchRef") or {}).get("target")) or {}
             last_commit = (
-                CommitInfo(commit.get("oid", ""), commit.get("committedDate", ""), (commit.get("author") or {}).get("name") or "")
+                CommitInfo(
+                    commit.get("oid", ""),
+                    commit.get("committedDate", ""),
+                    (commit.get("author") or {}).get("name") or "",
+                )
                 if commit
                 else CommitInfo(date=r.get("pushedAt") or "")
             )
             repos.append(
                 RemoteRepo(
-                    org, r["name"], r["url"], source="github", description=r.get("description") or "", last_commit=last_commit, disabled=bool(r.get("isDisabled"))
+                    org,
+                    r["name"],
+                    r["url"],
+                    source="github",
+                    description=r.get("description") or "",
+                    last_commit=last_commit,
+                    disabled=bool(r.get("isDisabled")),
                 )
             )
         if not page["pageInfo"]["hasNextPage"]:
@@ -312,7 +324,12 @@ def _github_repos_with_commits(client: GitHubClient, org: str) -> list[RemoteRep
 
 
 def list_remote(
-    *, org: str | None, github_org: str | None, pat: str | None = None, fast: bool = False, include_disabled: bool = False
+    *,
+    org: str | None,
+    github_org: str | None,
+    pat: str | None = None,
+    fast: bool = False,
+    include_disabled: bool = False,
 ) -> list[RemoteRepo]:
     """Every repo of `org` (Azure DevOps) and/or `github_org` (GitHub), sorted by project and name.
 
@@ -350,7 +367,11 @@ def _local_last_commit(path: Path) -> CommitInfo:
     """Newest commit across all of a clone's branches (empty for a clone without commits)."""
     try:
         r = subprocess.run(
-            ["git", "log", "-1", "--all", "--format=%H%x00%cI%x00%an"], cwd=path, capture_output=True, text=True, check=False
+            ["git", "log", "-1", "--all", "--format=%H%x00%cI%x00%an"],
+            cwd=path,
+            capture_output=True,
+            text=True,
+            check=False,
         )
     except FileNotFoundError:
         sys.exit("'git' is required for this command but wasn't found on PATH.")
@@ -368,7 +389,9 @@ class LocalRepo:
 
 def _local_origin_url(path: Path) -> str:
     try:
-        r = subprocess.run(["git", "config", "--get", "remote.origin.url"], cwd=path, capture_output=True, text=True, check=False)
+        r = subprocess.run(
+            ["git", "config", "--get", "remote.origin.url"], cwd=path, capture_output=True, text=True, check=False
+        )
     except FileNotFoundError:
         sys.exit("'git' is required for this command but wasn't found on PATH.")
     return r.stdout.strip()
@@ -466,7 +489,10 @@ def run_list(
                 "where your repos are cloned, or pass --root."
             )
         if not local:
-            print("No org configured (AZDO_ORG / GITHUB_ORG or --org / --github-org): listing local clones.", file=sys.stderr)
+            print(
+                "No org configured (AZDO_ORG / GITHUB_ORG or --org / --github-org): listing local clones.",
+                file=sys.stderr,
+            )
         entries = [
             {
                 "name": r.path.name,

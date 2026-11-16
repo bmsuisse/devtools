@@ -125,7 +125,9 @@ def test_csp_not_required_for_non_web_project(tmp_path: Path) -> None:
 
 
 def test_csp_weakened_is_reported(tmp_path: Path) -> None:
-    (tmp_path / "index.html").write_text("<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'self' 'unsafe-inline'\"><p>hi</p>")
+    (tmp_path / "index.html").write_text(
+        "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'self' 'unsafe-inline'\"><p>hi</p>"
+    )
     assert [f.rule for f in _run(tmp_path).findings] == ["csp-weakened"]
 
 
@@ -187,7 +189,9 @@ def test_tests_and_missing_paths(tmp_path: Path) -> None:
 
 def test_diff_mode_scans_changed_and_untracked_files(tmp_path: Path) -> None:
     def git(*args: str) -> None:
-        subprocess.run(["git", "-c", "user.email=a@b.c", "-c", "user.name=t", *args], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-c", "user.email=a@b.c", "-c", "user.name=t", *args], cwd=tmp_path, check=True, capture_output=True
+        )
 
     git("init", "-b", "main")
     (tmp_path / "old.py").write_text("eval(x)\n")
@@ -236,7 +240,9 @@ def test_frontend_regex_edge_cases(tmp_path: Path) -> None:
 
 
 def test_csp_wildcard_after_quoted_source(tmp_path: Path) -> None:
-    (tmp_path / "staticwebapp.config.json").write_text('{"globalHeaders": {"Content-Security-Policy": "script-src \'self\' *; img-src *"}}')
+    (tmp_path / "staticwebapp.config.json").write_text(
+        '{"globalHeaders": {"Content-Security-Policy": "script-src \'self\' *; img-src *"}}'
+    )
     (tmp_path / "app.py").write_text("from fastapi import FastAPI\n")
     result = _run(tmp_path)
     assert [f.rule for f in result.findings] == ["csp-weakened"]
@@ -252,7 +258,9 @@ def test_relative_paths_still_skip_test_dirs(tmp_path: Path, monkeypatch: pytest
 
 def test_diff_mode_from_subdirectory_finds_untracked_files(tmp_path: Path) -> None:
     def git(*args: str) -> None:
-        subprocess.run(["git", "-c", "user.email=a@b.c", "-c", "user.name=t", *args], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-c", "user.email=a@b.c", "-c", "user.name=t", *args], cwd=tmp_path, check=True, capture_output=True
+        )
 
     git("init", "-b", "main")
     (tmp_path / "backend").mkdir()
@@ -278,7 +286,9 @@ def test_exclude_dir_name_path_and_glob(tmp_path: Path) -> None:
     assert len(find_injection.run([], root=tmp_path, exclude=["vendor"]).findings) == 3
     assert len(find_injection.run([], root=tmp_path, exclude=["lib/generated"]).findings) == 3
     assert len(find_injection.run([], root=tmp_path, exclude=["web/*.js", "vendor/"]).findings) == 2
-    assert [f.path.name for f in find_injection.run([], root=tmp_path, exclude=["vendor", "lib", "web/*.js"]).findings] == ["bad.py"]
+    assert [
+        f.path.name for f in find_injection.run([], root=tmp_path, exclude=["vendor", "lib", "web/*.js"]).findings
+    ] == ["bad.py"]
 
 
 def test_exclude_dirs_from_pyproject(tmp_path: Path) -> None:
@@ -348,7 +358,10 @@ def run(cmd, target):
 """
     )
     result = find_injection.run([], root=tmp_path)
-    assert [(f.path.name, f.line, f.rule) for f in result.findings] == [("bad.py", 5, "py-shell-command"), ("bad.py", 6, "py-shell-command")]
+    assert [(f.path.name, f.line, f.rule) for f in result.findings] == [
+        ("bad.py", 5, "py-shell-command"),
+        ("bad.py", 6, "py-shell-command"),
+    ]
 
 
 def test_csp_weakening_in_test_files_is_ignored(tmp_path: Path) -> None:

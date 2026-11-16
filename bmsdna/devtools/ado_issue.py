@@ -95,7 +95,9 @@ def check_board(board: str | None, start: Path | None = None, *, creating: bool 
     allowed = config.get("allowed_boards", [])
     # An explicitly configured but empty list is a misconfiguration, not "no restriction" — silently
     # allowing every board would defeat the point of having configured an allowlist.
-    if "allowed_boards" in config and (not isinstance(allowed, list) or not allowed or not all(isinstance(a, str) for a in allowed)):
+    if "allowed_boards" in config and (
+        not isinstance(allowed, list) or not allowed or not all(isinstance(a, str) for a in allowed)
+    ):
         sys.exit("[tool.bdt.ado].allowed_boards in pyproject.toml must be a non-empty list of board/team names.")
     require = config.get("require_board", False)
     if not isinstance(require, bool):
@@ -109,7 +111,9 @@ def check_board(board: str | None, start: Path | None = None, *, creating: bool 
     if board and allowed:
         match = next((a for a in allowed if a.casefold() == board.casefold()), None)
         if match is None:
-            sys.exit(f"Board '{board}' isn't allowed here (see [tool.bdt.ado].allowed_boards). Allowed boards: {', '.join(allowed)}.")
+            sys.exit(
+                f"Board '{board}' isn't allowed here (see [tool.bdt.ado].allowed_boards). Allowed boards: {', '.join(allowed)}."
+            )
         return match
     return board
 
@@ -129,7 +133,9 @@ def get_team_area_path(session: requests.Session, remote: AdoRemote, team: str) 
         params={"api-version": "7.1"},
     )
     if r.status_code == 404:
-        sys.exit(f"Board/team '{team}' not found in project '{remote.project}'. Check --board / [tool.bdt.ado].board in pyproject.toml.")
+        sys.exit(
+            f"Board/team '{team}' not found in project '{remote.project}'. Check --board / [tool.bdt.ado].board in pyproject.toml."
+        )
     r.raise_for_status()
     return r.json()["defaultValue"]
 
@@ -194,18 +200,34 @@ def build_relation_ops(
         current = [(i, rel) for i, rel in enumerate(existing) if rel.get("rel") == PARENT_REL]
         if not any(_relation_target_id(rel) == parent for _, rel in current):
             ops += [{"op": "remove", "path": f"/relations/{i}"} for i, _ in reversed(current)]
-            ops.append({"op": "add", "path": "/relations/-", "value": {"rel": PARENT_REL, "url": _work_item_api_url(remote, parent)}})
+            ops.append(
+                {
+                    "op": "add",
+                    "path": "/relations/-",
+                    "value": {"rel": PARENT_REL, "url": _work_item_api_url(remote, parent)},
+                }
+            )
     already_blocked_by = {_relation_target_id(rel) for rel in existing if rel.get("rel") == BLOCKED_BY_REL}
     for blocker in dict.fromkeys(blocked_by or []):
         if blocker not in already_blocked_by:
-            ops.append({"op": "add", "path": "/relations/-", "value": {"rel": BLOCKED_BY_REL, "url": _work_item_api_url(remote, blocker)}})
+            ops.append(
+                {
+                    "op": "add",
+                    "path": "/relations/-",
+                    "value": {"rel": BLOCKED_BY_REL, "url": _work_item_api_url(remote, blocker)},
+                }
+            )
     return ops
 
 
 def build_attach_ops(images: list[tuple[str, str]]) -> list[dict]:
     """The JSON Patch document body for linking already-uploaded attachments via 'AttachedFile' relations."""
     return [
-        {"op": "add", "path": "/relations/-", "value": {"rel": "AttachedFile", "url": url, "attributes": {"comment": name}}}
+        {
+            "op": "add",
+            "path": "/relations/-",
+            "value": {"rel": "AttachedFile", "url": url, "attributes": {"comment": name}},
+        }
         for name, url in images
     ]
 
@@ -276,7 +298,9 @@ def update_work_item(
 ) -> dict:
     ops = build_update_ops(title, description, area_path, tags, state, iteration_path, relation_ops)
     if not ops:
-        sys.exit("Nothing to update — provide at least one of --title, --description, --board, --iteration, --tag, --state, --parent, --blocked-by.")
+        sys.exit(
+            "Nothing to update — provide at least one of --title, --description, --board, --iteration, --tag, --state, --parent, --blocked-by."
+        )
 
     r = session.patch(
         f"{_base_url(remote)}/_apis/wit/workitems/{work_item_id}",
@@ -415,7 +439,9 @@ def delete_work_item(session: requests.Session, remote: AdoRemote, work_item_id:
     r.raise_for_status()
 
 
-def upload_attachment(session: requests.Session, remote: AdoRemote, attachment_name: str, file_path: str) -> tuple[str, str]:
+def upload_attachment(
+    session: requests.Session, remote: AdoRemote, attachment_name: str, file_path: str
+) -> tuple[str, str]:
     """Upload `file_path` as a work item attachment named `attachment_name`; returns (id, download url).
 
     Azure DevOps' WIT attachment-download endpoint only infers Content-Type/Content-Disposition
@@ -452,7 +478,9 @@ def _upload_attachments(session: requests.Session, remote: AdoRemote, paths: lis
     ]
 
 
-def link_attachments(session: requests.Session, remote: AdoRemote, work_item_id: int, images: list[tuple[str, str]]) -> None:
+def link_attachments(
+    session: requests.Session, remote: AdoRemote, work_item_id: int, images: list[tuple[str, str]]
+) -> None:
     """Link already-uploaded attachments to a work item so they show up in its Attachments tab."""
     ops = build_attach_ops(images)
     r = session.patch(
@@ -581,7 +609,9 @@ def add_attachments(
     )
 
 
-def add_screenshots(session: requests.Session, remote: AdoRemote, work_item_id: int, screenshot_paths: list[str]) -> None:
+def add_screenshots(
+    session: requests.Session, remote: AdoRemote, work_item_id: int, screenshot_paths: list[str]
+) -> None:
     """Upload+link screenshots as attachments, then post a comment embedding them as HTML `<img>` tags."""
     add_attachments(session, remote, work_item_id, screenshot_paths=screenshot_paths)
 
@@ -742,7 +772,11 @@ _COMMENT_FILTER_POOL = 200
 
 
 def _filter_by_last_comment(
-    session: requests.Session, remote: AdoRemote, items: list[dict], top: int, comment_filter: Callable[[str | None], bool]
+    session: requests.Session,
+    remote: AdoRemote,
+    items: list[dict],
+    top: int,
+    comment_filter: Callable[[str | None], bool],
 ) -> list[dict]:
     """The first `top` of `items` (in order) whose newest comment `comment_filter` accepts. An
     item from another project (org-wide search) is looked up in its own project."""
@@ -794,7 +828,13 @@ def search(
     area_path = get_team_area_path(session, remote, board) if board else None
     wiql = build_search_wiql(keywords, since, area_path, state, org_wide=org_wide, tags=tags)
     filtered = comment_filter or business_users
-    ids = run_wiql(session, remote, wiql, min((scan_limit or top) * 10, _COMMENT_FILTER_POOL) if filtered else top, org_wide=org_wide)
+    ids = run_wiql(
+        session,
+        remote,
+        wiql,
+        min((scan_limit or top) * 10, _COMMENT_FILTER_POOL) if filtered else top,
+        org_wide=org_wide,
+    )
     items = get_work_items(session, remote, ids, org_wide=org_wide, with_creator=business_users is not None)
     if business_users:
         items = [i for i in items if business_users.verdict(i["fields"].get("System.CreatedBy")).business_user]
@@ -830,7 +870,9 @@ def create(
     area_path = get_team_area_path(session, remote, board) if board else None
     description = ensure_agent_session_note(description, also_check=title)
     relation_ops = build_relation_ops(remote, parent, blocked_by)
-    work_item = create_work_item(session, remote, work_item_type, title, description, area_path, tags, iteration, relation_ops)
+    work_item = create_work_item(
+        session, remote, work_item_type, title, description, area_path, tags, iteration, relation_ops
+    )
     work_item_id = work_item["id"]
 
     print(f"Created {work_item_type} #{work_item_id}: {title}")
@@ -904,8 +946,13 @@ def update(
     has_tag_change = tags is not None or bool(remove_tags)
     has_link_change = parent is not None or bool(blocked_by)
     if (
-        title is None and description is None and area_path is None and iteration is None
-        and not has_tag_change and not has_link_change and applied_state is None
+        title is None
+        and description is None
+        and area_path is None
+        and iteration is None
+        and not has_tag_change
+        and not has_link_change
+        and applied_state is None
     ):
         if state is not None:
             print(f"Work item #{work_item_id}: '{state}' isn't a valid state here — noted in a comment.")
@@ -919,7 +966,9 @@ def update(
     if has_link_change:
         if work_item_id == parent or work_item_id in (blocked_by or []):
             sys.exit(f"Work item #{work_item_id} can't be linked to itself.")
-        relation_ops = build_relation_ops(remote, parent, blocked_by, get_work_item(session, remote, work_item_id).get("relations"))
+        relation_ops = build_relation_ops(
+            remote, parent, blocked_by, get_work_item(session, remote, work_item_id).get("relations")
+        )
 
     if remove_tags:
         removal_set = {t.casefold() for t in remove_tags}
@@ -932,16 +981,33 @@ def update(
             filtered_tags = [t for t in current_tags if t.casefold() not in removal_set]
             if filtered_tags != current_tags:
                 tags = filtered_tags
-            elif title is None and description is None and area_path is None and iteration is None and applied_state is None and not relation_ops:
+            elif (
+                title is None
+                and description is None
+                and area_path is None
+                and iteration is None
+                and applied_state is None
+                and not relation_ops
+            ):
                 # None of `remove_tags` were actually present, and nothing else was given either --
                 # mirrors `add_tag`'s own idempotency check (same file) so this doesn't needlessly
                 # bump the work item's revision/history with a same-value System.Tags PATCH.
-                print(f"Work item #{work_item_id}: none of the given --remove-tag value(s) were present — nothing to do.")
+                print(
+                    f"Work item #{work_item_id}: none of the given --remove-tag value(s) were present — nothing to do."
+                )
                 return None
             # else: leave `tags` as None -- other given fields still get their own ops below,
             # without forcing a redundant, unchanged System.Tags op alongside them.
 
-    if title is None and description is None and area_path is None and iteration is None and tags is None and applied_state is None and not relation_ops:
+    if (
+        title is None
+        and description is None
+        and area_path is None
+        and iteration is None
+        and tags is None
+        and applied_state is None
+        and not relation_ops
+    ):
         # only --parent / --blocked-by were given, and the work item already has those links
         if state is not None:
             print(f"Work item #{work_item_id}: '{state}' isn't a valid state here — noted in a comment.")
@@ -951,7 +1017,9 @@ def update(
     if description is not None:
         description = ensure_agent_session_note(description, also_check=title)
 
-    work_item = update_work_item(session, remote, work_item_id, title, description, area_path, tags, applied_state, iteration, relation_ops)
+    work_item = update_work_item(
+        session, remote, work_item_id, title, description, area_path, tags, applied_state, iteration, relation_ops
+    )
     print(f"Updated work item #{work_item_id}")
     return work_item
 

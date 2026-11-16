@@ -179,7 +179,9 @@ def parse_pr_create_args(args: list[str], host: Host) -> PrCreateOptions:
         name, eq, inline = token.partition("=")
         if not _is_option(token) or name not in flags:
             what = "flag" if _is_option(token) else "argument"
-            raise PrCreateArgsError(f"unsupported {what} for `pr create` on {_host_name(host)}: {token!r}. Supported flags: {supported_flags(host)}")
+            raise PrCreateArgsError(
+                f"unsupported {what} for `pr create` on {_host_name(host)}: {token!r}. Supported flags: {supported_flags(host)}"
+            )
         kind, attr = flags[name]
         i += 1
         if kind == "bool":

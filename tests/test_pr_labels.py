@@ -24,9 +24,7 @@ def test_required_label_groups_empty_when_table_absent(tmp_path) -> None:
 def test_required_label_groups_reads_named_groups(tmp_path) -> None:
     write_pyproject(
         tmp_path,
-        "[tool.bdt.pr.required_labels]\n"
-        'type = ["bug", "feature", "chore"]\n'
-        'risk = ["breaking", "non-breaking"]\n',
+        '[tool.bdt.pr.required_labels]\ntype = ["bug", "feature", "chore"]\nrisk = ["breaking", "non-breaking"]\n',
     )
     assert required_label_groups(tmp_path) == {
         "type": ["bug", "feature", "chore"],
@@ -74,9 +72,7 @@ def test_scope_labels_empty_when_table_absent(tmp_path) -> None:
 def test_scope_labels_reads_configured_mapping(tmp_path) -> None:
     write_pyproject(
         tmp_path,
-        "[tool.bdt.pr.scope_labels]\n"
-        'customers = "e2e-customers"\n'
-        'billing = "e2e-billing"\n',
+        '[tool.bdt.pr.scope_labels]\ncustomers = "e2e-customers"\nbilling = "e2e-billing"\n',
     )
     assert scope_labels(tmp_path) == {"customers": "e2e-customers", "billing": "e2e-billing"}
 
@@ -84,9 +80,7 @@ def test_scope_labels_reads_configured_mapping(tmp_path) -> None:
 def test_scope_labels_ignores_non_string_values(tmp_path) -> None:
     write_pyproject(
         tmp_path,
-        "[tool.bdt.pr.scope_labels]\n"
-        'customers = "e2e-customers"\n'
-        "billing = [\"not\", \"a\", \"string\"]\n",
+        '[tool.bdt.pr.scope_labels]\ncustomers = "e2e-customers"\nbilling = ["not", "a", "string"]\n',
     )
     assert scope_labels(tmp_path) == {"customers": "e2e-customers"}
 

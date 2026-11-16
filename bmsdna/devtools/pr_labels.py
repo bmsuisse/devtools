@@ -45,7 +45,9 @@ def required_label_groups(start: Path | None = None) -> dict[str, list[str]]:
     `test-full`, `test-none`), generated from the same folders CI plans with, unless it defines that group itself.
     """
     raw = load_bdt_table("pr", start).get("required_labels", {})
-    groups = {name: choices for name, choices in raw.items() if isinstance(choices, list)} if isinstance(raw, dict) else {}
+    groups = (
+        {name: choices for name, choices in raw.items() if isinstance(choices, list)} if isinstance(raw, dict) else {}
+    )
     try:
         plan = ci_plan.load_plan_config(start)
     except ValueError as error:  # `bdt ci plan` fails the build on this; PR creation must not break over it

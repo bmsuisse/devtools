@@ -126,7 +126,12 @@ def test_policy_configs_include_branch_false_for_unscoped_branch() -> None:
 
 
 def test_policy_configs_include_branch_ignores_non_build_policy_types() -> None:
-    assert policy_configs_include_branch([REVIEWER_POLICY_ON_EMERGENCY_RELEASE], REPO_ID, "emergency-release", "refs/heads/main") is False
+    assert (
+        policy_configs_include_branch(
+            [REVIEWER_POLICY_ON_EMERGENCY_RELEASE], REPO_ID, "emergency-release", "refs/heads/main"
+        )
+        is False
+    )
 
 
 def test_policy_configs_include_branch_ignores_disabled_policy() -> None:
@@ -140,7 +145,9 @@ def test_policy_configs_include_branch_ignores_deleted_policy() -> None:
 
 
 def test_policy_configs_include_branch_ignores_other_repo() -> None:
-    assert policy_configs_include_branch([BUILD_POLICY_ON_MAIN], "some-other-repo-id", "main", "refs/heads/main") is False
+    assert (
+        policy_configs_include_branch([BUILD_POLICY_ON_MAIN], "some-other-repo-id", "main", "refs/heads/main") is False
+    )
 
 
 def test_policy_configs_include_branch_matches_default_branch_scope() -> None:
@@ -156,7 +163,9 @@ def test_policy_configs_include_branch_matches_default_branch_scope() -> None:
 
 def test_pr_web_url_is_the_browsable_page_not_the_rest_api_url() -> None:
     remote = AdoRemote("bmeurope", "BMS - CCMT2", "BMS - CCMT2")
-    assert pr_web_url(remote, 123) == "https://dev.azure.com/bmeurope/BMS%20-%20CCMT2/_git/BMS%20-%20CCMT2/pullrequest/123"
+    assert (
+        pr_web_url(remote, 123) == "https://dev.azure.com/bmeurope/BMS%20-%20CCMT2/_git/BMS%20-%20CCMT2/pullrequest/123"
+    )
 
 
 class FakeTimelineResponse:
@@ -172,7 +181,10 @@ class FakeTimelineResponse:
 
 def test_build_web_url_is_the_browsable_results_page() -> None:
     remote = AdoRemote("bmeurope", "BMS - CCMT2", "BMS - CCMT2")
-    assert build_web_url(remote, 456) == "https://dev.azure.com/bmeurope/BMS%20-%20CCMT2/_build/results?buildId=456&view=results"
+    assert (
+        build_web_url(remote, 456)
+        == "https://dev.azure.com/bmeurope/BMS%20-%20CCMT2/_build/results?buildId=456&view=results"
+    )
 
 
 # Shape captured from a real `.../_apis/build/builds/{id}/timeline` response for a YAML
@@ -303,7 +315,9 @@ def test_run_wait_detects_approval_when_build_was_already_in_progress_at_invocat
         "bmsdna.devtools.pr_build.find_pending_approvals",
         lambda session, remote, builds: [(blocked_build, [PENDING_APPROVAL_RECORD], [PENDING_APPROVAL_RECORD])],
     )
-    monkeypatch.setattr("bmsdna.devtools.pr_build.time.sleep", lambda s: pytest.fail("must not poll — would hang --wait forever"))
+    monkeypatch.setattr(
+        "bmsdna.devtools.pr_build.time.sleep", lambda s: pytest.fail("must not poll — would hang --wait forever")
+    )
 
     with pytest.raises(SystemExit) as exc_info:
         run(remote, pat=None, target_branch="main", wait=True)
@@ -327,7 +341,9 @@ def test_run_wait_exits_1_not_2_when_a_pipeline_already_failed_and_another_needs
     monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda *a, **k: pr)
     monkeypatch.setattr(
         "bmsdna.devtools.pr_build.get_builds_for_pr",
-        _BuildsSequence(baseline=[{**failed_build, "id": 99}, {**blocked_build, "id": 199}], polled=[failed_build, blocked_build]),
+        _BuildsSequence(
+            baseline=[{**failed_build, "id": 99}, {**blocked_build, "id": 199}], polled=[failed_build, blocked_build]
+        ),
     )
     monkeypatch.setattr(
         "bmsdna.devtools.pr_build.find_pending_approvals",

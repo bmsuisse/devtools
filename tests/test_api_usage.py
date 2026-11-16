@@ -118,7 +118,10 @@ def test_collect_recurses_into_mounts_only() -> None:
     sub = _FakeApp({"/items": {"get": {}}})
     static = object()  # a StaticFiles-like mount: no openapi()
     root = _FakeApp({"/health": {"get": {}}}, [_FakeMount("/api/sub/", sub), _FakeMount("/assets", static), object()])
-    assert sorted(f"{o['method']} {o['path']}" for o in _api_dump.collect(root)) == ["GET /api/sub/items", "GET /health"]
+    assert sorted(f"{o['method']} {o['path']}" for o in _api_dump.collect(root)) == [
+        "GET /api/sub/items",
+        "GET /health",
+    ]
 
 
 def test_load_app_operations_runs_in_subprocess_with_cwd_on_path(tmp_path: Path) -> None:
@@ -183,7 +186,9 @@ def test_load_app_operations_passes_env(tmp_path: Path) -> None:
         app = A()
         """,
     )
-    assert [o.path for o in au.load_app_operations("envapp:app", cwd=tmp_path, env={"ROUTE_NAME": "hello"})] == ["/hello"]
+    assert [o.path for o in au.load_app_operations("envapp:app", cwd=tmp_path, env={"ROUTE_NAME": "hello"})] == [
+        "/hello"
+    ]
 
 
 def test_load_openapi_file_rejects_non_object(tmp_path: Path) -> None:
@@ -202,7 +207,11 @@ def test_sdk_function_and_react_query_helper_count_as_calls(tmp_path: Path) -> N
         "fe/src/page.tsx",
         "import { listThingsOptions } from '@/lib/generated/@tanstack/react-query.gen';\nuseQuery(listThingsOptions());\n",
     )
-    _write(tmp_path, "fe/src/other.ts", "import { getThing } from './lib/generated';\ngetThing({ path: { thing_id: 1 } });\n")
+    _write(
+        tmp_path,
+        "fe/src/other.ts",
+        "import { getThing } from './lib/generated';\ngetThing({ path: { thing_id: 1 } });\n",
+    )
     fe = _fe(tmp_path)
     assert set(fe.sdk) == {"getThing", "deleteThing", "listThings", "headThings"}
     assert _evidence(_op("GET", "/api/things"), fe) == "sdk"
@@ -256,7 +265,11 @@ def test_sdk_functions_are_scoped_per_frontend(tmp_path: Path) -> None:
     ],
 )
 def test_generated_code_and_tests_are_not_callers(tmp_path: Path, name: str) -> None:
-    _write(tmp_path, f"fe/src/{name}", 'fetch("/api/things/1"); export const x = deleteThing(); const p = "/api/things/{thing_id}";\n')
+    _write(
+        tmp_path,
+        f"fe/src/{name}",
+        'fetch("/api/things/1"); export const x = deleteThing(); const p = "/api/things/{thing_id}";\n',
+    )
     _write(tmp_path, "fe/src/lib/generated/sdk.gen.ts", _SDK)
     fe = _fe(tmp_path)
     assert fe.usage.files == 0
@@ -357,7 +370,9 @@ def test_mount_prefix_is_stripped_for_sdk_urls(tmp_path: Path) -> None:
     assert _evidence(_op("GET", "/api/sub/things", mount="/api/sub"), fe) == "sdk"
     assert _evidence(_op("GET", "/things"), fe) == "sdk"
     assert _evidence(_op("GET", "/api/sub/other", mount="/api/sub"), fe) is None
-    assert _evidence(_op("GET", "/api/sub/", mount="/api/sub"), fe) is None  # mount root must not crash on the empty remainder
+    assert (
+        _evidence(_op("GET", "/api/sub/", mount="/api/sub"), fe) is None
+    )  # mount root must not crash on the empty remainder
 
 
 # ------------------------------------------------------------------ excludes
@@ -387,7 +402,9 @@ def test_parse_config_validation() -> None:
         au.parse_config({"apps": [{"name": "x", "app": "a:b"}]})
 
 
-@pytest.mark.parametrize("key", ["frontends", "exclude_prefixes", "exclude_tags", "exclude_paths", "exclude_frontend_globs"])
+@pytest.mark.parametrize(
+    "key", ["frontends", "exclude_prefixes", "exclude_tags", "exclude_paths", "exclude_frontend_globs"]
+)
 def test_parse_config_rejects_strings_where_lists_are_required(key: str) -> None:
     raw = {"name": "x", "app": "a:b", "frontends": ["fe"], key: "/internal"}
     with pytest.raises(au.ApiUsageError, match=f"`{key}` must be a list of strings"):
@@ -398,7 +415,9 @@ def _project(root: Path, *, baseline: bool = False, extra: str = "") -> None:
     _write(
         root,
         "openapi.json",
-        json.dumps({"paths": {"/api/used": {"get": {}}, "/api/dead": {"get": {"tags": ["t"]}}, "/external/x": {"get": {}}}}),
+        json.dumps(
+            {"paths": {"/api/used": {"get": {}}, "/api/dead": {"get": {"tags": ["t"]}}, "/external/x": {"get": {}}}}
+        ),
     )
     _write(root, "fe/src/a.ts", "fetch('/api/used');\n")
     baseline_line = 'baseline = "api-usage-baseline.txt"\n' if baseline else ""
@@ -426,15 +445,23 @@ def _config(root: Path) -> au.AppConfig:
 def test_check_app_reports_uncalled_routes(tmp_path: Path) -> None:
     _project(tmp_path)
     findings = au.check_app(_config(tmp_path), repo_root=tmp_path)
-    assert [(f.rule, f.message.split(" is never")[0]) for f in findings] == [("api-route-uncalled", "GET /api/dead [t]")]
+    assert [(f.rule, f.message.split(" is never")[0]) for f in findings] == [
+        ("api-route-uncalled", "GET /api/dead [t]")
+    ]
 
 
 def test_frontend_globs_expand_and_exclude_frontend_globs_apply(tmp_path: Path) -> None:
-    _write(tmp_path, "openapi.json", json.dumps({"paths": {"/api/a": {"get": {}}, "/api/b": {"get": {}}, "/api/c": {"get": {}}}}))
+    _write(
+        tmp_path,
+        "openapi.json",
+        json.dumps({"paths": {"/api/a": {"get": {}}, "/api/b": {"get": {}}, "/api/c": {"get": {}}}}),
+    )
     _write(tmp_path, "apps/one/src/x.ts", "fetch('/api/a');\n")
     _write(tmp_path, "apps/two/src/x.ts", "fetch('/api/b');\n")
     _write(tmp_path, "apps/two/src/legacy/old.ts", "fetch('/api/c');\n")
-    config = au.AppConfig(name="m", openapi="openapi.json", frontends=["apps/*/src"], exclude_frontend_globs=["apps/two/src/legacy/*"])
+    config = au.AppConfig(
+        name="m", openapi="openapi.json", frontends=["apps/*/src"], exclude_frontend_globs=["apps/two/src/legacy/*"]
+    )
     assert [f.message.split(" ")[1] for f in au.check_app(config, repo_root=tmp_path)] == ["/api/c"]
 
 
@@ -536,7 +563,13 @@ def test_read_referenced_route_names(tmp_path: Path) -> None:
     _write(tmp_path, "backend/tests/test_auth.py", 'url_for("only_in_tests")\n')
     _write(tmp_path, "backend/test_x.py", 'url_for("only_in_test_file")\n')
     _write(tmp_path, "backend/node_modules/x.py", 'url_for("vendored")\n')
-    assert au.read_referenced_route_names(tmp_path / "backend") == {"auth_callback", "login", "inner", "multi_line", "from_template"}
+    assert au.read_referenced_route_names(tmp_path / "backend") == {
+        "auth_callback",
+        "login",
+        "inner",
+        "multi_line",
+        "from_template",
+    }
     assert au.read_referenced_route_names(tmp_path / "backend", ("my_url_for",)) == {"not_a_call"}
 
 

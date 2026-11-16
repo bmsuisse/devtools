@@ -74,7 +74,7 @@ def has_pgdevkit_project(repo: Path) -> bool:
         return False
     try:
         data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
+    except OSError, tomllib.TOMLDecodeError:
         return False
     section = data.get("tool", {}).get("pgdevkit")
     # `is None` on purpose, not `not section` -- an empty `[tool.pgdevkit]`

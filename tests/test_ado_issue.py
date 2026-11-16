@@ -253,7 +253,10 @@ def test_html_url_missing() -> None:
 
 
 def test_edit_url() -> None:
-    assert edit_url(AdoRemote(org="myorg", project="MyProj", repo="myrepo"), 42) == "https://dev.azure.com/myorg/MyProj/_workitems/edit/42"
+    assert (
+        edit_url(AdoRemote(org="myorg", project="MyProj", repo="myrepo"), 42)
+        == "https://dev.azure.com/myorg/MyProj/_workitems/edit/42"
+    )
 
 
 def test_build_search_wiql_keywords_only() -> None:
@@ -267,7 +270,10 @@ def test_build_search_wiql_keywords_only() -> None:
 
 def test_build_search_wiql_no_keywords_lists_without_text_filter() -> None:
     wiql = build_search_wiql([], state="all")
-    assert wiql == "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project ORDER BY [System.ChangedDate] DESC"
+    assert (
+        wiql
+        == "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project ORDER BY [System.ChangedDate] DESC"
+    )
 
 
 def test_build_search_wiql_defaults_to_open_state() -> None:
@@ -321,7 +327,10 @@ def test_build_search_wiql_org_wide_drops_team_project_clause() -> None:
 
 
 def test_build_search_wiql_org_wide_with_no_other_clauses_has_no_where() -> None:
-    assert build_search_wiql([], state="all", org_wide=True) == "SELECT [System.Id] FROM WorkItems ORDER BY [System.ChangedDate] DESC"
+    assert (
+        build_search_wiql([], state="all", org_wide=True)
+        == "SELECT [System.Id] FROM WorkItems ORDER BY [System.ChangedDate] DESC"
+    )
 
 
 def test_build_search_wiql_not_org_wide_still_scopes_to_project() -> None:
@@ -329,10 +338,7 @@ def test_build_search_wiql_not_org_wide_still_scopes_to_project() -> None:
 
 
 def test_edit_url_org_wide_uses_given_project_not_remote_project() -> None:
-    assert (
-        edit_url(REMOTE, 42, project="OtherProj")
-        == "https://dev.azure.com/myorg/OtherProj/_workitems/edit/42"
-    )
+    assert edit_url(REMOTE, 42, project="OtherProj") == "https://dev.azure.com/myorg/OtherProj/_workitems/edit/42"
 
 
 def test_run_wiql_org_wide_hits_org_level_endpoint_without_project() -> None:
@@ -377,7 +383,12 @@ def test_search_org_wide_prints_project_prefix(capsys) -> None:
     session = MagicMock()
     session.post.return_value.json.return_value = {"workItems": [{"id": 1}]}
     session.get.return_value.json.return_value = {
-        "value": [{"id": 1, "fields": {"System.Title": "Some bug", "System.State": "Active", "System.TeamProject": "OtherProj"}}]
+        "value": [
+            {
+                "id": 1,
+                "fields": {"System.Title": "Some bug", "System.State": "Active", "System.TeamProject": "OtherProj"},
+            }
+        ]
     }
 
     items = search(session, REMOTE, [], org_wide=True)
@@ -478,16 +489,41 @@ def test_build_create_and_update_ops_append_relation_ops_after_the_fields() -> N
 
 def _link(rel: str, work_item_id: int) -> dict:
     # what `$expand=relations` returns: the link target is addressed by its API url, usually via the project's GUID
-    return {"rel": rel, "url": f"https://dev.azure.com/myorg/0000-guid/_apis/wit/workItems/{work_item_id}", "attributes": {}}
+    return {
+        "rel": rel,
+        "url": f"https://dev.azure.com/myorg/0000-guid/_apis/wit/workItems/{work_item_id}",
+        "attributes": {},
+    }
 
 
 def test_build_relation_ops_links_parent_and_blockers_as_reverse_links() -> None:
     ops = build_relation_ops(REMOTE, parent=5, blocked_by=[7, 8])
 
     assert ops == [
-        {"op": "add", "path": "/relations/-", "value": {"rel": "System.LinkTypes.Hierarchy-Reverse", "url": "https://dev.azure.com/myorg/_apis/wit/workItems/5"}},
-        {"op": "add", "path": "/relations/-", "value": {"rel": "System.LinkTypes.Dependency-Reverse", "url": "https://dev.azure.com/myorg/_apis/wit/workItems/7"}},
-        {"op": "add", "path": "/relations/-", "value": {"rel": "System.LinkTypes.Dependency-Reverse", "url": "https://dev.azure.com/myorg/_apis/wit/workItems/8"}},
+        {
+            "op": "add",
+            "path": "/relations/-",
+            "value": {
+                "rel": "System.LinkTypes.Hierarchy-Reverse",
+                "url": "https://dev.azure.com/myorg/_apis/wit/workItems/5",
+            },
+        },
+        {
+            "op": "add",
+            "path": "/relations/-",
+            "value": {
+                "rel": "System.LinkTypes.Dependency-Reverse",
+                "url": "https://dev.azure.com/myorg/_apis/wit/workItems/7",
+            },
+        },
+        {
+            "op": "add",
+            "path": "/relations/-",
+            "value": {
+                "rel": "System.LinkTypes.Dependency-Reverse",
+                "url": "https://dev.azure.com/myorg/_apis/wit/workItems/8",
+            },
+        },
     ]
 
 

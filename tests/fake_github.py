@@ -30,7 +30,9 @@ class FakeGitHub:
     repo = "repo"
     repo_path = "repos/owner/repo"
 
-    def __init__(self, routes: dict[str, Any] | None = None, graphql: Callable[[str, dict], dict] | None = None) -> None:
+    def __init__(
+        self, routes: dict[str, Any] | None = None, graphql: Callable[[str, dict], dict] | None = None
+    ) -> None:
         self.routes = routes or {}
         self.graphql_handler = graphql
         self.calls: list[tuple[str, str, Any]] = []
@@ -63,7 +65,9 @@ class FakeGitHub:
     def delete(self, path: str, **kwargs: Any) -> None:
         self.request("DELETE", path)
 
-    def paginate(self, path: str, params: dict[str, Any] | None = None, *, items_key: str | None = None, limit: int | None = None) -> list[Any]:
+    def paginate(
+        self, path: str, params: dict[str, Any] | None = None, *, items_key: str | None = None, limit: int | None = None
+    ) -> list[Any]:
         value = self._answer("GET", path, {"params": params, "limit": limit})
         items = list(value or [])
         return items[:limit] if limit is not None else items

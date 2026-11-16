@@ -122,7 +122,12 @@ def test_default_subscription_ignores_unusable_az_profile(monkeypatch, tmp_path,
 
 def test_default_subscription_follows_next_link(monkeypatch):
     pages = [
-        FakeResp(body={"value": [{"subscriptionId": "a", "state": "Disabled"}], "nextLink": "https://management.azure.com/next"}),
+        FakeResp(
+            body={
+                "value": [{"subscriptionId": "a", "state": "Disabled"}],
+                "nextLink": "https://management.azure.com/next",
+            }
+        ),
         FakeResp(body={"value": [{"subscriptionId": "b", "state": "Enabled"}]}),
     ]
     urls: list[str] = []

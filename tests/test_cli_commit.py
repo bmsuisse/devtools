@@ -14,15 +14,25 @@ runner = CliRunner()
 
 def feat_result() -> CommitResult:
     return CommitResult(
-        success=True, committed=True, pushed=True, message="feat(x): add widget",
-        files=["a.txt"], commit_sha="abc1234", extra={"commit_type": "feat"},
+        success=True,
+        committed=True,
+        pushed=True,
+        message="feat(x): add widget",
+        files=["a.txt"],
+        commit_sha="abc1234",
+        extra={"commit_type": "feat"},
     )
 
 
 def fix_result() -> CommitResult:
     return CommitResult(
-        success=True, committed=True, pushed=True, message="fix: correct bug",
-        files=["a.txt"], commit_sha="abc1234", extra={"commit_type": "fix"},
+        success=True,
+        committed=True,
+        pushed=True,
+        message="fix: correct bug",
+        files=["a.txt"],
+        commit_sha="abc1234",
+        extra={"commit_type": "fix"},
     )
 
 
@@ -32,7 +42,9 @@ def test_commit_converts_github_pr_to_draft_on_feat_commit(monkeypatch) -> None:
     monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: "gh")
 
     set_draft_calls: list[str] = []
-    monkeypatch.setattr("bmsdna.devtools.cli.gh_pr.set_draft", lambda gh, target=None: (set_draft_calls.append(gh), True)[1])
+    monkeypatch.setattr(
+        "bmsdna.devtools.cli.gh_pr.set_draft", lambda gh, target=None: (set_draft_calls.append(gh), True)[1]
+    )
 
     result = runner.invoke(app, ["commit", "feat(x): add widget", "a.txt"])
 

@@ -74,7 +74,9 @@ _CONFIG_NAMES = frozenset(
     }
 )
 _EXCLUDE_TEST_DIR_NAMES = DEFAULT_TS_EXCLUDE_DIR_NAMES - {"generated", "__generated__"}
-_SKIP_NAMES = frozenset({"package-lock.json", "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock", "npm-shrinkwrap.json"})
+_SKIP_NAMES = frozenset(
+    {"package-lock.json", "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock", "npm-shrinkwrap.json"}
+)
 _MAX_CSP_FILE_BYTES = 1_000_000
 _TS_LIKE = (".ts", ".tsx", ".mts", ".js", ".jsx", ".mjs")
 
@@ -122,11 +124,18 @@ def diff_files(root: Path, base: str | None = None) -> list[Path]:
         candidates += [head.stdout.strip()] if head.returncode == 0 and head.stdout.strip() else []
         candidates += ["origin/main", "main", "origin/master", "master"]
     chosen = next(
-        (c for c in candidates if c and subprocess.run(["git", "rev-parse", "--verify", "-q", c], cwd=root, capture_output=True).returncode == 0),
+        (
+            c
+            for c in candidates
+            if c
+            and subprocess.run(["git", "rev-parse", "--verify", "-q", c], cwd=root, capture_output=True).returncode == 0
+        ),
         None,
     )
     if chosen is None:
-        sys.exit(f"Couldn't find a base branch to diff against (tried {', '.join(c for c in candidates if c)}); pass --base.")
+        sys.exit(
+            f"Couldn't find a base branch to diff against (tried {', '.join(c for c in candidates if c)}); pass --base."
+        )
     names: set[str] = set()
     names.update(_git(["diff", "--name-only", "-z", "--diff-filter=ACMR", f"{chosen}...HEAD"], root).split("\0"))
     names.update(_git(["diff", "--name-only", "-z", "--diff-filter=ACMR", "HEAD"], root).split("\0"))
@@ -164,7 +173,11 @@ def _filter_ignored(findings: list[Finding]) -> list[Finding]:
 
 
 def _scan_python(path: Path, sql_functions: frozenset[str] = frozenset()) -> list[Finding]:
-    sql = [f for f in check_sql_file(path, review=True, sql_functions=sql_functions) if f.rule in SQL_INJECTION_RULES or f.rule in ("sql-unverified-call", "sql-unverified-cast")]
+    sql = [
+        f
+        for f in check_sql_file(path, review=True, sql_functions=sql_functions)
+        if f.rule in SQL_INJECTION_RULES or f.rule in ("sql-unverified-call", "sql-unverified-cast")
+    ]
     return sql + check_python_sinks(path)
 
 
@@ -230,7 +243,11 @@ def _walk_repo_text_files(root: Path, scope: _ScanFilter):
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in scope.dir_names]
         for name in filenames:
-            if name in _SKIP_NAMES or name.endswith(".min.js") or not (name in _CONFIG_NAMES or name.endswith(_CONFIG_SUFFIXES)):
+            if (
+                name in _SKIP_NAMES
+                or name.endswith(".min.js")
+                or not (name in _CONFIG_NAMES or name.endswith(_CONFIG_SUFFIXES))
+            ):
                 continue
             candidate = Path(dirpath, name)
             try:
@@ -311,7 +328,9 @@ def run(
         fe_files, _ = _iter_files(targets, scope.dir_names, FRONTEND_SUFFIXES)
         py_files = [p for p in py_files if scope.allows(p)]
         fe_files = [p for p in fe_files if scope.allows(p)]
-        findings.extend(Finding(p, 0, "path-not-found", f"'{p}' doesn't exist -- nothing was scanned for it.") for p in missing)
+        findings.extend(
+            Finding(p, 0, "path-not-found", f"'{p}' doesn't exist -- nothing was scanned for it.") for p in missing
+        )
 
     py_files = [p for p in py_files if not _is_test_file(p, root)]
     fe_files = [p for p in fe_files if not _is_test_file(p, root) and not _is_minified(p)]
