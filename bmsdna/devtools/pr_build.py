@@ -1216,7 +1216,21 @@ def run(
     timeout: float = 0,
 ) -> None:
     """`timeout` (seconds, only with `wait`): stop polling after that long and exit `EXIT_WAIT_TIMEOUT`
-    with the current state; 0 = wait until every pipeline is done."""
+    with the current state; 0 = wait until every pipeline is done. A SIGTERM while waiting does the same at once."""
+    with WaitDeadline(timeout, stop_on_signal=wait) as deadline:
+        _status(remote, pat, target_branch, wait, source_branch, pr_id, timeout, deadline)
+
+
+def _status(
+    remote: AdoRemote,
+    pat: str | None,
+    target_branch: str | None,
+    wait: bool,
+    source_branch: str | None,
+    pr_id: int | None,
+    timeout: float,
+    deadline: WaitDeadline,
+) -> None:
     session = ado_session(pat)
 
     def fetch_pr() -> dict:
@@ -1254,7 +1268,6 @@ def run(
     drift_notice_shown: str | None = None
     policy_checked = False
     heartbeat = PollHeartbeat()
-    deadline = WaitDeadline(timeout)
 
     def time_out(msg: str, builds: list, pr_number: int) -> NoReturn:
         exit_wait_timeout(msg, lambda: [print_build(session, remote, b) for b in builds], deadline, status_rerun_cmd(pr_number, timeout))
