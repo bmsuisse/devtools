@@ -437,7 +437,7 @@ def _ref_cli(monkeypatch, missing: set[str] = frozenset()) -> list[tuple]:
         def for_repo(self, owner, repo):
             return Client(owner, repo)
 
-    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: Client())
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", Client)
     seen: list[tuple] = []
 
     def get_pr(gh, pr_id=None, fields=""):

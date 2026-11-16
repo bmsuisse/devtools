@@ -57,7 +57,7 @@ def test_error_status_exits_with_api_message(monkeypatch) -> None:
     client, _ = client_with(
         monkeypatch, [FakeResponse(422, {"message": "Validation Failed", "errors": [{"message": "bad label"}]})]
     )
-    with pytest.raises(SystemExit, match="Validation Failed.*bad label"):
+    with pytest.raises(SystemExit, match=r"Validation Failed.*bad label"):
         client.get("repos/o/r/issues")
 
 

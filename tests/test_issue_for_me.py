@@ -728,8 +728,8 @@ def test_issue_search_without_wait_keeps_printing_no_match_and_exits_0(monkeypat
 # -- CLI: issue watch / watch-issue --------------------------------------------------
 
 
-def _comment(id: int, body: str = "answer", author: str = "alice") -> Comment:
-    return Comment(id, author, "2026-10-13T08:00:00Z", f"https://example.test/{id}", body)
+def _comment(comment_id: int, body: str = "answer", author: str = "alice") -> Comment:
+    return Comment(comment_id, author, "2026-10-13T08:00:00Z", f"https://example.test/{comment_id}", body)
 
 
 def _patch_watch(monkeypatch, comments: list[Comment] | list[list[Comment]] | None, remote=None) -> dict:

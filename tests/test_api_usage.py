@@ -167,7 +167,7 @@ def test_load_app_operations_reports_import_errors(tmp_path: Path) -> None:
 
 
 def test_load_app_operations_rejects_bad_spec_and_dir(tmp_path: Path) -> None:
-    with pytest.raises(au.ApiUsageError, match="module.path:attribute"):
+    with pytest.raises(au.ApiUsageError, match=r"module\.path:attribute"):
         au.load_app_operations("nocolon", cwd=tmp_path)
     with pytest.raises(au.ApiUsageError, match="not a directory"):
         au.load_app_operations("a:b", cwd=tmp_path / "missing")
@@ -392,7 +392,7 @@ def test_is_excluded_applies_prefix_tag_and_glob() -> None:
 
 
 def test_parse_config_validation() -> None:
-    with pytest.raises(au.ApiUsageError, match="no .*apps"):
+    with pytest.raises(au.ApiUsageError, match=r"no .*apps"):
         au.parse_config({})
     with pytest.raises(au.ApiUsageError, match="exactly one"):
         au.parse_config({"apps": [{"name": "x", "frontends": ["fe"]}]})

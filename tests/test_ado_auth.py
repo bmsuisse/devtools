@@ -41,7 +41,7 @@ def test_get_azure_token_exits_with_hint_on_auth_failure(monkeypatch) -> None:
         def get_token(self, *scopes, **kwargs):
             raise ClientAuthenticationError("no credential")
 
-    monkeypatch.setattr(azure_auth, "_credential", lambda: FailingCredential())
+    monkeypatch.setattr(azure_auth, "_credential", FailingCredential)
 
     with pytest.raises(SystemExit) as exc_info:
         azure_auth.get_azure_token("scope")
@@ -194,7 +194,7 @@ def test_missing_credentials_message_explains_both_ways_out(monkeypatch) -> None
                 "DefaultAzureCredential failed\nEnvironmentCredential: no env vars\nAzureCliCredential: not logged in"
             )
 
-    monkeypatch.setattr(azure_auth, "_credential", lambda: FailingCredential())
+    monkeypatch.setattr(azure_auth, "_credential", FailingCredential)
     monkeypatch.setattr("bmsdna.devtools.ado_auth.current_remote", lambda: AdoRemote("bmeurope", "p", "r"))
 
     with pytest.raises(SystemExit) as exc_info:

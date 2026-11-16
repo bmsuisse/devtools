@@ -212,7 +212,7 @@ def test_target_drift_cannot_tell_when_azure_devops_cannot_be_asked(repo: Repo) 
 
 
 def _poll_once(monkeypatch, pr: dict) -> None:
-    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock())
+    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", MagicMock)
     monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda session, remote, source, target: pr)
     monkeypatch.setattr("bmsdna.devtools.pr_build.get_builds_for_pr", lambda session, remote, source, pr_id: [])
     monkeypatch.setattr("bmsdna.devtools.pr_build.deploy_build_hint", lambda *a: None)

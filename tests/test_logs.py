@@ -82,7 +82,7 @@ def test_query_roles_sums_and_sorts(azure):
 
     assert err is None
     assert roles == {"(unknown)": 5, "a": 2}
-    method, url, scope, kql = azure["queries"][0]
+    _method, url, scope, kql = azure["queries"][0]
     assert url == "https://api.applicationinsights.io/v1/apps/app-guid/query"
     assert scope == "https://api.applicationinsights.io/.default"
     assert "ago(30m)" in kql

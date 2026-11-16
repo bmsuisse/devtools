@@ -738,7 +738,7 @@ def test_search_business_user_with_org_wide_is_rejected(monkeypatch) -> None:
 
 def test_search_business_user_on_github_is_rejected(monkeypatch) -> None:
     _ado_search_setup(monkeypatch, GitHubRemote("owner", "repo"))
-    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", lambda: object())
+    monkeypatch.setattr("bmsdna.devtools.cli.require_gh", object)
 
     result = runner.invoke(app, ["issue", "search", "--business-user"])
 

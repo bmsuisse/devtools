@@ -1,3 +1,4 @@
+import contextlib
 import json
 
 import pytest
@@ -18,8 +19,8 @@ from bmsdna.devtools.issue_watch import (
 )
 
 
-def c(id: int, body: str = "hello", author: str = "alice") -> Comment:
-    return Comment(id, author, "2026-10-13T08:00:00Z", f"https://example.test/issues/1#c{id}", body)
+def c(comment_id: int, body: str = "hello", author: str = "alice") -> Comment:
+    return Comment(comment_id, author, "2026-10-13T08:00:00Z", f"https://example.test/issues/1#c{comment_id}", body)
 
 
 class FakeClock:
@@ -44,10 +45,8 @@ def sequence(*polls):
 
     def fetch():
         nonlocal last
-        try:
+        with contextlib.suppress(StopIteration):
             last = next(it)
-        except StopIteration:
-            pass
         if isinstance(last, BaseException):
             raise last
         return last

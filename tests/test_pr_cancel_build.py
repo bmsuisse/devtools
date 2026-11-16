@@ -707,13 +707,13 @@ def test_github_info_of_a_closed_pr_says_why() -> None:
 # -- --wait ---------------------------------------------------------------------
 
 
-class Slept(Exception):
+class SleptError(Exception):
     """Raised instead of sleeping: the command would have kept polling."""
 
 
 def _no_sleep(monkeypatch) -> None:
     def sleep(self, seconds):
-        raise Slept
+        raise SleptError
 
     monkeypatch.setattr("bmsdna.devtools.pr_build.WaitDeadline.sleep", sleep)
     monkeypatch.setattr("bmsdna.devtools.pr_build.find_pending_approvals", lambda *a: [])
@@ -743,7 +743,7 @@ def test_wait_still_waits_when_the_cancelled_build_is_of_an_older_push(monkeypat
     )
     _no_sleep(monkeypatch)
 
-    with pytest.raises(Slept):  # the build of the new push is about to appear
+    with pytest.raises(SleptError):  # the build of the new push is about to appear
         pr_build.run(REMOTE, "pat", None, wait=True, source_branch="feature-x")
 
 

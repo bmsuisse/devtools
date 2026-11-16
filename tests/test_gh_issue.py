@@ -368,7 +368,7 @@ def test_create_maps_assignee_and_milestone_extra_args() -> None:
 
 @pytest.mark.parametrize("flag", ["--template", "-T", "--recover", "--editor"])
 def test_create_rejects_unsupported_extra_args(flag) -> None:
-    with pytest.raises(SystemExit, match="unsupported argument.*supported:.*--assignee"):
+    with pytest.raises(SystemExit, match=r"unsupported argument.*supported:.*--assignee"):
         create(FakeGitHub({CREATE: CREATED}), "owner", "repo", "T", "b", [], [], [flag, "x"])
 
 
@@ -429,7 +429,7 @@ def test_create_project_flag_adds_to_each_project(monkeypatch) -> None:
 
 def test_create_web_opens_the_issue(monkeypatch) -> None:
     opened: list[str] = []
-    monkeypatch.setattr("bmsdna.devtools.gh_args.webbrowser.open", lambda url: opened.append(url))
+    monkeypatch.setattr("bmsdna.devtools.gh_args.webbrowser.open", opened.append)
 
     create(FakeGitHub({CREATE: CREATED}), "owner", "repo", "T", "b", [], [], ["--web"])
 

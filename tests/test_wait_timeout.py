@@ -120,17 +120,17 @@ def test_gh_wait_times_out_with_exit_4_and_reports_every_check(monkeypatch, slee
 def test_gh_wait_without_timeout_keeps_polling(monkeypatch, sleeps) -> None:
     monkeypatch.setattr("bmsdna.devtools.gh_pr.get_pr", lambda gh, pr_id=None: _gh_pr([PENDING]))
 
-    class Enough(Exception):
+    class EnoughError(Exception):
         pass
 
     def sleep_a_few_times(secs: float) -> None:
         sleeps.append(secs)
         if len(sleeps) > 200:
-            raise Enough
+            raise EnoughError
 
     monkeypatch.setattr(time, "sleep", sleep_a_few_times)
 
-    with pytest.raises(Enough):
+    with pytest.raises(EnoughError):
         gh_run("gh", wait=True)
 
     assert len(sleeps) > 200
@@ -151,7 +151,7 @@ def test_gh_wait_returns_normally_when_checks_finish_before_the_deadline(monkeyp
 
 
 def _ado_env(monkeypatch, builds: list[dict]) -> None:
-    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: MagicMock())
+    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", MagicMock)
     monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
     monkeypatch.setattr(
         "bmsdna.devtools.pr_build.get_pr",
@@ -268,7 +268,7 @@ def _fake_ancestors(monkeypatch, chain: list[tuple[int, float, list[str]]]) -> N
     """The process tree above us, nearest parent first: (parent pid, seconds running, command line)."""
     by_pid = {100 + i: info for i, info in enumerate(chain)}
     monkeypatch.setattr("os.getppid", lambda: 100)
-    monkeypatch.setattr("bmsdna.devtools.cli_tools._process_info", lambda pid: by_pid.get(pid))
+    monkeypatch.setattr("bmsdna.devtools.cli_tools._process_info", by_pid.get)
 
 
 def test_remaining_time_of_the_enclosing_timeout_counts_what_already_ran(monkeypatch) -> None:

@@ -88,12 +88,17 @@ select = [
     "FLY",           # f-string instead of str.join on literals
     "PLE", "PLW",    # pylint errors + warnings
 ]
-ignore = ["ANN401"]  # `Any` is a warning via the ruff-warn-any prek hook, not an error
+ignore = [
+    "ANN401",  # `Any` is a warning via the ruff-warn-any prek hook, not an error
+    # `ruff format` owns code line length; what is left are ~230 long comments/docstrings/strings. Re-enable once they are wrapped.
+    "E501",
+]
 
 [tool.ruff.lint.per-file-ignores]
 # bdt is a CLI: print() is its output channel
 "bmsdna/**" = ["T20"]
-"tests/**" = ["T20"]
+# tests: ~2200 untyped fixtures/helpers/fakes (and ty runs on bmsdna only, like CI). Annotate when a test file is next touched, then drop ANN here.
+"tests/**" = ["T20", "ANN"]
 
 [tool.ruff.lint.pep8-naming]
 # ast.NodeVisitor dispatches on visit_<NodeClass> names

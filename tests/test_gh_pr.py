@@ -492,7 +492,7 @@ def test_create_extra_args_title_and_body_forms_win(monkeypatch) -> None:
 @pytest.mark.parametrize("flag", ["--template", "-T", "--recover", "--editor", "--delete-nothing"])
 def test_create_rejects_unsupported_extra_args(flag) -> None:
     gh = FakeGH()
-    with pytest.raises(SystemExit, match="unsupported (flag|argument).*Supported flags:.*--reviewer"):
+    with pytest.raises(SystemExit, match=r"unsupported (flag|argument).*Supported flags:.*--reviewer"):
         create(gh, "main", [flag, "x"])  # type: ignore[arg-type]
     assert gh.calls == []
 
@@ -690,7 +690,7 @@ def test_create_dry_run_creates_nothing(monkeypatch, capsys) -> None:
 
 def test_create_web_opens_the_pr(monkeypatch) -> None:
     opened: list[str] = []
-    monkeypatch.setattr("bmsdna.devtools.gh_args.webbrowser.open", lambda url: opened.append(url))
+    monkeypatch.setattr("bmsdna.devtools.gh_args.webbrowser.open", opened.append)
     gh = _created(monkeypatch)
     create(gh, "main", ["--web"])  # type: ignore[arg-type]
     assert opened == ["https://github.com/owner/repo/pull/7"]

@@ -108,7 +108,7 @@ def test_create_pr_network_failure_hints_that_the_pr_may_exist() -> None:
 
     session = MagicMock()
     session.post.side_effect = requests.ReadTimeout("slow")
-    with pytest.raises(SystemExit, match="may have been created.*bdt pr info"):
+    with pytest.raises(SystemExit, match=r"may have been created.*bdt pr info"):
         pr_build.create_pr(session, REMOTE, "f", "dev", title="t")
 
 

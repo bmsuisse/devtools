@@ -70,13 +70,13 @@ def test_scans_subdirectories_but_skips_excluded_dirs(tmp_path):
 
 
 def test_no_home_omits_home_files(tmp_path):
-    cwd, home = _setup(tmp_path)
+    cwd, _home = _setup(tmp_path)
     out = format_keys(get_keys(cwd, None), None, cwd)
     assert "HOME_VAR" not in out and "DB_URL" in out
 
 
 def test_cwd_equal_home_is_not_walked_recursively(tmp_path):
-    cwd, home = _setup(tmp_path)
+    _cwd, home = _setup(tmp_path)
     (home / "deep").mkdir()
     (home / "deep" / ".env").write_text("DEEP=1\n")
     out = format_keys(get_keys(home, home), home, home)
