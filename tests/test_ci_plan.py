@@ -535,3 +535,80 @@ def test_path_area_named_like_a_control_label_is_rejected(tmp_path) -> None:
     (tmp_path / "pyproject.toml").write_text('[tool.bdt.ci.plan]\n[tool.bdt.ci.plan.paths]\nnone = ["x/**"]\n')
     with pytest.raises(ValueError, match="collide"):
         load_plan_config(tmp_path)
+
+
+# --- tiers.<name>.test_files: non-Python test runners ---------------------------------------
+
+
+def _spec_repo(tmp_path):
+    touch(
+        tmp_path,
+        "e2e/tests/assignment/list.spec.ts",
+        "e2e/tests/assignment/mask.spec.ts",
+        "e2e/tests/cover/cover.spec.ts",
+        "e2e/tests/helpers/util.ts",
+        "e2e/tests/node_modules/pkg/x.spec.ts",
+        "e2e/tests/smoke.spec.ts",
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.bdt.ci.plan.tiers.e2e]\ndir = "e2e/tests"\ntest_files = ["*.spec.ts"]\n'
+    )
+    config = load_plan_config(tmp_path)
+    assert config is not None
+    return config.tiers[0]
+
+
+def test_test_files_make_spec_folders_areas(tmp_path) -> None:
+    tier = _spec_repo(tmp_path)
+    assert tier.areas(tmp_path) == ["assignment", "cover"]
+    assert tier.paths(tmp_path, {"cover"}) == ["e2e/tests/cover"]
+    assert tier.paths(tmp_path, None) == ["e2e/tests"]
+
+
+def test_test_files_area_of(tmp_path) -> None:
+    tier = _spec_repo(tmp_path)
+    assert area_of(tier, tmp_path, "e2e/tests/assignment/list.spec.ts") == {"assignment"}
+    assert area_of(tier, tmp_path, "e2e/tests/removed/gone.spec.ts") == {"removed"}
+    assert area_of(tier, tmp_path, "e2e/tests/removed/gone.ts") is None
+    assert area_of(tier, tmp_path, "e2e/tests/helpers/util.ts") is None
+    assert area_of(tier, tmp_path, "e2e/tests/smoke.spec.ts") is None
+
+
+def test_default_test_files_ignore_spec_files(tmp_path) -> None:
+    touch(tmp_path, "e2e/tests/assignment/list.spec.ts")
+    assert Tier("e2e", "e2e/tests").areas(tmp_path) == []
+
+
+def test_test_files_in_glob_mode(tmp_path) -> None:
+    touch(tmp_path, "e2e/tests/cover.spec.ts", "e2e/tests/map.spec.ts", "e2e/tests/test_x.py")
+    tier = Tier("e2e", "e2e/tests", {"cover": ("cover*",)}, ("*.spec.ts",))
+    assert tier.areas(tmp_path) == ["cover", "shared"]
+    assert tier.paths(tmp_path, {"shared"}) == ["e2e/tests/map.spec.ts"]
+    assert area_of(tier, tmp_path, "e2e/tests/cover.spec.ts") == {"cover"}
+    assert area_of(tier, tmp_path, "e2e/tests/test_x.py") is None
+
+
+@pytest.mark.parametrize("value", ["[]", '"*.spec.ts"', "[1]"])
+def test_invalid_test_files_are_rejected(tmp_path, value: str) -> None:
+    (tmp_path / "pyproject.toml").write_text(f'[tool.bdt.ci.plan.tiers.e2e]\ndir = "e2e"\ntest_files = {value}\n')
+    with pytest.raises(ValueError, match="test_files"):
+        load_plan_config(tmp_path)
+
+
+def test_glob_mode_without_test_files_keeps_matching_only_test_prefix(tmp_path) -> None:
+    touch(tmp_path, "tests/e2e/test_a.py", "tests/e2e/helpers_test.py")
+    tier = Tier("e2e", "tests/e2e", {"chat": ("test_a*",)})
+    assert tier.paths(tmp_path, None) == ["tests/e2e/test_a.py"]
+    assert area_of(tier, tmp_path, "tests/e2e/helpers_test.py") is None
+
+
+def test_folder_mode_without_test_files_still_finds_suffix_tests(tmp_path) -> None:
+    touch(tmp_path, "tests/unit/billing/orders_test.py")
+    assert Tier("unit", "tests/unit").areas(tmp_path) == ["billing"]
+
+
+@pytest.mark.parametrize("value", ['["**/*.spec.ts"]', '["sub/*.spec.ts"]'])
+def test_test_files_with_folders_are_rejected(tmp_path, value: str) -> None:
+    (tmp_path / "pyproject.toml").write_text(f'[tool.bdt.ci.plan.tiers.e2e]\ndir = "e2e"\ntest_files = {value}\n')
+    with pytest.raises(ValueError, match="no folders"):
+        load_plan_config(tmp_path)

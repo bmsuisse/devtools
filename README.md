@@ -949,6 +949,10 @@ dir = "tests/unit"              # areas = sub-folders with tests (test_*.py / *_
 dir = "tests/e2e"               # flat folder: map the test_*.py files to areas instead
 areas = { chat = ["test_chat*.py"], review = ["test_review_*.py"] }  # unmatched files form the area `shared`
 
+[tool.bdt.ci.plan.tiers.browser]
+dir = "e2e/tests"               # another runner: `test_files` says what a test file is (default ["test_*.py", "*_test.py"])
+test_files = ["*.spec.ts"]      # Playwright: e2e/tests/<area>/*.spec.ts, run per area with `playwright test e2e/tests/<area>`
+
 [tool.bdt.ci.plan.paths]        # non-test files an area owns: changing them infers that area instead of everything
 infra = ["infra/**"]            # built-in default when the repo has an infra/ folder; add e.g. frontend = ["frontend/**"]
 ```
