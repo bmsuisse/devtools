@@ -49,7 +49,9 @@ LEGACY_LABEL_PREFIX = "e2e-"
 FULL_LABEL = "test-full"
 NONE_LABEL = "test-none"
 DEFAULT_TIER_DIRS = {"unit": "tests/unit", "e2e": "tests/e2e"}
-TEST_FILE_GLOB = "test_*.py"
+DEFAULT_TEST_FILES = ("test_*.py", "*_test.py")
+GLOB_MODE_TEST_FILE = "test_*.py"
+IGNORED_DIRS = frozenset({"__pycache__", "node_modules"})  # never hold tests, even when a file there looks like one
 UNMATCHED_AREA = "shared"
 LONG_LIVED = frozenset({"dev", "test", "main"})
 PROMOTIONS = frozenset({("dev", "test"), ("test", "main"), ("main", "dev")})
@@ -63,30 +65,39 @@ class BranchFlowError(Exception):
     """A fix branch for `main` that was not cut from `main`."""
 
 
-def _is_test_file(name: str) -> bool:
-    return any(PurePosixPath(name).match(g) for g in (TEST_FILE_GLOB, "*_test.py"))
+def _is_test_file(name: str, test_files: tuple[str, ...] = DEFAULT_TEST_FILES) -> bool:
+    return any(PurePosixPath(name).match(g) for g in test_files)
 
 
-def _has_tests(folder: Path) -> bool:
+def _has_tests(folder: Path, test_files: tuple[str, ...] = DEFAULT_TEST_FILES) -> bool:
     return any(
-        p.is_file() and _is_test_file(p.name) and "__pycache__" not in p.relative_to(folder).parts
-        for p in folder.rglob("*.py")
+        p.is_file() and _is_test_file(p.name, test_files) and not IGNORED_DIRS.intersection(p.relative_to(folder).parts)
+        for p in folder.rglob("*")
     )
 
 
 @dataclass(frozen=True)
 class Tier:
-    """One test tier (unit, e2e, ...). Areas are the sub-folders of `dir` that contain tests (`test_*.py` or
-    `*_test.py`; output and helper folders are not areas), or, with a `globs` table, groups of the `test_*.py` files
-    directly in `dir`."""
+    """One test tier (unit, e2e, ...). Areas are the sub-folders of `dir` that contain tests (files matching
+    `test_files`, by default `test_*.py` / `*_test.py`; output and helper folders are not areas), or, with a `globs`
+    table, groups of the test files directly in `dir`."""
 
     name: str
     dir: str
     globs: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    test_files: tuple[str, ...] | None = None  # None: test_*.py / *_test.py (glob mode: test_*.py only, as before)
+
+    @property
+    def _tests(self) -> tuple[str, ...]:
+        if self.test_files is not None:
+            return self.test_files
+        return (GLOB_MODE_TEST_FILE,) if self.globs else DEFAULT_TEST_FILES
 
     def _files(self, root: Path) -> list[str]:
         base = root / self.dir
-        return sorted(p.relative_to(root).as_posix() for p in base.glob(TEST_FILE_GLOB) if p.is_file())
+        return sorted(
+            p.relative_to(root).as_posix() for p in base.iterdir() if p.is_file() and _is_test_file(p.name, self._tests)
+        )
 
     def _owners(self, path: str) -> frozenset[str]:
         name = PurePosixPath(path).name
@@ -100,7 +111,12 @@ class Tier:
         if self.globs:
             return sorted({a for f in self._files(root) for a in self._owners(f)} | set(self.globs))
         return sorted(
-            d.name for d in base.iterdir() if d.is_dir() and not d.name.startswith(("_", ".")) and _has_tests(d)
+            d.name
+            for d in base.iterdir()
+            if d.is_dir()
+            and d.name not in IGNORED_DIRS
+            and not d.name.startswith(("_", "."))
+            and _has_tests(d, self._tests)
         )
 
     def area_of(self, root: Path, path: str, areas: Collection[str]) -> frozenset[str] | None:
@@ -114,10 +130,10 @@ class Tier:
             return None
         parts = pure.relative_to(self.dir).parts
         if self.globs:
-            return self._owners(path) if len(parts) == 1 and pure.match(TEST_FILE_GLOB) else None
+            return self._owners(path) if len(parts) == 1 and _is_test_file(pure.name, self._tests) else None
         if len(parts) < 2 or parts[0].startswith(("_", ".")):
             return None
-        removed = not (root / self.dir / parts[0]).exists() and _is_test_file(pure.name)
+        removed = not (root / self.dir / parts[0]).exists() and _is_test_file(pure.name, self._tests)
         return frozenset({parts[0]}) if parts[0] in areas or removed else None
 
     def paths(self, root: Path, selected: Collection[str] | None) -> list[str]:
@@ -159,6 +175,15 @@ def _strings(value: object, where: str) -> tuple[str, ...]:
     return items
 
 
+def _test_files(name: str, value: object) -> tuple[str, ...]:
+    patterns = _strings(value, f"tiers.{name}.test_files")
+    if not patterns or any("/" in g for g in patterns):
+        raise ValueError(
+            f"[tool.bdt.ci.plan.tiers.{name}] test_files must be a non-empty list of file name globs (no folders)"
+        )
+    return patterns
+
+
 def _tier(name: str, raw: object) -> Tier:
     table = raw if isinstance(raw, dict) else {}
     directory = table.get("dir", DEFAULT_TIER_DIRS.get(name))
@@ -168,7 +193,8 @@ def _tier(name: str, raw: object) -> Tier:
     if not isinstance(areas, dict):
         raise ValueError(f"[tool.bdt.ci.plan.tiers.{name}] areas must be a table of glob lists")
     globs = {str(area): _strings(g, f"tiers.{name}.areas.{area}") for area, g in areas.items()}
-    return Tier(name, directory.strip("/"), globs)
+    test_files = _test_files(name, table["test_files"]) if "test_files" in table else None
+    return Tier(name, directory.strip("/"), globs, test_files)
 
 
 def load_plan_config(start: Path | None = None) -> PlanConfig | None:
