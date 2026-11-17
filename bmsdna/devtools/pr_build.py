@@ -919,6 +919,39 @@ def deploy_build_hint(session: requests.Session, remote: AdoRemote, target_branc
     )
 
 
+AUTO_COMPLETE_GRACE_SECS = 15  # how long Azure DevOps gets to merge a PR whose auto-complete just became satisfiable
+
+
+def merge_outcome(
+    session: requests.Session, remote: AdoRemote, pr: dict, deadline: WaitDeadline | None = None
+) -> str | None:
+    """Best-effort one-line answer to "did it merge?" once the PR's builds are done, None when there is nothing to add.
+
+    A completed PR is reported as merged. An active one with auto-complete set is merged by Azure DevOps a moment after
+    its last policy passes, not at the same instant: give it `AUTO_COMPLETE_GRACE_SECS`, look again, and say whether
+    it did. Failures looking again fail open (the build report stands on its own), like `deploy_build_hint`.
+    """
+    target = (pr.get("targetRefName") or "").removeprefix("refs/heads/")
+    into = f" into '{target}'" if target else ""
+    if pr.get("status") == "completed":
+        return f"\nPR #{pr['pullRequestId']} is merged{into}."
+    if pr.get("status") != "active" or not pr.get("autoCompleteSetBy"):
+        return None
+    by = (pr["autoCompleteSetBy"].get("displayName") or "").strip()
+    auto = f"auto-complete is set{f' by {by}' if by else ''}"
+    if deadline is not None:
+        deadline.sleep(AUTO_COMPLETE_GRACE_SECS)
+    else:
+        time.sleep(AUTO_COMPLETE_GRACE_SECS)
+    try:
+        fresh = get_pr_by_id(session, remote, pr["pullRequestId"])
+    except requests.RequestException, SystemExit:
+        return f"\nPR #{pr['pullRequestId']} is not merged yet ({auto}); could not look again."
+    if fresh.get("status") == "completed":
+        return f"\nPR #{pr['pullRequestId']} was merged{into} by auto-complete."
+    return f"\nPR #{pr['pullRequestId']} is not merged yet ({auto}); it merges once the remaining policies pass."
+
+
 def latest_per_pipeline(builds: list) -> list:
     """Reduce a build list to the single latest build per pipeline (definition)."""
     latest: dict = {}
@@ -1465,6 +1498,9 @@ def _status(
                 # otherwise it'd claim a merge/deploy is underway before the PR's own build
                 # has even completed.
                 if all_done:
+                    outcome = merge_outcome(session, remote, pr, deadline)
+                    if outcome:
+                        print(outcome)
                     hint = deploy_build_hint(session, remote, target_branch)
                     if hint:
                         print(hint)

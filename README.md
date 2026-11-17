@@ -57,6 +57,10 @@ interactive (an agent, CI): pass `--pr-id N` or `--target BRANCH` then. Exactly 
 Only `pr create` and `pr watch-deploy`, which need a branch rather than a PR, default `--target` / `--target-branch`
 to `dev`.
 
+Once the builds are done, the output says whether the PR merged (Azure DevOps): a completed PR is `PR #42 is merged into 'dev'.`;
+an open one with auto-complete set gets 15 seconds to merge, then `PR #42 was merged into 'dev' by auto-complete.` or
+`PR #42 is not merged yet (auto-complete is set by …); it merges once the remaining policies pass.`
+
 If the PR can't be merged, that's reported immediately instead of polling
 for builds/checks that will never run — e.g. on Azure DevOps:
 `PR #42 ('feat: widgets') has merge conflicts with the target branch (mergeStatus=conflicts)`;
