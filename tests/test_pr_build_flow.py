@@ -733,7 +733,7 @@ def test_link_work_item_is_idempotent() -> None:
     session.patch.assert_not_called()
 
 
-def _run_status_with_pr(monkeypatch, pr: dict, fresh_pr: dict | Exception | None = None) -> list[float]:
+def _run_status_with_pr(monkeypatch, pr: dict, fresh_pr: dict | BaseException | None = None) -> list[float]:
     """`run` (no --wait) against one succeeded build; returns the sleeps asked for. `fresh_pr` is what looking the
     PR up by id again finds."""
     sleeps: list[float] = []
@@ -742,7 +742,7 @@ def _run_status_with_pr(monkeypatch, pr: dict, fresh_pr: dict | Exception | None
     def fake_get_pr_by_id(session, remote, pr_id):
         if fresh_pr is None:
             pytest.fail("must not look the PR up again")
-        if isinstance(fresh_pr, Exception):
+        if isinstance(fresh_pr, BaseException):
             raise fresh_pr
         return fresh_pr
 
@@ -802,3 +802,8 @@ def test_run_adds_nothing_for_an_open_pr_without_auto_complete(monkeypatch, caps
 
     assert sleeps == []
     assert "merged" not in capsys.readouterr().out
+
+
+def test_run_does_not_hide_a_conflict_that_appeared_during_the_auto_complete_wait(monkeypatch) -> None:
+    with pytest.raises(SystemExit, match="merge conflicts"):
+        _run_status_with_pr(monkeypatch, AUTO_COMPLETE_PR, fresh_pr=SystemExit("PR #1 has merge conflicts"))

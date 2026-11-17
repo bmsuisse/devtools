@@ -929,7 +929,8 @@ def merge_outcome(
 
     A completed PR is reported as merged. An active one with auto-complete set is merged by Azure DevOps a moment after
     its last policy passes, not at the same instant: give it `AUTO_COMPLETE_GRACE_SECS`, look again, and say whether
-    it did. Failures looking again fail open (the build report stands on its own), like `deploy_build_hint`.
+    it did. A request failure looking again fails open (the build report stands on its own), like `deploy_build_hint`; a merge
+    conflict that appeared meanwhile is not swallowed (`get_pr_by_id` exits with it).
     """
     target = (pr.get("targetRefName") or "").removeprefix("refs/heads/")
     into = f" into '{target}'" if target else ""
