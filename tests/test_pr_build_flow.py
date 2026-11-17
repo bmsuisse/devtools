@@ -731,3 +731,79 @@ def test_link_work_item_is_idempotent() -> None:
     link_work_item(session, REMOTE, 42, 7)
 
     session.patch.assert_not_called()
+
+
+def _run_status_with_pr(monkeypatch, pr: dict, fresh_pr: dict | BaseException | None = None) -> list[float]:
+    """`run` (no --wait) against one succeeded build; returns the sleeps asked for. `fresh_pr` is what looking the
+    PR up by id again finds."""
+    sleeps: list[float] = []
+    ci_build = {**DEPLOY_BUILD, "id": 5, "definition": {"id": 2, "name": "CI"}}
+
+    def fake_get_pr_by_id(session, remote, pr_id):
+        if fresh_pr is None:
+            pytest.fail("must not look the PR up again")
+        if isinstance(fresh_pr, BaseException):
+            raise fresh_pr
+        return fresh_pr
+
+    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", MagicMock)
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda session, remote, source, target: pr)
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr_by_id", fake_get_pr_by_id)
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_builds_for_pr", lambda session, remote, source, pr_id: [ci_build])
+    monkeypatch.setattr("bmsdna.devtools.pr_build.deploy_build_hint", lambda session, remote, target: None)
+    monkeypatch.setattr("bmsdna.devtools.cli_tools.time.sleep", sleeps.append)
+    run(REMOTE, "fake-pat", "main", wait=False, source_branch="feature-x")
+    return sleeps
+
+
+AUTO_COMPLETE_PR = {
+    "pullRequestId": 1,
+    "title": "feat: x",
+    "status": "active",
+    "isDraft": False,
+    "targetRefName": "refs/heads/dev",
+    "autoCompleteSetBy": {"displayName": "Adrian"},
+}
+
+
+def test_run_reports_a_completed_pr_as_merged_without_waiting(monkeypatch, capsys) -> None:
+    pr = {**AUTO_COMPLETE_PR, "status": "completed"}
+
+    sleeps = _run_status_with_pr(monkeypatch, pr)
+
+    assert sleeps == []
+    assert "PR #1 is merged into 'dev'." in capsys.readouterr().out
+
+
+def test_run_waits_then_reports_auto_complete_merge(monkeypatch, capsys) -> None:
+    sleeps = _run_status_with_pr(monkeypatch, AUTO_COMPLETE_PR, fresh_pr={**AUTO_COMPLETE_PR, "status": "completed"})
+
+    assert sleeps == [15]
+    assert "PR #1 was merged into 'dev' by auto-complete." in capsys.readouterr().out
+
+
+def test_run_says_auto_complete_has_not_merged_yet(monkeypatch, capsys) -> None:
+    sleeps = _run_status_with_pr(monkeypatch, AUTO_COMPLETE_PR, fresh_pr=AUTO_COMPLETE_PR)
+
+    assert sleeps == [15]
+    assert "PR #1 is not merged yet (auto-complete is set by Adrian)" in capsys.readouterr().out
+
+
+def test_run_fails_open_when_looking_the_pr_up_again_fails(monkeypatch, capsys) -> None:
+    _run_status_with_pr(monkeypatch, AUTO_COMPLETE_PR, fresh_pr=requests.ConnectionError("boom"))
+
+    assert "not merged yet" in capsys.readouterr().out
+
+
+def test_run_adds_nothing_for_an_open_pr_without_auto_complete(monkeypatch, capsys) -> None:
+    pr = {k: v for k, v in AUTO_COMPLETE_PR.items() if k != "autoCompleteSetBy"}
+
+    sleeps = _run_status_with_pr(monkeypatch, pr)
+
+    assert sleeps == []
+    assert "merged" not in capsys.readouterr().out
+
+
+def test_run_does_not_hide_a_conflict_that_appeared_during_the_auto_complete_wait(monkeypatch) -> None:
+    with pytest.raises(SystemExit, match="merge conflicts"):
+        _run_status_with_pr(monkeypatch, AUTO_COMPLETE_PR, fresh_pr=SystemExit("PR #1 has merge conflicts"))
