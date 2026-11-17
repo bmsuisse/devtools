@@ -137,7 +137,7 @@ def has_build_policy(session: requests.Session, remote: AdoRemote, branch: str) 
     """
     try:
         return _build_policy_lookup(session, remote, branch)
-    except requests.RequestException, SystemExit:
+    except requests.RequestException:
         return False
 
 
@@ -150,7 +150,7 @@ def lacks_build_policy(session: requests.Session, remote: AdoRemote, branch: str
     """
     try:
         return not _build_policy_lookup(session, remote, branch)
-    except requests.RequestException, SystemExit:
+    except requests.RequestException:
         return False
 
 
@@ -946,7 +946,7 @@ def merge_outcome(
         time.sleep(AUTO_COMPLETE_GRACE_SECS)
     try:
         fresh = get_pr_by_id(session, remote, pr["pullRequestId"])
-    except requests.RequestException, SystemExit:
+    except requests.RequestException:
         return f"\nPR #{pr['pullRequestId']} is not merged yet ({auto}); could not look again."
     if fresh.get("status") == "completed":
         return f"\nPR #{pr['pullRequestId']} was merged{into} by auto-complete."
