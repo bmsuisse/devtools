@@ -195,6 +195,12 @@ copies an env file in (auto-detects `.local_env` then `.env`), and runs
 `--install` inside the new worktree if given. Prefer this over raw
 `git worktree add` so env-file copying and submodule init aren't forgotten.
 
+## Disk usage reports
+
+`bdt cleanup caches`, `bdt cleanup stale-envs [root]` and `bdt cleanup inspect [root]` (all `--json`-capable) are
+read-only overviews of caches, stale `node_modules`/`.venv`/Rust `target`/.NET `bin`+`obj` and every worktree with
+a `safe` / `review` verdict. The `dev-cleanup` skill drives them together with `bdt cleanup worktrees`.
+
 ## Listing all repos
 
 ```bash
