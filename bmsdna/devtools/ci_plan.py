@@ -5,6 +5,7 @@ Configured under `[tool.bdt.ci.plan]` in pyproject.toml (the table must exist, e
     [tool.bdt.ci.plan]
     on_missing = "infer"            # PR without a usable label: "infer" from the changed files (default) or "fail"
     non_code = ["docs/**", "*.md"]  # files no test reads or ships; explicit per repo (`*.md` = root only, `**/*.md` = all)
+                                    # (the `bdt translate` file, translations.toml, is always one of them)
 
     [tool.bdt.ci.plan.tiers.unit]   # default tiers: unit = tests/unit, e2e = tests/e2e
     dir = "tests/unit"              # areas = sub-folders with tests (snake_case folder <-> kebab-case label)
@@ -33,6 +34,7 @@ Labels: `test-<area>`, `test-full` (everything), `test-none` (no tests; lint and
 4. Anything unreadable (label API, change list) selects everything.
 """
 
+import glob
 import shlex
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -197,6 +199,15 @@ def _tier(name: str, raw: object) -> Tier:
     return Tier(name, directory.strip("/"), globs, test_files)
 
 
+def _translations_file(start: Path | None) -> str | None:
+    """The `bdt translate` source file relative to the project folder: text that tests do not read (they get the
+    generated JSON, and `bdt translate --check` guards the keys), so an edit alone needs no tests."""
+    file = load_bdt_table("translate", start).get("file", "translations.toml")
+    if not isinstance(file, str):
+        return None
+    return PurePosixPath(file).as_posix()
+
+
 def load_plan_config(start: Path | None = None) -> PlanConfig | None:
     """`[tool.bdt.ci.plan]`, or None when the table is absent (the feature is opt-in per repo)."""
     raw = load_bdt_table("ci", start).get("plan")
@@ -215,11 +226,14 @@ def load_plan_config(start: Path | None = None) -> PlanConfig | None:
     paths = {str(area): _strings(globs, f"paths.{area}") for area, globs in paths_raw.items()}
     if (pyproject.parent / "infra").is_dir():
         paths.setdefault(INFRA_AREA, ("infra/**",))
+    non_code = _strings(raw.get("non_code", []), "non_code")
+    if translations := _translations_file(start):
+        non_code += (glob.escape(translations),)
     config = PlanConfig(
         root=pyproject.parent,
         tiers=tuple(_tier(name, t) for name, t in tiers_raw.items()),
         on_missing=on_missing,
-        non_code=_strings(raw.get("non_code", []), "non_code"),
+        non_code=non_code,
         paths=paths,
     )
     if clash := sorted(config.all_areas() & RESERVED_AREAS):
