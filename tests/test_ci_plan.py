@@ -291,6 +291,22 @@ def test_non_code_glob_is_not_a_substring_match(config) -> None:
     assert plan_for(config, pr(), files=["pkg/README.md"]).kind == "full"
 
 
+def test_translations_file_is_non_code(repo) -> None:
+    config = load_plan_config(repo)
+    assert config is not None
+    assert plan_for(config, pr(), files=["translations.toml"]).kind == "none"
+    assert plan_for(config, pr(), files=["sub/translations.toml"]).kind == "full"
+
+
+def test_translations_file_follows_the_translate_config(repo) -> None:
+    pyproject = repo / "pyproject.toml"
+    pyproject.write_text(pyproject.read_text() + '[tool.bdt.translate]\nfile = "i18n/strings.toml"\n')
+    config = load_plan_config(repo)
+    assert config is not None
+    assert plan_for(config, pr(), files=["i18n/strings.toml"]).kind == "none"
+    assert plan_for(config, pr(), files=["translations.toml"]).kind == "full"
+
+
 def test_infer_unreadable_file_list_runs_everything(config) -> None:
     assert plan_for(config, pr(), files=RuntimeError("git failed")).kind == "full"
 
