@@ -229,3 +229,123 @@ def test_a_catalog_that_is_not_one_or_has_bad_coordinates_is_an_error(tmp_path: 
     catalog.write_text(text, encoding="utf-8")
     with pytest.raises(LockfileError):
         read_lockfile(catalog)
+
+
+CARGO_LOCK = """\
+version = 4
+
+[[package]]
+name = "app"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tokio 1.40.0",
+ "helper",
+ "from-git",
+ "private-lib",
+]
+
+[[package]]
+name = "helper"
+version = "0.1.0"
+
+[[package]]
+name = "serde"
+version = "1.0.200"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = ["serde_derive"]
+
+[[package]]
+name = "serde_derive"
+version = "1.0.200"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "tokio"
+version = "1.40.0"
+source = "sparse+https://index.crates.io/"
+
+[[package]]
+name = "tokio"
+version = "0.2.25"
+source = "sparse+https://index.crates.io/"
+
+[[package]]
+name = "from-git"
+version = "0.3.0"
+source = "git+https://example.invalid/x.git?rev=abc#abc"
+
+[[package]]
+name = "private-lib"
+version = "2.0.0"
+source = "registry+https://pkgs.example.invalid/index"
+"""
+
+NUGET_LOCK = """\
+{
+  "version": 1,
+  "dependencies": {
+    "net8.0": {
+      "Newtonsoft.Json": { "type": "Direct", "requested": "[13.0.3, )", "resolved": "13.0.3", "contentHash": "x" },
+      "System.Text.Encodings.Web": { "type": "Transitive", "resolved": "4.7.1", "contentHash": "y" },
+      "Lib.Core": { "type": "Project" }
+    },
+    "net6.0": {
+      "Newtonsoft.Json": { "type": "Direct", "requested": "[13.0.3, )", "resolved": "13.0.3", "contentHash": "x" },
+      "System.Text.Encodings.Web": { "type": "Direct", "requested": "[4.7.1, )", "resolved": "4.7.1", "contentHash": "y" }
+    }
+  }
+}
+"""
+
+
+def test_cargo_lock_lists_crates_io_packages_and_flags_what_a_workspace_member_depends_on(tmp_path: Path) -> None:
+    lock = tmp_path / "Cargo.lock"
+    lock.write_text(CARGO_LOCK, encoding="utf-8")
+
+    content = read_lockfile(lock)
+
+    assert content.ecosystem == "crates.io"
+    assert {(p.name, p.version): p.direct for p in content.packages} == {
+        ("serde", "1.0.200"): True,
+        ("serde_derive", "1.0.200"): False,
+        ("tokio", "1.40.0"): True,  # `tokio 1.40.0` names the version, so the old tokio stays transitive
+        ("tokio", "0.2.25"): False,
+    }
+    assert {(u.name, u.reason) for u in content.unsupported} == {
+        ("from-git 0.3.0", "git source"),
+        ("private-lib 2.0.0", "registry source other than crates.io"),
+    }
+
+
+def test_nuget_lock_merges_frameworks_and_skips_project_references(tmp_path: Path) -> None:
+    lock = tmp_path / "packages.lock.json"
+    lock.write_text(NUGET_LOCK, encoding="utf-8")
+
+    content = read_lockfile(lock)
+
+    assert content.ecosystem == "NuGet"
+    assert {(p.name, p.version): p.direct for p in content.packages} == {
+        ("Newtonsoft.Json", "13.0.3"): True,
+        ("System.Text.Encodings.Web", "4.7.1"): True,  # direct in one target framework is direct
+    }
+    assert content.unsupported == []
+
+
+@pytest.mark.parametrize("name", ["Cargo.lock", "packages.lock.json"])
+def test_a_cargo_or_nuget_lockfile_that_is_not_one_is_an_error(tmp_path: Path, name: str) -> None:
+    lock = tmp_path / name
+    lock.write_text("[]" if name.endswith(".json") else "x = 1\n", encoding="utf-8")
+    with pytest.raises(LockfileError):
+        read_lockfile(lock)
+
+
+def test_find_lockfiles_includes_cargo_and_nuget_but_not_rust_target_output(tmp_path: Path) -> None:
+    for rel in ("rs/Cargo.lock", "rs/target/package/x/Cargo.lock", "cs/packages.lock.json", "cs/App.csproj"):
+        target = tmp_path / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("", encoding="utf-8")
+
+    found = {p.relative_to(tmp_path.resolve()).as_posix() for p in find_lockfiles([tmp_path])}
+
+    assert found == {"rs/Cargo.lock", "cs/packages.lock.json"}

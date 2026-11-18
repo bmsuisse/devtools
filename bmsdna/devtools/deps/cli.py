@@ -57,7 +57,9 @@ def _read_all(paths: list[Path] | None) -> list[LockfileContent]:
 
 @deps_app.command("affected")
 def affected(
-    package: Annotated[str, typer.Argument(help="Package name (PyPI names are normalised, npm names are exact)")],
+    package: Annotated[
+        str, typer.Argument(help="Package name (PyPI/crates.io/NuGet names are normalised, npm names are exact)")
+    ],
     version_spec: Annotated[
         str | None,
         typer.Option(
@@ -66,7 +68,8 @@ def affected(
         ),
     ] = None,
     ecosystem: Annotated[
-        str | None, typer.Option("--ecosystem", help="PyPI, npm or Maven (Gradle). Default: all.")
+        str | None,
+        typer.Option("--ecosystem", help="PyPI, npm, Maven (Gradle), crates.io (Cargo) or NuGet. Default: all."),
     ] = None,
     path: PathOption = None,
 ) -> None:
@@ -139,7 +142,7 @@ def advisories(
     ] = DEFAULT_COOLDOWN_DAYS,
     as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
 ) -> None:
-    """OSV advisories for every locked PyPI/npm/Maven version below --path, with a status each (malicious, needs-triage, no-fix,
+    """OSV advisories for every locked PyPI/npm/Maven/crates.io/NuGet version below --path, with a status each (malicious, needs-triage, no-fix,
     blocked, exempt-eligible, bump, informational; see the maintenance skill, audit.md). Fails closed: if OSV, the CISA KEV
     feed or a record can't be read the exit code is 3 and nothing is reported as clean. Exit 0 no affected locked version,
     1 affected, 2 setup error, 3 incomplete. Never edits anything; other lockfile sources are listed as unsupported."""
@@ -186,7 +189,8 @@ def cooldown(
     exempt: Annotated[
         list[str] | None,
         typer.Option(
-            "--exempt", help="Package (exact name, `group:artifact` for Maven) allowed inside the cooldown. Repeatable."
+            "--exempt",
+            help="Package (name as locked, `group:artifact` for Maven) allowed inside the cooldown. Repeatable.",
         ),
     ] = None,
     base: Annotated[
@@ -197,11 +201,12 @@ def cooldown(
         ),
     ] = None,
     ecosystem: Annotated[
-        str | None, typer.Option("--ecosystem", help="PyPI, npm or Maven (Gradle). Default: all.")
+        str | None,
+        typer.Option("--ecosystem", help="PyPI, npm, Maven (Gradle), crates.io (Cargo) or NuGet. Default: all."),
     ] = None,
 ) -> None:
-    """Locked versions younger than the dependency cooldown. uv and bun enforce it while resolving; Gradle can't, so this is
-    its check (`--ecosystem Maven --base origin/dev`). Exit 0 none inside the cooldown (or all exempt), 1 a version inside
+    """Locked versions younger than the dependency cooldown. uv and bun enforce it while resolving; Gradle, Cargo and NuGet
+    can't, so this is their check (`--ecosystem Maven --base origin/dev`). Exit 0 none inside the cooldown (or all exempt), 1 a version inside
     it, 2 setup error, 3 a release time could not be read. Versions without a public release time are listed, not failed."""
     if ecosystem and ecosystem not in ECOSYSTEMS:
         typer.echo(f"bdt deps: --ecosystem must be one of {', '.join(ECOSYSTEMS)}", err=True)

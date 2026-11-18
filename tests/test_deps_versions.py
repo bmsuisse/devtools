@@ -3,10 +3,13 @@ import pytest
 from bmsdna.devtools.deps.versions import (
     Ecosystem,
     VersionError,
+    declared_range_satisfied,
     normalize_name,
     npm_range_satisfied,
     parse_maven,
+    parse_nuget,
     parse_semver,
+    parse_version,
     pypi_specifier_satisfied,
     spec_matches,
 )
@@ -117,3 +120,32 @@ def test_maven_ordering_follows_comparable_version() -> None:
 def test_a_maven_version_that_is_not_one_is_unknown() -> None:
     with pytest.raises(VersionError):
         parse_maven("[1.0,2.0)")
+
+
+def test_crates_io_and_nuget_names_ignore_case_and_cargo_ignores_dash_vs_underscore() -> None:
+    assert normalize_name("crates.io", "Serde_Json") == "serde-json"
+    assert normalize_name("NuGet", "Newtonsoft.Json") == "newtonsoft.json"
+
+
+def test_nuget_versions_have_up_to_four_parts_and_semver_prereleases() -> None:
+    assert parse_nuget("1.0") == parse_nuget("1.0.0.0")
+    assert parse_nuget("1.2.3.4") > parse_nuget("1.2.3")
+    assert parse_nuget("1.9.0") < parse_nuget("1.10.0")
+    assert parse_nuget("2.0.0-beta.2") < parse_nuget("2.0.0-BETA.10") < parse_nuget("2.0.0-rc") < parse_nuget("2.0.0")
+    assert parse_nuget("1.0.0+build5") == parse_nuget("1.0.0")
+
+
+def test_a_nuget_version_that_is_not_one_is_unknown() -> None:
+    with pytest.raises(VersionError):
+        parse_nuget("[1.0,2.0)")
+
+
+def test_crates_io_versions_are_semver() -> None:
+    assert parse_version("crates.io", "1.0.200") < parse_version("crates.io", "1.0.201")
+    assert parse_version("crates.io", "0.3.0-alpha.1") < parse_version("crates.io", "0.3.0")
+
+
+@pytest.mark.parametrize("ecosystem", ["crates.io", "NuGet"])
+def test_declared_ranges_of_cargo_and_nuget_are_not_evaluated(ecosystem: Ecosystem) -> None:
+    with pytest.raises(VersionError):
+        declared_range_satisfied(ecosystem, "[1.0, )", "1.5.0")

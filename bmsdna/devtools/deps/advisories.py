@@ -21,11 +21,12 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from bmsdna.devtools.deps.lockfiles import LockedPackage, LockfileContent, Unsupported
 from bmsdna.devtools.deps.osv import AdvisorySource, DataError, PackageQuery
 from bmsdna.devtools.deps.versions import (
+    ECOSYSTEMS,
     Ecosystem,
     SemVer,
     VersionError,
@@ -74,7 +75,9 @@ def parse_vuln(raw: dict[str, Any]) -> Vuln:
     for aff in raw.get("affected", []):
         package = aff.get("package") or {}
         eco = package.get("ecosystem", "")
-        name = normalize_name("PyPI", package.get("name", "")) if eco == "PyPI" else package.get("name", "")
+        name = package.get("name", "")
+        if eco in ECOSYSTEMS:
+            name = normalize_name(cast("Ecosystem", eco), name)
         ranges = tuple((r.get("type", ""), tuple(r.get("events", []))) for r in aff.get("ranges", []))
         entries.append(AffectedEntry(eco, name, ranges, frozenset(aff.get("versions", []))))
     scores = tuple(
@@ -138,7 +141,7 @@ FixState = Literal["fixed", "no-fix", "unknown"]
 
 def _event_version(ecosystem: Ecosystem, text: str) -> Any:
     if text == "0":
-        return SemVer(0, 0, 0) if ecosystem == "npm" else parse_version(ecosystem, "0")
+        return SemVer(0, 0, 0) if ecosystem in ("npm", "crates.io") else parse_version(ecosystem, "0")
     return parse_version(ecosystem, text)
 
 
@@ -148,7 +151,8 @@ def fix_for(vuln: Vuln, ecosystem: Ecosystem, name: str, version: str) -> tuple[
         locked = parse_version(ecosystem, version)
     except VersionError as exc:
         return "unknown", None, str(exc)
-    entries = [a for a in vuln.affected if a.ecosystem == ecosystem and a.name == name]
+    wanted = normalize_name(ecosystem, name)
+    entries = [a for a in vuln.affected if a.ecosystem == ecosystem and normalize_name(ecosystem, a.name) == wanted]
     if not entries:
         return "unknown", None, "the advisory has no affected entry for this package"
     fixed: list[tuple[Any, str]] = []
@@ -293,6 +297,26 @@ def _commands(finding: Finding) -> list[str]:
         return [
             step,
             f"{where} && bdt deps cooldown --exempt {pkg.name}   # Gradle has no cooldown setting: pass the exception here",
+        ]
+    if pkg.ecosystem == "crates.io":
+        step = f"{where} && cargo update {pkg.name}@{pkg.version} --precise {target}"
+        if finding.status == "bump":
+            return [step]
+        return [
+            step,
+            f"{where} && bdt deps cooldown --exempt {pkg.name}   # Cargo has no cooldown setting: pass the exception here",
+        ]
+    if pkg.ecosystem == "NuGet":
+        step = (
+            f"{where} && dotnet add package {pkg.name} --version {target}"
+            if pkg.direct
+            else f"{where} && add {pkg.name} {target} as a direct PackageReference (or a central pin)"
+        ) + ", then `dotnet restore --force-evaluate` (rewrites packages.lock.json)"
+        if finding.status == "bump":
+            return [step]
+        return [
+            step,
+            f"{where} && bdt deps cooldown --exempt {pkg.name}   # NuGet has no cooldown setting: pass the exception here",
         ]
     if pkg.ecosystem == "PyPI":
         if finding.status == "bump":

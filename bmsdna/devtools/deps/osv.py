@@ -20,6 +20,11 @@ OSV_URL = "https://api.osv.dev"
 KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 PYPI_URL = "https://pypi.org/pypi"
 NPM_URL = "https://registry.npmjs.org"
+CRATES_URL = "https://crates.io/api/v1/crates"
+CRATES_USER_AGENT = (
+    "bdt (bmsuisse devtools; https://github.com/bmsuisse/devtools)"  # crates.io rejects clients without one
+)
+NUGET_URL = "https://api.nuget.org/v3/registration5-gz-semver2"
 # Where a Gradle dependency can live, in lookup order: the first repository that has the POM gives the release time.
 MAVEN_REPOS = (
     "https://repo1.maven.org/maven2",
@@ -161,9 +166,33 @@ class OsvClient:
                 raise DataError(f"{url} unreachable: {last}")
         return None
 
+    def _crates_release_time(self, name: str, version: str) -> datetime | None:
+        """`created_at` of the version on crates.io."""
+        url = f"{CRATES_URL}/{quote(name)}/{quote(version)}"
+        data = self._request("GET", url, allow_404=True, headers={"User-Agent": CRATES_USER_AGENT})
+        if data is None:
+            return None
+        try:
+            return _parse_time(data["version"]["created_at"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise DataError(f"{url} has no readable created_at") from exc
+
+    def _nuget_release_time(self, name: str, version: str) -> datetime | None:
+        """`published` of the version's registration leaf on nuget.org (ids and versions are lower-cased there)."""
+        url = f"{NUGET_URL}/{quote(name.lower())}/{quote(version.lower())}.json"
+        data = self._request("GET", url, allow_404=True)
+        if data is None:
+            return None
+        try:
+            published = _parse_time(data["published"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise DataError(f"{url} has no readable published date") from exc
+        # nuget.org reports 1900-01-01 for an unlisted package: its real date is unknown, not 125 years old
+        return None if published.year < 2000 else published
+
     def release_time(self, ecosystem: Ecosystem, name: str, version: str) -> datetime | None:
         """When the version was published: the youngest file for PyPI (uv gates per file), `time[version]` for npm
-        (bun's source), the POM's `Last-Modified` for Maven. None when the registry doesn't know it (private package)."""
+        (bun's source), `created_at` for crates.io, `published` for NuGet, the POM's `Last-Modified` for Maven. None when the registry doesn't know it (private package)."""
         if ecosystem == "Maven":
             return self._maven_release_time(name, version)
         if ecosystem == "PyPI":
@@ -171,6 +200,10 @@ class OsvClient:
             files = (data or {}).get("urls") or []
             times = [f["upload_time_iso_8601"] for f in files if f.get("upload_time_iso_8601")]
             return max(_parse_time(t) for t in times) if times else None
+        if ecosystem == "crates.io":
+            return self._crates_release_time(name, version)
+        if ecosystem == "NuGet":
+            return self._nuget_release_time(name, version)
         if name not in self._npm_times:
             data = self._request("GET", f"{NPM_URL}/{quote(name, safe='@')}", allow_404=True)
             self._npm_times[name] = (data or {}).get("time") or {}

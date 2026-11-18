@@ -1294,9 +1294,12 @@ used is reported as `api-route-baseline-stale`, so the list can only shrink.
 ## `bdt deps affected` / `bdt deps advisories` / `bdt deps cooldown`
 
 Security incidents and supply chain attacks (bmsuisse/devtools#113): which locked dependencies are touched? All
-commands only read: they never edit a file, a lock or an environment. They cover `uv.lock` (PyPI), `bun.lock` (npm) and
-Gradle (Maven: `gradle.lockfile` and the version catalog `gradle/libs.versions.toml`) below each `--path` (default: the
-current directory; `node_modules`, virtualenvs, `.git`, `.gradle` and `.worktrees` are skipped).
+commands only read: they never edit a file, a lock or an environment. They cover `uv.lock` (PyPI), `bun.lock` (npm),
+Gradle (Maven: `gradle.lockfile` and the version catalog `gradle/libs.versions.toml`), `Cargo.lock` (crates.io) and NuGet's
+`packages.lock.json` below each `--path` (default: the current directory; `node_modules`, virtualenvs, `.git`, `.gradle`,
+Rust `target` and `.worktrees` are skipped). Cargo and NuGet are read from the lockfile only: the version ranges live in
+`Cargo.toml` / the project files, so a `blocked` status (fix outside the declared range) is not computed for them. A NuGet
+project needs `RestorePackagesWithLockFile` to have a `packages.lock.json`.
 Git, path, alias and workspace sources, and Gradle entries without an exact version in the catalog (managed by a BOM, or a
 range), can't be matched against an advisory: they are listed as `unsupported`, never skipped. A catalog lists the direct
 dependencies only; transitive ones need Gradle dependency locking (`gradle.lockfile`).
@@ -1306,6 +1309,7 @@ bdt deps affected lodash --version-spec "<4.17.21" --path ~/projects/CCMT2 --pat
 bdt deps advisories --path .          # OSV lookup of every locked version, one status per affected package
 bdt deps advisories --json            # machine-readable
 bdt deps cooldown --ecosystem Maven --base origin/dev   # CI: no Gradle version added or changed within the cooldown
+bdt deps cooldown --ecosystem crates.io --base origin/main   # same for Cargo.lock; --ecosystem NuGet for packages.lock.json
 ```
 
 `affected PACKAGE` lists the locked versions of one package (PyPI names are normalised, npm names exact; `--ecosystem`
@@ -1314,9 +1318,10 @@ none matches, 1 a locked version matches, 2 setup error (no lockfile, unreadable
 git/path/alias source of that name could not be matched).
 
 `cooldown` answers "is a locked version younger than the dependency cooldown?" (`--cooldown-days`, default 5). uv
-(`exclude-newer`) and bun (`minimumReleaseAge`) enforce the cooldown while resolving; Gradle has no such setting and
-pins exact versions, so this is its check. The release time is the upload time of the POM (`Last-Modified`) on Maven
-Central, Google Maven or the Gradle plugin portal. `--base REV` looks only at versions the file does not have at `REV`
+(`exclude-newer`) and bun (`minimumReleaseAge`) enforce the cooldown while resolving; Gradle, Cargo and NuGet have no
+such setting, so this is their check. The release time is the upload time of the POM (`Last-Modified`) on Maven Central,
+Google Maven or the Gradle plugin portal, `created_at` on crates.io, and `published` on nuget.org (an unlisted package,
+which nuget.org dates 1900, counts as unknown). `--base REV` looks only at versions the file does not have at `REV`
 (use the target branch in CI, so an old pin never fails a later pull request); without it every locked version is looked
 up. `--exempt NAME` (repeatable, `group:artifact` for Maven) lets one package through: the per-invocation exception for a
 security fix younger than the cooldown, as for uv and bun. Exit 0 none inside the cooldown (or all exempt), 1 a version
@@ -1338,7 +1343,7 @@ cooldown exception flow (`references/audit.md`) acts on it:
 
 The target version is the lowest one the advisory data shows to be outside every affected range of the urgent
 advisories (all of them when none is urgent), never "latest". Lower-severity advisories that need a newer version stay open until a normal bump, and the finding names them. `next:` lines give the per-invocation commands. Unsupported sources are listed but don't change the exit code. The fix's age
-comes from the registry (PyPI: youngest file; npm: `time[version]`); `--cooldown-days` (default 5) is the project's
+comes from the registry (PyPI: youngest file; npm: `time[version]`; crates.io and NuGet: the release date above); `--cooldown-days` (default 5) is the project's
 cooldown. Compatibility with the parents' ranges of a *transitive* dependency isn't known here: re-run after the bump.
 
 It fails closed: OSV, KEV or an advisory record that can't be read is reported as `incomplete` with exit 3, never as

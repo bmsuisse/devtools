@@ -236,3 +236,36 @@ def test_lower_severity_advisories_stay_open_at_the_urgent_target_and_the_findin
 
     assert (finding.status, finding.target) == ("exempt-eligible", "2.0.0")
     assert "GHSA-2 (fixed in 3.0.0)" in finding.reason
+
+
+def test_crates_io_advisory_gives_the_fixed_version_and_a_cargo_command() -> None:
+    record = vuln("GHSA-c", name="serde", ecosystem="crates.io", events=FIX_2)
+    content = lock("serde", "1.0.0", ecosystem="crates.io", direct=True)
+
+    result = run(content, [record], released={("serde", "2.0.0"): NOW - timedelta(days=30)})
+
+    (finding,) = result.findings
+    assert (finding.status, finding.target) == ("bump", "2.0.0")
+    assert finding.commands == [f"cd {LOCK.parent} && cargo update serde@1.0.0 --precise 2.0.0"]
+
+
+def test_nuget_advisory_matches_package_names_ignoring_case() -> None:
+    # OSV lists `Newtonsoft.Json`; the lockfile may spell it differently
+    record = vuln(
+        "GHSA-n", name="Newtonsoft.Json", ecosystem="NuGet", events=[{"introduced": "0"}, {"fixed": "13.0.1"}]
+    )
+    state, fixed, _ = fix_for(parse_vuln(record), "NuGet", "newtonsoft.JSON", "12.0.1")
+    assert (state, fixed) == ("fixed", "13.0.1")
+
+
+def test_nuget_fresh_fix_is_exempt_eligible_with_dotnet_commands() -> None:
+    record = vuln("GHSA-n", name="Pkg", ecosystem="NuGet", events=[{"introduced": "0"}, {"fixed": "2.0.0"}])
+    content = lock("Pkg", "1.0.0", ecosystem="NuGet", direct=False)
+
+    result = run(content, [record], released={("Pkg", "2.0.0"): NOW - timedelta(days=1)})
+
+    (finding,) = result.findings
+    assert finding.status == "exempt-eligible"
+    assert "add Pkg 2.0.0 as a direct PackageReference" in finding.commands[0]
+    assert "dotnet restore --force-evaluate" in finding.commands[0]
+    assert finding.commands[1].endswith("# NuGet has no cooldown setting: pass the exception here")
