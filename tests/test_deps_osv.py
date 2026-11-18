@@ -127,3 +127,34 @@ def test_maven_release_time_is_none_when_no_repository_has_it_and_an_error_when_
 def test_a_maven_pom_without_last_modified_is_an_error_not_an_unknown_age() -> None:
     with pytest.raises(DataError, match="Last-Modified"):
         OsvClient(FakeSession([FakeResponse(headers={})])).release_time("Maven", "a:b", "1")
+
+
+def test_crates_io_release_time_is_created_at_and_sends_a_user_agent() -> None:
+    session = FakeSession([FakeResponse({"version": {"num": "1.0.200", "created_at": "2024-05-01T16:00:47.131059Z"}})])
+
+    released = OsvClient(session).release_time("crates.io", "serde", "1.0.200")
+
+    assert _day(released) == 1
+    assert session.calls[0][1] == "https://crates.io/api/v1/crates/serde/1.0.200"
+    assert "bmsuisse" in session.calls[0][2]["headers"]["User-Agent"]
+
+
+def test_crates_io_unknown_version_is_none_and_a_record_without_created_at_is_an_error() -> None:
+    assert OsvClient(FakeSession([FakeResponse(status=404)])).release_time("crates.io", "private", "1.0.0") is None
+    with pytest.raises(DataError):
+        OsvClient(FakeSession([FakeResponse({"version": {}})])).release_time("crates.io", "serde", "1.0.200")
+
+
+def test_nuget_release_time_is_published_of_the_lower_cased_registration_leaf() -> None:
+    session = FakeSession([FakeResponse({"published": "2023-03-08T07:46:17.78+00:00"})])
+
+    released = OsvClient(session).release_time("NuGet", "Newtonsoft.Json", "13.0.3")
+
+    assert _day(released) == 8
+    assert session.calls[0][1] == "https://api.nuget.org/v3/registration5-gz-semver2/newtonsoft.json/13.0.3.json"
+
+
+def test_nuget_unlisted_package_date_1900_is_unknown_not_ancient() -> None:
+    unlisted = FakeResponse({"published": "1900-01-01T00:00:00+00:00"})
+    assert OsvClient(FakeSession([unlisted])).release_time("NuGet", "X", "1.0.0") is None
+    assert OsvClient(FakeSession([FakeResponse(status=404)])).release_time("NuGet", "X", "1.0.0") is None

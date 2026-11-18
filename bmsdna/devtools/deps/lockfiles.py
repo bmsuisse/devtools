@@ -1,4 +1,5 @@
-"""Read `uv.lock` (PyPI), `bun.lock` (npm), `gradle.lockfile` and Gradle version catalogs (Maven) into `LockedPackage`s.
+"""Read `uv.lock` (PyPI), `bun.lock` (npm), `gradle.lockfile` and Gradle version catalogs (Maven), `Cargo.lock` (crates.io)
+and `packages.lock.json` (NuGet) into `LockedPackage`s.
 
 Only registry packages are returned; git, path, editable and workspace sources (and Gradle versions a catalog does not pin)
 are reported as `Unsupported` so a scan never claims to have looked at a dependency it can't match against an advisory.
@@ -17,8 +18,16 @@ from typing import Any, cast
 
 from bmsdna.devtools.deps.versions import Ecosystem, normalize_name
 
-LOCKFILE_NAMES = {"uv.lock": "PyPI", "bun.lock": "npm", "gradle.lockfile": "Maven"}
-_SKIP_DIRS = frozenset({"node_modules", ".venv", "venv", ".git", ".worktrees", "__pycache__", ".tox", ".gradle"})
+LOCKFILE_NAMES = {
+    "uv.lock": "PyPI",
+    "bun.lock": "npm",
+    "gradle.lockfile": "Maven",
+    "Cargo.lock": "crates.io",
+    "packages.lock.json": "NuGet",
+}
+_SKIP_DIRS = frozenset(
+    {"node_modules", ".venv", "venv", ".git", ".worktrees", "__pycache__", ".tox", ".gradle", "target"}
+)
 
 
 def is_lockfile(path: Path) -> bool:
@@ -56,8 +65,8 @@ class LockfileContent:
 
 
 def find_lockfiles(roots: Iterable[Path]) -> list[Path]:
-    """Every `uv.lock` / `bun.lock` / `gradle.lockfile` / `gradle/*.versions.toml` below the roots; `node_modules`,
-    virtualenvs, `.git`, `.gradle` and `.worktrees` are not entered (a root that itself lives inside one is still scanned)."""
+    """Every `uv.lock` / `bun.lock` / `gradle.lockfile` / `gradle/*.versions.toml` / `Cargo.lock` / `packages.lock.json`
+    below the roots; `node_modules`, virtualenvs, `.git`, `.gradle`, Rust `target` and `.worktrees` are not entered (a root that itself lives inside one is still scanned)."""
     found: list[Path] = []
     errors: list[str] = []
     for root in roots:
@@ -81,6 +90,10 @@ def read_lockfile(path: Path, text: str | None = None) -> LockfileContent:
             return read_uv_lock(path, text)
         if path.name == "gradle.lockfile":
             return read_gradle_lockfile(path, text)
+        if path.name == "Cargo.lock":
+            return read_cargo_lock(path, text)
+        if path.name == "packages.lock.json":
+            return read_nuget_lock(path, text)
         if path.name.endswith(".versions.toml"):
             return read_gradle_catalog(path, text)
         return read_bun_lock(path, text)
@@ -296,4 +309,70 @@ def read_gradle_lockfile(path: Path, text: str | None = None) -> LockfileContent
         if (name, version) not in seen:
             seen.add((name, version))
             content.packages.append(LockedPackage("Maven", name, version, name in direct, path))
+    return content
+
+
+# ── Cargo.lock ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+_CRATES_IO_SOURCES = ("registry+https://github.com/rust-lang/crates.io-index", "sparse+https://index.crates.io/")
+
+
+def read_cargo_lock(path: Path, text: str | None = None) -> LockfileContent:
+    """`Cargo.lock`: every package from crates.io. Direct = listed as a dependency by a workspace member (a package with
+    no `source`); the version ranges live in `Cargo.toml`, so `declared` stays empty."""
+    data = tomllib.loads(text if text is not None else path.read_text(encoding="utf-8"))
+    packages = data.get("package")
+    if not isinstance(packages, list) or not packages:
+        raise ValueError("no [[package]] entries: not a Cargo lockfile")
+    direct: set[tuple[str, str | None]] = set()
+    for pkg in packages:
+        if "source" not in pkg:
+            for dep in pkg.get("dependencies", []):  # "name", "name version" or "name version (source)"
+                name, _, rest = dep.partition(" ")
+                direct.add((name, rest.split(" ")[0] or None))
+    content = LockfileContent(path, "crates.io")
+    seen: set[tuple[str, str]] = set()
+    for pkg in packages:
+        source = pkg.get("source")
+        if source is None:  # a workspace member or path dependency: the project's own code
+            continue
+        name, version = pkg["name"], pkg["version"]
+        if not source.startswith(_CRATES_IO_SOURCES):
+            kind = source.partition("+")[0]
+            reason = "git source" if kind == "git" else f"{kind} source other than crates.io"
+            content.unsupported.append(Unsupported(path, f"{name} {version}", reason))
+            continue
+        if (name, version) in seen:
+            continue
+        seen.add((name, version))
+        is_direct = (name, version) in direct or (name, None) in direct
+        content.packages.append(LockedPackage("crates.io", name, version, is_direct, path))
+    return content
+
+
+# ── packages.lock.json (NuGet) ───────────────────────────────────────────────────────────────────────────────────
+
+
+def read_nuget_lock(path: Path, text: str | None = None) -> LockfileContent:
+    """`packages.lock.json` (`RestorePackagesWithLockFile`): one table per target framework. Direct = `type: Direct`;
+    project references are the solution's own code and skipped. The requested range is NuGet interval notation, which is
+    not evaluated, so `declared` stays empty."""
+    data = json.loads(text if text is not None else path.read_text(encoding="utf-8"))
+    frameworks = data.get("dependencies") if isinstance(data, dict) else None
+    if not isinstance(frameworks, dict):
+        raise ValueError('no "dependencies" object: not a NuGet lockfile')
+    content = LockfileContent(path, "NuGet")
+    found: dict[tuple[str, str], bool] = {}
+    for framework in frameworks.values():
+        for name, entry in framework.items():
+            if entry.get("type") == "Project":
+                continue
+            version = entry.get("resolved")
+            if not version:
+                content.unsupported.append(Unsupported(path, name, "no resolved version in the lockfile"))
+                continue
+            found[(name, version)] = found.get((name, version), False) or entry.get("type") == "Direct"
+    content.packages.extend(
+        LockedPackage("NuGet", name, version, direct, path) for (name, version), direct in found.items()
+    )
     return content

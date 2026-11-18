@@ -1,4 +1,5 @@
-"""Version parsing and matching for the supported ecosystems: PyPI (PEP 440), npm (semver) and Maven (Gradle).
+"""Version parsing and matching for the supported ecosystems: PyPI (PEP 440), npm and crates.io (semver), Maven (Gradle)
+and NuGet.
 
 A `spec` is a comma/space separated list of comparators (`<4.17.21`, `>=1.0,<2`, `==1.2.3`); declared npm ranges from a
 `package.json` (`^4`, `~1.2`, `1.x`, `>=1 <3 || ^5`) go through `npm_range_satisfied`.
@@ -14,8 +15,8 @@ from typing import Literal, cast
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
 
-Ecosystem = Literal["PyPI", "npm", "Maven"]
-ECOSYSTEMS: tuple[Ecosystem, ...] = ("PyPI", "npm", "Maven")
+Ecosystem = Literal["PyPI", "npm", "Maven", "crates.io", "NuGet"]  # OSV's ecosystem names
+ECOSYSTEMS: tuple[Ecosystem, ...] = ("PyPI", "npm", "Maven", "crates.io", "NuGet")
 
 
 class VersionError(ValueError):
@@ -62,6 +63,45 @@ def parse_semver(text: str) -> SemVer:
     major, minor, patch, pre = match.groups()
     prerelease = tuple(int(p) if p.isdigit() else p for p in pre.split(".")) if pre else ()
     return SemVer(int(major), int(minor), int(patch), prerelease)
+
+
+# NuGet: 1 to 4 numeric parts (`1.2.3.4`, a missing part is 0), optional `-prerelease` (compared like semver, case
+# insensitive), `+metadata` ignored.
+_NUGET_RE = re.compile(r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
+
+
+@total_ordering
+@dataclass(frozen=True, slots=True)
+class NuGetVersion:
+    parts: tuple[int, int, int, int]
+    prerelease: tuple[int | str, ...] = ()
+
+    def _key(self) -> tuple:
+        pre = (
+            (1,)
+            if not self.prerelease
+            else (0, tuple((0, p, "") if isinstance(p, int) else (1, 0, p) for p in self.prerelease))
+        )
+        return (self.parts, pre)
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, NuGetVersion):
+            return NotImplemented
+        return self._key() < other._key()
+
+    def __str__(self) -> str:
+        pre = "-" + ".".join(map(str, self.prerelease)) if self.prerelease else ""
+        return ".".join(map(str, self.parts)) + pre
+
+
+def parse_nuget(text: str) -> NuGetVersion:
+    match = _NUGET_RE.match(text.strip())
+    if not match:
+        raise VersionError(f"not a NuGet version: {text!r}")
+    *numbers, pre = match.groups()
+    prerelease = tuple(int(p) if p.isdigit() else p.lower() for p in pre.split(".")) if pre else ()
+    padded = [int(n) if n else 0 for n in numbers]
+    return NuGetVersion((padded[0], padded[1], padded[2], padded[3]), prerelease)
 
 
 # Maven's ComparableVersion (the Maven 3 algorithm): a version is a nested list, a hyphen or a digit/letter change opens a
@@ -209,7 +249,7 @@ def parse_maven(text: str) -> MavenVersion:
     return MavenVersion(cast("tuple[object, ...]", _maven_freeze(("l", root))), text, tuple(root))
 
 
-def parse_version(ecosystem: Ecosystem, text: str) -> Version | SemVer | MavenVersion:
+def parse_version(ecosystem: Ecosystem, text: str) -> Version | SemVer | MavenVersion | NuGetVersion:
     if ecosystem == "PyPI":
         try:
             return Version(text.strip())
@@ -217,12 +257,19 @@ def parse_version(ecosystem: Ecosystem, text: str) -> Version | SemVer | MavenVe
             raise VersionError(f"not a PEP 440 version: {text!r}") from exc
     if ecosystem == "Maven":
         return parse_maven(text)
-    return parse_semver(text)
+    if ecosystem == "NuGet":
+        return parse_nuget(text)
+    return parse_semver(text)  # npm and crates.io
 
 
 def normalize_name(ecosystem: Ecosystem, name: str) -> str:
-    """PEP 503 for PyPI (`Foo_Bar.baz` == `foo-bar-baz`); npm names are case-sensitive and compared as they are."""
-    return re.sub(r"[-_.]+", "-", name).lower() if ecosystem == "PyPI" else name
+    """PEP 503 for PyPI (`Foo_Bar.baz` == `foo-bar-baz`); crates.io ignores case and `-`/`_`, NuGet ids ignore case;
+    npm and Maven names are case-sensitive and compared as they are."""
+    if ecosystem == "PyPI":
+        return re.sub(r"[-_.]+", "-", name).lower()
+    if ecosystem == "crates.io":
+        return name.replace("_", "-").lower()
+    return name.lower() if ecosystem == "NuGet" else name
 
 
 _COMPARATOR_RE = re.compile(r"^(<=|>=|==|!=|<|>|=)\s*(\S+)$")
@@ -361,8 +408,8 @@ def _names_prerelease_of(comparator: str, version: SemVer) -> bool:
 
 
 def declared_range_satisfied(ecosystem: Ecosystem, declared: str, version: str) -> bool:
-    if ecosystem == "Maven":  # Gradle catalogs pin exact versions: nothing declared is a range we could evaluate
-        raise VersionError(f"Maven version ranges are not evaluated: {declared!r}")
+    if ecosystem in ("Maven", "crates.io", "NuGet"):  # exact pins, or ranges whose syntax is not evaluated here
+        raise VersionError(f"{ecosystem} version ranges are not evaluated: {declared!r}")
     return (
         pypi_specifier_satisfied(declared, version) if ecosystem == "PyPI" else npm_range_satisfied(declared, version)
     )

@@ -1,7 +1,9 @@
 """`bdt deps cooldown`: is a locked or pinned version younger than the dependency cooldown?
 
-uv (`exclude-newer`) and bun (`minimumReleaseAge`) enforce the cooldown while resolving. Gradle has no such setting and
-catalogs pin exact versions, so for Maven the cooldown is checked here, against the version a branch adds or changes.
+uv (`exclude-newer`), bun (`minimumReleaseAge`) and Cargo >= 1.100 (`registry.global-min-publish-age`) enforce the cooldown
+while resolving. Gradle has no such setting and NuGet's does not gate a pinned restore, so for Maven and NuGet the cooldown
+is checked here, against the version a branch adds or changes (it also works for any other locked version, e.g. Cargo
+projects on an older toolchain).
 """
 
 from __future__ import annotations
