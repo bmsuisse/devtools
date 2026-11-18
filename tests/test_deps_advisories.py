@@ -269,3 +269,15 @@ def test_nuget_fresh_fix_is_exempt_eligible_with_dotnet_commands() -> None:
     assert "add Pkg 2.0.0 as a direct PackageReference" in finding.commands[0]
     assert "dotnet restore --force-evaluate" in finding.commands[0]
     assert finding.commands[1].endswith("# NuGet has no cooldown setting: pass the exception here")
+
+
+def test_suggested_commands_quote_a_project_path_with_shell_metacharacters() -> None:
+    evil = Path("/tmp/repo; touch /tmp/pwned #/uv.lock")
+    record = vuln("GHSA-c", name="serde", ecosystem="crates.io", events=FIX_2)
+    content = LockfileContent(evil, "crates.io")
+    content.packages.append(LockedPackage("crates.io", "serde", "1.0.0", True, evil))
+
+    result = run(content, [record], released={("serde", "2.0.0"): NOW - timedelta(days=30)})
+
+    (finding,) = result.findings
+    assert finding.commands[0].startswith("cd '/tmp/repo; touch /tmp/pwned #' && cargo update")

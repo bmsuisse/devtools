@@ -25,14 +25,14 @@ from bmsdna.devtools.deps.versions import ECOSYSTEMS, VersionError, normalize_na
 
 deps_app = typer.Typer(
     name="deps",
-    help="Which locked dependencies (uv.lock, bun.lock, Gradle) a security advisory or supply chain incident touches",
+    help="Which locked dependencies (uv.lock, bun.lock, Gradle, Cargo.lock, NuGet) a security advisory or supply chain incident touches",
 )
 
 PathOption = Annotated[
     list[Path] | None,
     typer.Option(
         "--path",
-        help="Directory (or lockfile) to scan, repeatable; every uv.lock, bun.lock, gradle.lockfile and gradle/*.versions.toml below it. Default: the current directory.",
+        help="Directory (or lockfile) to scan, repeatable; every uv.lock, bun.lock, gradle.lockfile, gradle/*.versions.toml, Cargo.lock and packages.lock.json below it. Default: the current directory.",
     ),
 ]
 EXIT_FOUND, EXIT_SETUP, EXIT_INCOMPLETE = 1, 2, 3
@@ -47,7 +47,10 @@ def _read_all(paths: list[Path] | None) -> list[LockfileContent]:
     try:
         lockfiles = find_lockfiles(roots)
         if not lockfiles:
-            typer.echo("bdt deps: no uv.lock, bun.lock, gradle.lockfile or Gradle version catalog found", err=True)
+            typer.echo(
+                "bdt deps: no uv.lock, bun.lock, gradle.lockfile, Gradle version catalog, Cargo.lock or packages.lock.json found",
+                err=True,
+            )
             raise typer.Exit(EXIT_SETUP)
         return [read_lockfile(p) for p in lockfiles]
     except LockfileError as exc:

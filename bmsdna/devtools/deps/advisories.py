@@ -18,6 +18,7 @@ known here; re-run after the bump to confirm the locked version moved.
 
 from __future__ import annotations
 
+import shlex
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -287,7 +288,7 @@ def _commands(finding: Finding) -> list[str]:
     if finding.status not in ("exempt-eligible", "bump") or not target:
         return []
     project = pkg.lockfile.parent.parent if pkg.lockfile.parent.name == "gradle" else pkg.lockfile.parent
-    where = f"cd {project}"
+    where = f"cd {shlex.quote(str(project))}"
     if pkg.ecosystem == "Maven":
         step = f"{where} && set {pkg.name} to {target} in the Gradle version catalog (gradle/libs.versions.toml)" + (
             ", then `./gradlew dependencies --write-locks`" if pkg.lockfile.name == "gradle.lockfile" else ""
