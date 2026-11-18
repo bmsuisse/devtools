@@ -304,10 +304,12 @@ def _commands(finding: Finding) -> list[str]:
         if finding.status == "bump":
             return [step]
         # Cargo >= 1.100 enforces `registry.global-min-publish-age`; the exception is per invocation and, once the
-        # version is in Cargo.lock, the lockfile keeps it (versions already locked bypass the age check)
+        # version is in Cargo.lock, the lockfile keeps it (versions already locked bypass the age check). The override
+        # covers the whole resolve, not just this crate, hence the check of what else the lockfile picked up.
         return [
             f"{where} && CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow cargo update {pkg.name}@{pkg.version} --precise {target}",
-            f"{where} && cargo update --workspace --locked   # and {pkg.name} is at {target}, with no global-min-publish-age override committed",
+            f"{where} && bdt deps cooldown --ecosystem crates.io --base HEAD --exempt {pkg.name}"
+            "   # the override applies to the whole resolve: no other version the lockfile picked up may be inside the cooldown",
         ]
     if pkg.ecosystem == "NuGet":
         step = (
