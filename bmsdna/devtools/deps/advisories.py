@@ -303,9 +303,11 @@ def _commands(finding: Finding) -> list[str]:
         step = f"{where} && cargo update {pkg.name}@{pkg.version} --precise {target}"
         if finding.status == "bump":
             return [step]
+        # Cargo >= 1.100 enforces `registry.global-min-publish-age`; the exception is per invocation and, once the
+        # version is in Cargo.lock, the lockfile keeps it (versions already locked bypass the age check)
         return [
-            step,
-            f"{where} && bdt deps cooldown --exempt {pkg.name}   # Cargo has no cooldown setting: pass the exception here",
+            f"{where} && CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow cargo update {pkg.name}@{pkg.version} --precise {target}",
+            f"{where} && cargo update --workspace --locked   # and {pkg.name} is at {target}, with no global-min-publish-age override committed",
         ]
     if pkg.ecosystem == "NuGet":
         step = (

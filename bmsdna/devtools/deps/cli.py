@@ -208,8 +208,8 @@ def cooldown(
         typer.Option("--ecosystem", help="PyPI, npm, Maven (Gradle), crates.io (Cargo) or NuGet. Default: all."),
     ] = None,
 ) -> None:
-    """Locked versions younger than the dependency cooldown. uv and bun enforce it while resolving; Gradle, Cargo and NuGet
-    can't, so this is their check (`--ecosystem Maven --base origin/dev`). Exit 0 none inside the cooldown (or all exempt), 1 a version inside
+    """Locked versions younger than the dependency cooldown. uv and bun enforce it while resolving; Cargo >= 1.100 does too
+    (`registry.global-min-publish-age`); Gradle and NuGet can't, so this is their check (`--ecosystem Maven --base origin/dev`). Exit 0 none inside the cooldown (or all exempt), 1 a version inside
     it, 2 setup error, 3 a release time could not be read. Versions without a public release time are listed, not failed."""
     if ecosystem and ecosystem not in ECOSYSTEMS:
         typer.echo(f"bdt deps: --ecosystem must be one of {', '.join(ECOSYSTEMS)}", err=True)

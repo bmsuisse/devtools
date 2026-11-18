@@ -1309,7 +1309,7 @@ bdt deps affected lodash --version-spec "<4.17.21" --path ~/projects/CCMT2 --pat
 bdt deps advisories --path .          # OSV lookup of every locked version, one status per affected package
 bdt deps advisories --json            # machine-readable
 bdt deps cooldown --ecosystem Maven --base origin/dev   # CI: no Gradle version added or changed within the cooldown
-bdt deps cooldown --ecosystem crates.io --base origin/main   # same for Cargo.lock; --ecosystem NuGet for packages.lock.json
+bdt deps cooldown --ecosystem NuGet --base origin/main   # same for packages.lock.json; Cargo >= 1.100 enforces it itself
 ```
 
 `affected PACKAGE` lists the locked versions of one package (PyPI names are normalised, npm names exact; `--ecosystem`
@@ -1318,8 +1318,10 @@ none matches, 1 a locked version matches, 2 setup error (no lockfile, unreadable
 git/path/alias source of that name could not be matched).
 
 `cooldown` answers "is a locked version younger than the dependency cooldown?" (`--cooldown-days`, default 5). uv
-(`exclude-newer`) and bun (`minimumReleaseAge`) enforce the cooldown while resolving; Gradle, Cargo and NuGet have no
-such setting, so this is their check. The release time is the upload time of the POM (`Last-Modified`) on Maven Central,
+(`exclude-newer`), bun (`minimumReleaseAge`) and Cargo >= 1.100 (`[registry] global-min-publish-age = "5 days"` in
+`.cargo/config.toml`) enforce the cooldown while resolving; Gradle has no such setting and NuGet's (`minPublishAgeHours`
+per source in `nuget.config`) does not gate a pinned restore, so this is their check. It also works for a Cargo project
+on an older toolchain. The release time is the upload time of the POM (`Last-Modified`) on Maven Central,
 Google Maven or the Gradle plugin portal, `created_at` on crates.io, and `published` on nuget.org (an unlisted package,
 which nuget.org dates 1900, counts as unknown). `--base REV` looks only at versions the file does not have at `REV`
 (use the target branch in CI, so an old pin never fails a later pull request); without it every locked version is looked

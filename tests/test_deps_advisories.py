@@ -238,6 +238,20 @@ def test_lower_severity_advisories_stay_open_at_the_urgent_target_and_the_findin
     assert "GHSA-2 (fixed in 3.0.0)" in finding.reason
 
 
+def test_crates_io_fresh_fix_uses_cargos_own_per_invocation_override() -> None:
+    record = vuln("GHSA-c", name="serde", ecosystem="crates.io", events=FIX_2)
+    content = lock("serde", "1.0.0", ecosystem="crates.io", direct=True)
+
+    result = run(content, [record], released={("serde", "2.0.0"): NOW - timedelta(days=1)})
+
+    (finding,) = result.findings
+    assert finding.status == "exempt-eligible"
+    assert finding.commands[0].endswith(
+        "CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow cargo update serde@1.0.0 --precise 2.0.0"
+    )
+    assert "bdt deps cooldown --exempt" not in " ".join(finding.commands)
+
+
 def test_crates_io_advisory_gives_the_fixed_version_and_a_cargo_command() -> None:
     record = vuln("GHSA-c", name="serde", ecosystem="crates.io", events=FIX_2)
     content = lock("serde", "1.0.0", ecosystem="crates.io", direct=True)
