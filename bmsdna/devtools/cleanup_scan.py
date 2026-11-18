@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import shlex
 import shutil
 import subprocess
 import time
@@ -72,7 +73,7 @@ def _first_existing(*paths: Path) -> Path:
 
 
 def _rm(path: Path) -> str:
-    return f"rm -rf '{path}'"
+    return f"rm -rf {shlex.quote(str(path))}"
 
 
 def _podman_content() -> str:
@@ -152,7 +153,7 @@ def cache_specs(home: Path) -> list[CacheRow]:
             "huggingface",
             "HuggingFace model cache",
             huggingface,
-            f"rm -rf '{huggingface}/<model>'   # list models first, they can be many GB",
+            f"rm -rf {shlex.quote(str(huggingface))}/<model>   # list models first, they can be many GB",
             "medium: models must be re-downloaded",
         ),
         CacheRow(
@@ -226,8 +227,20 @@ def _is_env_dir(name: str, parent_files: list[str]) -> bool:
     return name in _ENV_DIR_NAMES
 
 
+def _last_touched(env_dir: Path) -> float:
+    """Newest mtime of the dir and its top-level entries: a dir's own mtime only moves when entries are added or
+    removed, so a `uv sync`/`cargo build`/`npm install` into an existing env would otherwise look untouched."""
+    newest = env_dir.stat().st_mtime
+    with contextlib.suppress(OSError):
+        for entry in env_dir.iterdir():
+            with contextlib.suppress(OSError):
+                newest = max(newest, entry.stat().st_mtime)
+    return newest
+
+
 def find_stale_envs(root: Path, days: float, min_mb: float) -> list[StaleEnv]:
-    """node_modules, .venv, Rust `target`, .NET `bin`/`obj` (and .next/.turbo) untouched for `days` days.
+    """node_modules, .venv, Rust `target`, .NET `bin`/`obj` (and .next/.turbo) untouched for `days` days (age: see
+    `_last_touched`).
     They all regenerate (`bun install`, `uv sync`, `cargo build`, `dotnet build`)."""
     cutoff = time.time() - days * 86400
     candidates: list[Path] = []
@@ -235,7 +248,7 @@ def find_stale_envs(root: Path, days: float, min_mb: float) -> list[StaleEnv]:
         keep = []
         for d in dirs:
             if _is_env_dir(d, files):
-                if Path(dp, d).stat().st_mtime < cutoff:
+                if _last_touched(Path(dp, d)) < cutoff:
                     candidates.append(Path(dp, d))
             elif d != ".git":
                 keep.append(d)
@@ -262,8 +275,15 @@ class WorktreeRow:
     verdict: str = ""
 
 
-def _git_out(path: Path, *args: str) -> str:
-    return _run_out(["git", "-C", str(path), *args], timeout=120)
+def _git_out(path: Path, *args: str) -> str | None:
+    """Stdout of a git command, or None when it failed: a failed probe must not read as "clean / nothing unpushed"."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), *args], capture_output=True, text=True, timeout=120, check=False
+        )
+    except OSError, subprocess.TimeoutExpired:
+        return None
+    return result.stdout if result.returncode == 0 else None
 
 
 def active_cwds() -> list[str]:
@@ -285,13 +305,15 @@ def _inspect(wt: WorktreeRow, cwds: list[str], idle_hours: float) -> WorktreeRow
         wt.verdict = "prunable (dir missing): git worktree prune"
         return wt
     wt.size_mb = round(size_mb(wt.path))
-    wt.dirty = worktree_mod._is_dirty(wt.path)
+    status = _git_out(wt.path, "status", "--porcelain")
+    wt.dirty = bool((status or "").strip())
     # commits reachable from HEAD but from no remote branch: lost if the worktree+branch were deleted
-    wt.unpushed = len(_git_out(wt.path, "log", "--oneline", "HEAD", "--not", "--remotes").splitlines())
+    unpushed = _git_out(wt.path, "log", "--oneline", "HEAD", "--not", "--remotes")
+    wt.unpushed = len((unpushed or "").splitlines())
     p = str(wt.path)
     wt.active = any(c == p or c.startswith(p + os.sep) for c in cwds)
-    last_commit = int(_git_out(wt.path, "log", "-1", "--format=%ct") or 0)
-    touched = [wt.path.stat().st_mtime, last_commit]
+    last_commit = _git_out(wt.path, "log", "-1", "--format=%ct")
+    touched = [wt.path.stat().st_mtime, int((last_commit or "").strip() or 0)]
     top_level = [f for f in wt.path.iterdir() if f.name != "node_modules"][:200]
     for f in top_level:
         with contextlib.suppress(OSError):
@@ -300,6 +322,7 @@ def _inspect(wt: WorktreeRow, cwds: list[str], idle_hours: float) -> WorktreeRow
     why = [
         w
         for w, bad in [
+            ("git check failed", None in (status, unpushed, last_commit)),
             ("dirty", wt.dirty),
             (f"{wt.unpushed} unpushed", wt.unpushed),
             ("locked", wt.locked),

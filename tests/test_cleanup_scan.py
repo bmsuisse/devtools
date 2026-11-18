@@ -1,6 +1,9 @@
 import json
+import os
+import shlex
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -54,7 +57,7 @@ def test_scan_caches_sccache_clean_command_names_the_real_path(home) -> None:
     (row,) = cleanup_scan.scan_caches(home, min_mb=1)
 
     assert row.id == "sccache"
-    assert row.clean == f"sccache --stop-server; rm -rf '{home / '.cache/sccache'}'"
+    assert row.clean == f"sccache --stop-server; rm -rf {shlex.quote(str(home / '.cache/sccache'))}"
 
 
 def test_scan_caches_lists_each_app_cache_as_its_own_row(home) -> None:
@@ -184,3 +187,33 @@ def test_cli_inspect_prints_one_line_per_worktree(repo_with_worktrees) -> None:
     assert result.exit_code == 0, result.output
     assert "1 worktrees under" in result.output
     assert "repo:feature" in result.output
+
+
+def test_stale_envs_counts_a_touched_top_level_entry_as_recent_use(tmp_path) -> None:
+    _fill(tmp_path / "web/node_modules/pkg")
+    old = time.time() - 90 * 86400
+    env = tmp_path / "web/node_modules"
+    os.utime(env, (old, old))  # the dir itself looks old ...
+    assert cleanup_scan.find_stale_envs(tmp_path, days=30, min_mb=1) == []  # ... but pkg/ was just written
+    os.utime(env / "pkg", (old, old))
+    assert [e.path for e in cleanup_scan.find_stale_envs(tmp_path, days=30, min_mb=1)] == [env]
+
+
+def test_cache_clean_commands_quote_paths_with_shell_metacharacters(home) -> None:
+    evil = home / "Library/Caches/x'; touch pwned; #"
+    _fill(evil, 2)
+
+    (row,) = cleanup_scan.scan_caches(home, min_mb=1)
+
+    assert row.clean == f"rm -rf {shlex.quote(str(evil))}"
+    assert shlex.split(row.clean) == ["rm", "-rf", str(evil)]
+
+
+def test_inspect_worktrees_needs_review_when_a_git_probe_fails(repo_with_worktrees, monkeypatch) -> None:
+    _add_worktree(repo_with_worktrees, "feature")
+    real = cleanup_scan._git_out
+    monkeypatch.setattr(cleanup_scan, "_git_out", lambda path, *args: None if args[0] == "log" else real(path, *args))
+
+    (row,) = cleanup_scan.inspect_worktrees(repo_with_worktrees, idle_hours=0)
+
+    assert row.verdict.startswith("review: git check failed")
