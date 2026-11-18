@@ -783,6 +783,22 @@ requires typing `yes` at an interactive prompt whenever `--pg-host` isn't
 database on a shared/remote Postgres instance without a human confirming it
 directly.
 
+### Read-only disk-usage reports
+
+```bash
+bdt cleanup caches [--min-mb 50] [--json]
+bdt cleanup stale-envs [root] [--days 30] [--min-mb 100] [--json]
+bdt cleanup inspect [root] [--idle-hours 24] [--json]
+```
+
+These three delete nothing; they feed the `dev-cleanup` skill's overview. `caches` lists the size of the
+podman/docker, uv/npm/bun/pnpm/pip, cargo/sccache/rustup, NuGet, gradle, HuggingFace, Playwright, Homebrew and
+Xcode caches (plus each `~/Library/Caches` app) with the command that cleans it and its risk. `stale-envs` finds
+`node_modules`, `.venv`, `.next`/`.turbo`, Rust `target/` (next to a `Cargo.toml`) and .NET `bin/`/`obj/` (next
+to a `.csproj`/`.fsproj`/`.vbproj`) untouched for `--days`. `inspect` reports every linked worktree under `root`
+(default `.`) with size, dirty, unpushed, locked, active-process and idle status and a `safe` / `review: ...`
+verdict; unlike `cleanup worktrees` it ignores merge status, so it is how you judge unmerged worktrees.
+
 The DB-naming algorithm and orphan detection are entirely
 [pgdevkit](https://github.com/bmsuisse/pgdevkit)'s own
 (`pgdevkit.testdb.workspace_db_names()` /

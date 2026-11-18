@@ -5,6 +5,7 @@ import io
 import json
 import math
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -12,7 +13,7 @@ import tomllib
 import uuid
 import webbrowser
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
@@ -39,6 +40,7 @@ from bmsdna.devtools import (
 )
 from bmsdna.devtools import api_usage as api_usage_mod
 from bmsdna.devtools import business_user as business_user_mod
+from bmsdna.devtools import cleanup_scan as cleanup_scan_mod
 from bmsdna.devtools import commit as commit_mod
 from bmsdna.devtools import dead_code as dead_code_mod
 from bmsdna.devtools import env_files as env_files_mod
@@ -176,7 +178,7 @@ app.add_typer(ci_app, name="ci")
 
 cleanup_app = typer.Typer(
     name="cleanup",
-    help="Prune merged git worktrees and their orphaned pgdevkit Postgres test databases",
+    help="Prune merged git worktrees and their orphaned pgdevkit Postgres test databases; read-only disk-usage reports",
 )
 app.add_typer(cleanup_app, name="cleanup")
 
@@ -2486,6 +2488,87 @@ def cleanup_worktree(
         pg_port=pg_port,
         pg_user=pg_user or pgdevkit_constants.USER,
     )
+
+
+_AS_JSON_OPTION = typer.Option(False, "--json", help="Structured JSON output for AI-agent callers")
+
+
+def _echo_json(payload: object) -> None:
+    typer.echo(json.dumps(payload, indent=2, default=str))
+
+
+@cleanup_app.command("caches")
+def cleanup_caches(
+    min_mb: float = typer.Option(50, "--min-mb", help="Hide rows smaller than this"),
+    as_json: bool = _AS_JSON_OPTION,
+) -> None:
+    """Read-only: sizes of package-manager, container and app caches, each with its clean command and risk.
+
+    Covers podman/docker, uv/npm/bun/pnpm/pip, cargo/sccache/rustup, NuGet, gradle, HuggingFace, Playwright,
+    Homebrew, Xcode and ~/Library/Caches. Deletes nothing: run the clean command of the rows the user picked.
+    """
+    home = Path.home()
+    free_gb = round(shutil.disk_usage(home).free / 2**30, 1)
+    rows = cleanup_scan_mod.scan_caches(home, min_mb)
+    if as_json:
+        _echo_json({"free_gb": free_gb, "rows": [asdict(r) for r in rows]})
+        return
+    typer.echo(f"Free disk: {free_gb:.1f} GB   (rows >= {min_mb:.0f} MB, nothing deleted)\n")
+    typer.echo(f"{'GB':>6}  {'id':<22} what / risk\n")
+    for r in rows:
+        typer.echo(f"{r.size_mb / 1024:6.1f}  {r.id:<22} {r.label}  [{r.risk}]")
+        typer.echo(f"{'':6}  {'':<22} clean: {r.clean}")
+    typer.echo(f"\n{sum(r.size_mb for r in rows) / 1024:6.1f}  total reclaimable candidates")
+    typer.echo(
+        "\nNot covered here: git worktrees -> `bdt cleanup inspect`; stale node_modules/target/obj -> `bdt cleanup stale-envs`"
+    )
+
+
+@cleanup_app.command("stale-envs")
+def cleanup_stale_envs(
+    root: Path = typer.Argument(Path(), help="Root folder to scan (recursively)"),
+    days: float = typer.Option(30, "--days", help="Only dirs untouched for at least this many days"),
+    min_mb: float = typer.Option(100, "--min-mb", help="Hide dirs smaller than this"),
+    as_json: bool = _AS_JSON_OPTION,
+) -> None:
+    """Read-only: big node_modules / .venv / Rust target / .NET bin+obj dirs untouched for a while.
+
+    They regenerate (`bun install`, `uv sync`, `cargo build`, `dotnet build`). `target` only counts next to a
+    Cargo.toml, `bin`/`obj` only next to a .csproj/.fsproj/.vbproj. Deletes nothing.
+    """
+    envs = cleanup_scan_mod.find_stale_envs(root.resolve(), days, min_mb)
+    if as_json:
+        _echo_json([asdict(e) for e in envs])
+        return
+    for e in envs:
+        typer.echo(f"{e.size_mb / 1024:6.2f} GB  {e.path}")
+    typer.echo(f"\n{sum(e.size_mb for e in envs) / 1024:.1f} GB in {len(envs)} dirs untouched >{days:.0f}d")
+
+
+@cleanup_app.command("inspect")
+def cleanup_inspect(
+    root: Path = typer.Argument(Path(), help="Root folder to scan for git repositories (recursively)"),
+    idle_hours: float = typer.Option(
+        24, "--idle-hours", help="A worktree touched more recently than this needs review"
+    ),
+    as_json: bool = _AS_JSON_OPTION,
+) -> None:
+    """Read-only: every linked worktree under root with size, dirty, unpushed, locked, active and idle status.
+
+    Verdict `safe` = clean, nothing unpushed, not locked, no process inside, idle for --idle-hours. Unlike
+    `bdt cleanup worktrees` this does not look at merge status; use it to judge unmerged worktrees. Deletes nothing.
+    """
+    rows = cleanup_scan_mod.inspect_worktrees(root.resolve(), idle_hours)
+    if as_json:
+        _echo_json([asdict(r) for r in rows])
+        return
+    safe = [r for r in rows if r.verdict == "safe"]
+    typer.echo(
+        f"{len(rows)} worktrees under {root.resolve()}: {len(safe)} safe ({sum(r.size_mb for r in safe) / 1024:.1f} GB), "
+        f"{len(rows) - len(safe)} need review\n"
+    )
+    for r in rows:
+        typer.echo(f"{r.size_mb / 1024:6.2f} GB  {r.repo.name}:{r.branch:<35} {r.verdict}\n          {r.path}")
 
 
 def _draft_feat_pr(target: str | None, pat: str | None) -> None:
