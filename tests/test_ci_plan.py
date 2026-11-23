@@ -345,6 +345,23 @@ def test_fix_branch_into_main_is_tested_like_any_pr(config) -> None:
     assert (result.kind, result.areas) == ("areas", {"orders"})
 
 
+def test_cherry_branch_into_main_is_tested_like_any_pr(config) -> None:
+    result = plan_for(config, pr("cherry/30367-to-main", "main"), labels=["test-orders"])
+    assert (result.kind, result.areas) == ("areas", {"orders"})
+
+
+def test_cherry_branch_with_dev_commits_is_an_error(config) -> None:
+    def violated() -> None:
+        raise BranchFlowError("contains unreleased dev commits")
+
+    result = plan_for(config, pr("cherry/x-to-main", "main"), labels=["test-full"], fix_base=violated)
+    assert result.kind == "error" and "unreleased dev commits" in result.reason
+
+
+def test_cherry_branch_is_only_allowed_into_main(config) -> None:
+    assert plan_for(config, pr("cherry/x", "test"), labels=["test-full"]).kind == "error"
+
+
 def test_fix_branch_with_dev_commits_is_an_error(config) -> None:
     def violated() -> None:
         raise BranchFlowError("contains unreleased dev commits")

@@ -26,7 +26,7 @@ Labels: `test-<area>`, `test-full` (everything), `test-none` (no tests; lint and
 
 1. Not a PR: the CI run after a push (merge) to `test`/`main` runs nothing (promoted code was tested on its way
    into `dev`); anything else (nightly, manual runs, other branches) and forks run everything.
-2. Branch flow: promotions (dev -> test -> main -> dev) run nothing; `fix/*` and `hotfix/*` into `main` are tested
+2. Branch flow: promotions (dev -> test -> main -> dev) run nothing; `fix/*`, `hotfix/*` and `cherry/*` (a subset of `test` ported to `main`) into `main` are tested
    and must be cut from `main`; any other PR into `test`/`main` is an error.
 3. PR labels decide. Without a usable label the changed files decide (`on_missing = "infer"`): nothing changed or
    only `non_code` files -> none, only files an area owns (its tests, or `paths`) -> those areas, any other file ->
@@ -58,6 +58,7 @@ UNMATCHED_AREA = "shared"
 LONG_LIVED = frozenset({"dev", "test", "main"})
 PROMOTIONS = frozenset({("dev", "test"), ("test", "main"), ("main", "dev")})
 FIX_PREFIXES = ("fix/", "hotfix/")
+PORT_PREFIXES = ("cherry/",)  # a subset of test cherry-picked onto a branch cut from main
 PUSH_REASONS = frozenset({"IndividualCI", "BatchedCI"})  # a merge landed on the branch: deploy only
 INFRA_AREA = "infra"  # owns `infra/**` by default when the repo has an infra/ folder; usually has no tests
 RESERVED_AREAS = frozenset({"full", "none"})  # test-full / test-none are the control labels
@@ -305,9 +306,11 @@ def classify_pr(source: str, target: str) -> tuple[Literal["promotion", "tested"
     if target == "main":
         if source.startswith(FIX_PREFIXES):
             return "tested", f"fix branch {source} -> main"
+        if source.startswith(PORT_PREFIXES):
+            return "tested", f"port branch {source} -> main"
         return (
             "rejected",
-            f"only fix/*, hotfix/* branches and the test -> main promotion may target main, not {source}",
+            f"only fix/*, hotfix/*, cherry/* branches and the test -> main promotion may target main, not {source}",
         )
     return "tested", f"{source} -> {target}"
 
