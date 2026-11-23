@@ -1001,7 +1001,10 @@ Order of decision, always logged with its reason:
    `dev`); the nightly, manual runs (also on `test`/`main`), other branches and forks run everything. A manual run of
    `refs/pull/<id>/merge` is planned like that PR (a fork PR still runs everything).
 2. Branch flow: promotions (`dev` -> `test`, `test` -> `main`, `main` -> `dev`) run nothing. `fix/*` / `hotfix/*` into
-   `main` are tested and must be cut from `main` (no unreleased `dev` commits). That check needs full history
+   `main` are tested and must be cut from `main` (no unreleased `dev` commits). `cherry/*` ports a subset of
+   `test` to `main`: cut `cherry/<topic>-to-main` from `main` and `git cherry-pick` the wanted commits (never merge
+   `test` or `dev` into it), same base check. `main` gets a combination `test` never ran, so a port always runs the
+   full suite and its labels are ignored (`bdt pr create` still wants one: pass `test-full`). That check needs full history
    (`fetchDepth: 0` on the checkout); in a shallow checkout or when the refs cannot be fetched it is skipped with a
    warning instead of guessing. Any other PR into `test` / `main` fails the build. Area folders must not be called
    `full` or `none` (they would collide with the labels).

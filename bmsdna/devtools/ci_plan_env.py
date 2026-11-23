@@ -151,7 +151,7 @@ def changed_files(target: str, *, merge_checkout: bool, root: Path | None = None
 
 
 def verify_fix_base(env: Mapping[str, str]) -> None:
-    """A fix for `main` must not contain unreleased `dev` commits (cut it from `main`, never from `dev`; being behind
+    """A fix or cherry-pick port for `main` must not contain unreleased `dev` commits (cut it from `main`, never from `dev`; being behind
     `main` is fine, the PR merge handles that).
 
     Needs the PR merge commit as HEAD and fetches `origin/dev` and `origin/main`; raises RuntimeError when that is not
@@ -161,7 +161,9 @@ def verify_fix_base(env: Mapping[str, str]) -> None:
     if len(parents) != 3:
         raise RuntimeError("HEAD is not a PR merge commit")
     if _git("rev-parse", "--is-shallow-repository").stdout.strip() == "true":
-        raise RuntimeError("shallow checkout: set `fetchDepth: 0` on the checkout step to verify fix branches")
+        raise RuntimeError(
+            "shallow checkout: set `fetchDepth: 0` on the checkout step to verify fix and cherry branches"
+        )
     token = env.get("SYSTEM_ACCESSTOKEN")
     auth = (
         {
@@ -184,7 +186,9 @@ def verify_fix_base(env: Mapping[str, str]) -> None:
     dev_only = set(_git("rev-list", "refs/remotes/origin/dev", "--not", main).stdout.split())
     fix_only = set(_git("rev-list", fix, "--not", main).stdout.split())
     if dev_only & fix_only:
-        raise BranchFlowError("the fix branch contains unreleased dev commits; cut the fix from main")
+        raise BranchFlowError(
+            "the branch contains unreleased dev commits; cut it from main (and cherry-pick onto it, never merge dev or test)"
+        )
 
 
 def _vso(text: str) -> str:

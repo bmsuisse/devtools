@@ -345,6 +345,29 @@ def test_fix_branch_into_main_is_tested_like_any_pr(config) -> None:
     assert (result.kind, result.areas) == ("areas", {"orders"})
 
 
+@pytest.mark.parametrize("labels", [[], ["test-orders"], ["test-none"], ["test-full"]])
+def test_cherry_branch_into_main_always_runs_the_full_suite(config, labels) -> None:
+    result = plan_for(config, pr("cherry/30367-to-main", "main"), labels=labels, files=["docs/x.md"])
+    assert result.kind == "full" and result.areas == config.all_areas() and "full suite" in result.reason
+
+
+def test_cherry_branch_does_not_need_the_label_api(config) -> None:
+    result = plan_for(config, pr("cherry/x-to-main", "main"), labels=OSError("must not be read"))
+    assert result.kind == "full" and not result.warnings
+
+
+def test_cherry_branch_with_dev_commits_is_an_error(config) -> None:
+    def violated() -> None:
+        raise BranchFlowError("contains unreleased dev commits")
+
+    result = plan_for(config, pr("cherry/x-to-main", "main"), labels=["test-full"], fix_base=violated)
+    assert result.kind == "error" and "unreleased dev commits" in result.reason
+
+
+def test_cherry_branch_is_only_allowed_into_main(config) -> None:
+    assert plan_for(config, pr("cherry/x", "test"), labels=["test-full"]).kind == "error"
+
+
 def test_fix_branch_with_dev_commits_is_an_error(config) -> None:
     def violated() -> None:
         raise BranchFlowError("contains unreleased dev commits")
