@@ -26,8 +26,8 @@ Labels: `test-<area>`, `test-full` (everything), `test-none` (no tests; lint and
 
 1. Not a PR: the CI run after a push (merge) to `test`/`main` runs nothing (promoted code was tested on its way
    into `dev`); anything else (nightly, manual runs, other branches) and forks run everything.
-2. Branch flow: promotions (dev -> test -> main -> dev) run nothing; `fix/*`, `hotfix/*` and `cherry/*` (a subset of `test` ported to `main`) into `main` are tested
-   and must be cut from `main`; any other PR into `test`/`main` is an error.
+2. Branch flow: promotions (dev -> test -> main -> dev) run nothing; `fix/*` and `hotfix/*` into `main` are tested and `cherry/*` (a subset of `test` ported to `main`) runs
+   the full suite whatever its label; both must be cut from `main`; any other PR into `test`/`main` is an error.
 3. PR labels decide. Without a usable label the changed files decide (`on_missing = "infer"`): nothing changed or
    only `non_code` files -> none, only files an area owns (its tests, or `paths`) -> those areas, any other file ->
    everything. An area without tests (such as `infra`) selects nothing to run: `runTests` stays true, every tier is off.
@@ -289,7 +289,7 @@ class Plan:
     warnings: tuple[str, ...] = ()
 
 
-def classify_pr(source: str, target: str) -> tuple[Literal["promotion", "tested", "rejected"], str]:
+def classify_pr(source: str, target: str) -> tuple[Literal["promotion", "tested", "ported", "rejected"], str]:
     """How a PR from `source` into `target` (branch names, no `refs/heads/`) is treated."""
     if source in LONG_LIVED and target in LONG_LIVED:
         if (source, target) in PROMOTIONS:
@@ -307,7 +307,7 @@ def classify_pr(source: str, target: str) -> tuple[Literal["promotion", "tested"
         if source.startswith(FIX_PREFIXES):
             return "tested", f"fix branch {source} -> main"
         if source.startswith(PORT_PREFIXES):
-            return "tested", f"port branch {source} -> main"
+            return "ported", f"port branch {source} -> main"
         return (
             "rejected",
             f"only fix/*, hotfix/*, cherry/* branches and the test -> main promotion may target main, not {source}",
@@ -415,6 +415,10 @@ def make_plan(
             return Plan("error", f"branch flow violated: {error}")
         except (OSError, ValueError, RuntimeError) as error:
             warnings.append(f"fix-branch base not verified: {error}")
+    if kind == "ported":
+        return _full(
+            config, f"{why}: a port is a combination test never ran, so the full suite runs (labels ignored)", warnings
+        )
     try:
         found = _from_labels(labels(), config, warnings)
     except (OSError, ValueError, RuntimeError) as error:
