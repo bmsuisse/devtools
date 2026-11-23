@@ -8,6 +8,7 @@ from bmsdna.devtools.gitrepo import AdoRemote
 from bmsdna.devtools.pr_build import (
     _poll_or_exit,
     approval_stage_name,
+    build_is_current,
     build_web_url,
     draft_notice,
     find_pending_approvals,
@@ -446,3 +447,97 @@ def test_link_work_item_raises_on_http_error() -> None:
 
     with pytest.raises(requests.HTTPError):
         link_work_item(session, remote, pr_id=456, work_item_id=99)
+
+
+HEAD = "a" * 40
+MERGE = "b" * 40
+OLD_HEAD = "c" * 40
+CURRENT_PR = {
+    "pullRequestId": 42,
+    "title": "feat: widgets",
+    "status": "active",
+    "isDraft": False,
+    "lastMergeSourceCommit": {"commitId": HEAD},
+    "lastMergeCommit": {"commitId": MERGE},
+}
+
+
+def _done(build_id: int, source_version: str | None, definition: int = 1) -> dict:
+    return {
+        "id": build_id,
+        "status": "completed",
+        "result": "succeeded",
+        "sourceVersion": source_version,
+        "definition": {"id": definition, "name": f"pipeline-{definition}"},
+    }
+
+
+@pytest.mark.parametrize(
+    ("build", "pr", "head", "expected"),
+    [
+        (_done(1, MERGE), CURRENT_PR, HEAD, True),  # PR validation build of the current merge commit
+        (_done(1, HEAD), CURRENT_PR, HEAD, True),  # branch build of the current head
+        (_done(1, OLD_HEAD), CURRENT_PR, OLD_HEAD, True),  # branch build of the head, merge metadata not caught up yet
+        (_done(1, "d" * 40), CURRENT_PR, HEAD, False),  # build of an older merge commit
+        (_done(1, MERGE), CURRENT_PR, OLD_HEAD, False),  # the branch moved on, the PR merge is not recomputed yet
+        (_done(1, HEAD), CURRENT_PR, OLD_HEAD, False),  # a branch build of the previous head
+        (_done(1, MERGE), CURRENT_PR, None, False),  # head unknown: keep waiting like before
+        (_done(1, MERGE), {**CURRENT_PR, "lastMergeSourceCommit": None}, HEAD, False),
+    ],
+)
+def test_build_is_current(build, pr, head, expected) -> None:
+    assert build_is_current(build, pr, head) is expected
+
+
+def _wait_env(monkeypatch, builds: list[dict], head: str | None) -> None:
+    monkeypatch.setattr("bmsdna.devtools.pr_build.current_branch", lambda: "feature-x")
+    monkeypatch.setattr("bmsdna.devtools.ado_auth.auth_header", lambda pat: {})
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_pr", lambda *a, **k: CURRENT_PR)
+    monkeypatch.setattr("bmsdna.devtools.pr_build.get_builds_for_pr", lambda *a, **k: builds)
+    monkeypatch.setattr("bmsdna.devtools.pr_build.target_tip", lambda *a, **k: head)
+    monkeypatch.setattr("bmsdna.devtools.pr_build.target_drift_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("bmsdna.devtools.pr_build.find_pending_approvals", lambda *a, **k: [])
+    monkeypatch.setattr("bmsdna.devtools.pr_build.print_build", lambda *a, **k: None)
+
+
+def test_run_wait_reports_builds_that_finished_before_it_started(monkeypatch, capsys) -> None:
+    """Regression: `--wait` started after the builds of the PR's current head had completed used to treat them as
+    leftovers of an earlier push and wait for new builds that never come."""
+    _wait_env(monkeypatch, [_done(11, MERGE, 1), _done(12, MERGE, 2)], HEAD)
+    monkeypatch.setattr("bmsdna.devtools.pr_build.time.sleep", lambda s: pytest.fail("must not wait for a new build"))
+
+    run(AdoRemote("myorg", "MyProj", "myrepo"), pat=None, target_branch="main", wait=True)
+
+    assert "waiting for new build" not in capsys.readouterr().out
+
+
+def test_run_wait_waits_when_the_branch_moved_past_the_finished_build(monkeypatch) -> None:
+    """A push landed after the build of HEAD finished: the source tip is newer, so that build is a leftover."""
+
+    class MovedOnError(Exception):
+        pass
+
+    def sleep(_: float) -> None:
+        raise MovedOnError
+
+    _wait_env(monkeypatch, [_done(11, HEAD)], OLD_HEAD)
+    monkeypatch.setattr("bmsdna.devtools.pr_build.time.sleep", sleep)
+    monkeypatch.setattr("bmsdna.devtools.cli_tools.time.sleep", sleep)
+
+    with pytest.raises(MovedOnError):
+        run(AdoRemote("myorg", "MyProj", "myrepo"), pat=None, target_branch="main", wait=True)
+
+
+def test_run_wait_still_waits_past_builds_of_an_older_push(monkeypatch) -> None:
+    class WaitedError(Exception):
+        pass
+
+    def sleep(_: float) -> None:
+        raise WaitedError
+
+    _wait_env(monkeypatch, [_done(11, "d" * 40)], HEAD)
+    monkeypatch.setattr("bmsdna.devtools.pr_build.time.sleep", sleep)
+    monkeypatch.setattr("bmsdna.devtools.cli_tools.time.sleep", sleep)
+
+    with pytest.raises(WaitedError):
+        run(AdoRemote("myorg", "MyProj", "myrepo"), pat=None, target_branch="main", wait=True)
