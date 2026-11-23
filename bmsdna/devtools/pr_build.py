@@ -1278,13 +1278,19 @@ def cancelled_for_current_push(build: dict, pr: dict) -> bool:
 
 
 def build_is_current(build: dict, pr: dict, source_head: str | None) -> bool:
-    """A build of what the PR is at right now: its merge commit (a PR validation build) or the source branch's head (a
-    branch build), while Azure DevOps has already seen the newest push (`source_head`, what the source branch points at,
-    is the commit the PR's merge was computed from). Such a build is the answer to `--wait`, even when it finished before
-    `--wait` started; one of an older push is a leftover to wait past. Unknown (`source_head` None) means not current."""
-    if not source_head or (pr.get("lastMergeSourceCommit") or {}).get("commitId") != source_head:
+    """A build of what the PR is at right now, so the answer to `--wait` even when it finished before `--wait` started
+    (one of an older push is a leftover to wait past). `source_head` is what the source branch points at now; None
+    (unknown) means not current. A build of exactly that commit (a branch build) is current. A PR validation build is
+    one of the PR's merge commit, and that only counts once Azure DevOps has seen the newest push, i.e. the PR's merge
+    was computed from `source_head`: before that, `lastMergeCommit` still belongs to the previous push."""
+    if not source_head:
         return False
-    return build.get("sourceVersion") in {source_head, (pr.get("lastMergeCommit") or {}).get("commitId")}
+    if build.get("sourceVersion") == source_head:
+        return True
+    merged_from = (pr.get("lastMergeSourceCommit") or {}).get("commitId")
+    return merged_from == source_head and build.get("sourceVersion") == (pr.get("lastMergeCommit") or {}).get(
+        "commitId"
+    )
 
 
 def print_build(session: requests.Session, remote: AdoRemote, build: dict) -> None:
@@ -1400,8 +1406,8 @@ def _status(
 
     # When waiting, a pipeline's "latest" build may already be a *completed* run from before
     # this invocation (CI hasn't registered a new build for the current push yet). Only accept
-    # a fresh build in that case, so --wait doesn't immediately report that stale old result. A completed build of the
-    # PR's current head (`build_is_current`) is not stale: nothing newer is coming, waiting for one would hang forever.
+    # a fresh build in that case, so --wait doesn't immediately report that stale old result. Unless it is a build of the
+    # PR's current head (`build_is_current`, judged on every poll): nothing newer is coming, waiting would hang forever.
     # Only builds already completed at this snapshot go in here -- one that's inProgress here
     # (whether just-started or long-running) is genuinely the current build for the current
     # HEAD, not a stale leftover, and must be watched rather than waited past: recording it too
@@ -1412,12 +1418,8 @@ def _status(
     if wait:
         pr = _poll_or_exit(fetch_pr)
         assert source_branch is not None  # fetch_pr resolved it
-        try:
-            source_head = target_tip(session, remote, source_branch)
-        except requests.RequestException:
-            source_head = None  # unknown: every completed build counts as a leftover, as before
         for b in _poll_or_exit(get_builds_for_pr, session, remote, source_branch, pr["pullRequestId"]):
-            if b.get("status") != "completed" or build_is_current(b, pr, source_head):
+            if b.get("status") != "completed":
                 continue
             def_id = b.get("definition", {}).get("id")
             baseline_completed_ids[def_id] = max(baseline_completed_ids.get(def_id, 0), b["id"])
@@ -1466,11 +1468,16 @@ def _status(
         if builds:
             pipeline_builds = latest_per_pipeline(builds)
             if wait:
+                try:
+                    source_head = target_tip(session, remote, source_branch)
+                except requests.RequestException:
+                    source_head = None  # unknown: a build from before `--wait` stays a leftover, as before
                 stale = [
                     b
                     for b in pipeline_builds
                     if b["id"] <= baseline_completed_ids.get(b.get("definition", {}).get("id"), 0)
                     and not cancelled_for_current_push(b, pr)
+                    and not build_is_current(b, pr, source_head)
                 ]
                 if stale:
                     msg += " | waiting for new build(s) to start: " + ", ".join(

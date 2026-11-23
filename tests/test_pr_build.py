@@ -477,8 +477,10 @@ def _done(build_id: int, source_version: str | None, definition: int = 1) -> dic
     [
         (_done(1, MERGE), CURRENT_PR, HEAD, True),  # PR validation build of the current merge commit
         (_done(1, HEAD), CURRENT_PR, HEAD, True),  # branch build of the current head
+        (_done(1, OLD_HEAD), CURRENT_PR, OLD_HEAD, True),  # branch build of the head, merge metadata not caught up yet
         (_done(1, "d" * 40), CURRENT_PR, HEAD, False),  # build of an older merge commit
         (_done(1, MERGE), CURRENT_PR, OLD_HEAD, False),  # the branch moved on, the PR merge is not recomputed yet
+        (_done(1, HEAD), CURRENT_PR, OLD_HEAD, False),  # a branch build of the previous head
         (_done(1, MERGE), CURRENT_PR, None, False),  # head unknown: keep waiting like before
         (_done(1, MERGE), {**CURRENT_PR, "lastMergeSourceCommit": None}, HEAD, False),
     ],
@@ -507,6 +509,23 @@ def test_run_wait_reports_builds_that_finished_before_it_started(monkeypatch, ca
     run(AdoRemote("myorg", "MyProj", "myrepo"), pat=None, target_branch="main", wait=True)
 
     assert "waiting for new build" not in capsys.readouterr().out
+
+
+def test_run_wait_waits_when_the_branch_moved_past_the_finished_build(monkeypatch) -> None:
+    """A push landed after the build of HEAD finished: the source tip is newer, so that build is a leftover."""
+
+    class MovedOnError(Exception):
+        pass
+
+    def sleep(_: float) -> None:
+        raise MovedOnError
+
+    _wait_env(monkeypatch, [_done(11, HEAD)], OLD_HEAD)
+    monkeypatch.setattr("bmsdna.devtools.pr_build.time.sleep", sleep)
+    monkeypatch.setattr("bmsdna.devtools.cli_tools.time.sleep", sleep)
+
+    with pytest.raises(MovedOnError):
+        run(AdoRemote("myorg", "MyProj", "myrepo"), pat=None, target_branch="main", wait=True)
 
 
 def test_run_wait_still_waits_past_builds_of_an_older_push(monkeypatch) -> None:
