@@ -99,6 +99,12 @@ class ClaudeHomeReport:
     process_check_available: bool = True
 
 
+def _really_inside(path: Path, root: Path) -> bool:
+    """False when a symlink among the folders below `root` leads out of it: `delete_stale_plugins` would otherwise
+    `rmtree` whatever the link points at."""
+    return Path(os.path.realpath(path)) == Path(os.path.realpath(root)) / path.relative_to(root)
+
+
 def plugin_versions(claude: Path, with_size: bool = True) -> list[PluginVersion]:
     """Every cached plugin version that is not installed anywhere, with a verdict (re-read each call)."""
     plugins = claude / "plugins"
@@ -107,9 +113,10 @@ def plugin_versions(claude: Path, with_size: bool = True) -> list[PluginVersion]
     except OSError, ValueError, KeyError:
         return []  # without the index we cannot tell what is installed: report nothing rather than guess
     keep = {Path(e["installPath"]).resolve() for entries in installed.values() for e in entries}
+    cache = plugins / "cache"
     rows = []
-    for ver in (plugins / "cache").glob("*/*/*"):
-        if not ver.is_dir() or ver.resolve() in keep:
+    for ver in cache.glob("*/*/*"):
+        if not ver.is_dir() or ver.resolve() in keep or not _really_inside(ver, cache):
             continue
         in_use = ver / ".in_use"
         live = (

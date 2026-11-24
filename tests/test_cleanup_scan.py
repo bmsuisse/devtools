@@ -227,3 +227,11 @@ def test_inspect_worktrees_never_reads_unknown_processes_as_safe(repo_with_workt
 
     assert not row.active
     assert "cannot tell if a process is inside" in row.verdict
+
+
+def test_active_cwds_is_unknown_when_lsof_lists_nothing(monkeypatch) -> None:
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/lsof")
+    monkeypatch.setattr(cleanup_scan, "_run_out", lambda cmd, timeout=30: "")
+    monkeypatch.setattr(Path, "is_dir", lambda self: False)  # no /proc fallback either
+
+    assert cleanup_scan.active_cwds() is None

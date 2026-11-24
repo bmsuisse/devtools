@@ -793,7 +793,7 @@ bdt cleanup claude-home [root] [--depth 2] [--json]
 bdt cleanup claude-plugins [PATH ...] [--yes]
 ```
 
-These three delete nothing; they feed the `dev-cleanup` skill's overview. `caches` lists the size of the
+`caches`, `stale-envs`, `inspect` (and `claude-home`, below) delete nothing; they feed the `dev-cleanup` skill's overview. `caches` lists the size of the
 podman/docker, uv/npm/bun/pnpm/pip, cargo/sccache/rustup, NuGet, gradle, HuggingFace, Playwright, Homebrew and
 Xcode caches (plus each `~/Library/Caches` app) with the command that cleans it and its risk. `stale-envs` finds
 `node_modules`, `.venv`, `.next`/`.turbo`, Rust `target/` (next to a `Cargo.toml`) and .NET `bin/`/`obj/` (next

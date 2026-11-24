@@ -290,7 +290,10 @@ def active_cwds() -> list[str] | None:
     """Working dirs of all running processes (a per-worktree `lsof +D` is far too slow), or None when this
     platform offers no way to list them (Windows): callers must not read that as "nothing is running"."""
     if shutil.which("lsof"):
-        return [line[1:] for line in _run_out(["lsof", "-w", "-d", "cwd", "-Fn"], 120).splitlines() if line[:2] == "n/"]
+        # at least this process has a cwd: an empty listing means lsof failed or timed out, not "nothing runs"
+        cwds = [line[1:] for line in _run_out(["lsof", "-w", "-d", "cwd", "-Fn"], 120).splitlines() if line[:2] == "n/"]
+        if cwds:
+            return cwds
     proc = Path("/proc")
     if not proc.is_dir():
         return None

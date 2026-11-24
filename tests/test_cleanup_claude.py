@@ -217,3 +217,14 @@ def test_cli_claude_plugins_yes_removes_stale_versions(claude) -> None:
     assert result.exit_code == 0, result.output
     assert "removed 1 stale plugin versions" in result.output
     assert not stale.exists()
+
+
+def test_plugin_versions_ignore_dirs_reached_through_a_symlink_out_of_the_cache(claude, tmp_path) -> None:
+    outside = tmp_path / "outside/1.0"
+    outside.mkdir(parents=True)
+    (outside / "precious.txt").write_text("x")
+    (claude / "plugins/cache/market/linked").symlink_to(outside.parent, target_is_directory=True)
+
+    assert cleanup_claude.plugin_versions(claude) == []
+    assert cleanup_claude.delete_stale_plugins(claude, []) == 0
+    assert (outside / "precious.txt").exists()
