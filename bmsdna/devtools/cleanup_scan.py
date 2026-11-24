@@ -286,13 +286,17 @@ def _git_out(path: Path, *args: str) -> str | None:
     return result.stdout if result.returncode == 0 else None
 
 
-def active_cwds() -> list[str]:
-    """Working dirs of all running processes (a per-worktree `lsof +D` is far too slow)."""
+def active_cwds() -> list[str] | None:
+    """Working dirs of all running processes (a per-worktree `lsof +D` is far too slow), or None when this
+    platform offers no way to list them (Windows): callers must not read that as "nothing is running"."""
     if shutil.which("lsof"):
-        return [line[1:] for line in _run_out(["lsof", "-w", "-d", "cwd", "-Fn"], 120).splitlines() if line[:2] == "n/"]
+        # at least this process has a cwd: an empty listing means lsof failed or timed out, not "nothing runs"
+        cwds = [line[1:] for line in _run_out(["lsof", "-w", "-d", "cwd", "-Fn"], 120).splitlines() if line[:2] == "n/"]
+        if cwds:
+            return cwds
     proc = Path("/proc")
     if not proc.is_dir():
-        return []
+        return None
     cwds = []
     for p in proc.glob("[0-9]*/cwd"):
         with contextlib.suppress(OSError):
@@ -300,7 +304,7 @@ def active_cwds() -> list[str]:
     return cwds
 
 
-def _inspect(wt: WorktreeRow, cwds: list[str], idle_hours: float) -> WorktreeRow:
+def _inspect(wt: WorktreeRow, cwds: list[str] | None, idle_hours: float) -> WorktreeRow:
     if not wt.path.is_dir():
         wt.verdict = "prunable (dir missing): git worktree prune"
         return wt
@@ -311,7 +315,7 @@ def _inspect(wt: WorktreeRow, cwds: list[str], idle_hours: float) -> WorktreeRow
     unpushed = _git_out(wt.path, "log", "--oneline", "HEAD", "--not", "--remotes")
     wt.unpushed = len((unpushed or "").splitlines())
     p = str(wt.path)
-    wt.active = any(c == p or c.startswith(p + os.sep) for c in cwds)
+    wt.active = any(c == p or c.startswith(p + os.sep) for c in cwds or [])
     last_commit = _git_out(wt.path, "log", "-1", "--format=%ct")
     touched = [wt.path.stat().st_mtime, int((last_commit or "").strip() or 0)]
     top_level = [f for f in wt.path.iterdir() if f.name != "node_modules"][:200]
@@ -327,6 +331,7 @@ def _inspect(wt: WorktreeRow, cwds: list[str], idle_hours: float) -> WorktreeRow
             (f"{wt.unpushed} unpushed", wt.unpushed),
             ("locked", wt.locked),
             ("active process", wt.active),
+            ("cannot tell if a process is inside (no lsof or /proc)", cwds is None),
             (f"touched {wt.idle_h:.0f}h ago", wt.idle_h < idle_hours),
         ]
         if bad

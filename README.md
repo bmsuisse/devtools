@@ -789,15 +789,27 @@ directly.
 bdt cleanup caches [--min-mb 50] [--json]
 bdt cleanup stale-envs [root] [--days 30] [--min-mb 100] [--json]
 bdt cleanup inspect [root] [--idle-hours 24] [--json]
+bdt cleanup claude-home [root] [--depth 2] [--json]
+bdt cleanup claude-plugins [PATH ...] [--yes]
 ```
 
-These three delete nothing; they feed the `dev-cleanup` skill's overview. `caches` lists the size of the
+`caches`, `stale-envs`, `inspect` (and `claude-home`, below) delete nothing; they feed the `dev-cleanup` skill's overview. `caches` lists the size of the
 podman/docker, uv/npm/bun/pnpm/pip, cargo/sccache/rustup, NuGet, gradle, HuggingFace, Playwright, Homebrew and
 Xcode caches (plus each `~/Library/Caches` app) with the command that cleans it and its risk. `stale-envs` finds
 `node_modules`, `.venv`, `.next`/`.turbo`, Rust `target/` (next to a `Cargo.toml`) and .NET `bin/`/`obj/` (next
 to a `.csproj`/`.fsproj`/`.vbproj`) untouched for `--days`. `inspect` reports every linked worktree under `root`
 (default `.`) with size, dirty, unpushed, locked, active-process and idle status and a `safe` / `review: ...`
 verdict; unlike `cleanup worktrees` it ignores merge status, so it is how you judge unmerged worktrees.
+
+`claude-home` covers what Claude Code leaves behind (it honours `CLAUDE_CONFIG_DIR`; `root` defaults to the
+`bdt find-repo` work dir): every cached plugin version in `~/.claude/plugins/cache` that `installed_plugins.json`
+does not reference is `stale` (or `review` when a live process registered itself in its `.in_use/<pid>`), and every
+dir under `<repo>/.claude/worktrees` that git no longer knows is an `orphan` (the files there are the only copy).
+`claude-plugins` is the only one of these that deletes: a dry run until `--yes`, only the given version dirs if any,
+re-checking installed/live state right before removing. Liveness is probed without signalling the process (on
+Windows `os.kill(pid, 0)` would terminate it), and where running processes cannot be listed (no `lsof` or `/proc`,
+i.e. Windows) no `.claude/worktrees` dir is marked `orphan`, and `cleanup inspect` rows say they cannot tell instead
+of reporting "no active process".
 
 The DB-naming algorithm and orphan detection are entirely
 [pgdevkit](https://github.com/bmsuisse/pgdevkit)'s own
