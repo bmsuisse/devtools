@@ -200,6 +200,9 @@ copies an env file in (auto-detects `.local_env` then `.env`), and runs
 `bdt cleanup caches`, `bdt cleanup stale-envs [root]` and `bdt cleanup inspect [root]` (all `--json`-capable) are
 read-only overviews of caches, stale `node_modules`/`.venv`/Rust `target`/.NET `bin`+`obj` and every worktree with
 a `safe` / `review` verdict. They are the scan step of the `dev-cleanup` skill, next to `bdt cleanup worktrees`.
+`bdt cleanup claude-home [root]` is the read-only report for Claude Code leftovers (old plugin versions in
+`~/.claude/plugins/cache`, `.claude/worktrees` dirs git no longer knows); `bdt cleanup claude-plugins [PATH ...] --yes`
+removes the stale plugin versions. Both work on Windows.
 
 ## Listing all repos
 

@@ -40,6 +40,7 @@ from bmsdna.devtools import (
 )
 from bmsdna.devtools import api_usage as api_usage_mod
 from bmsdna.devtools import business_user as business_user_mod
+from bmsdna.devtools import cleanup_claude as cleanup_claude_mod
 from bmsdna.devtools import cleanup_scan as cleanup_scan_mod
 from bmsdna.devtools import commit as commit_mod
 from bmsdna.devtools import dead_code as dead_code_mod
@@ -2569,6 +2570,76 @@ def cleanup_inspect(
     )
     for r in rows:
         typer.echo(f"{r.size_mb / 1024:6.2f} GB  {r.repo.name}:{r.branch:<35} {r.verdict}\n          {r.path}")
+
+
+@cleanup_app.command("claude-home")
+def cleanup_claude_home(
+    root: Path | None = typer.Argument(
+        None, help="Root folder to scan for repos with a .claude/worktrees dir (default: the `bdt find-repo` work dir)"
+    ),
+    depth: int = typer.Option(2, "--depth", help="How many folder levels below root to look for repos"),
+    as_json: bool = _AS_JSON_OPTION,
+) -> None:
+    """Read-only: Claude Code leftovers: old plugin versions and `.claude/worktrees` dirs git no longer knows.
+
+    Claude Code never removes old versions from ~/.claude/plugins/cache (honours CLAUDE_CONFIG_DIR). A version is
+    `stale` when installed_plugins.json does not point at it and no live process is registered in its `.in_use`.
+    `orphan` = a dir under `<repo>/.claude/worktrees` whose gitdir is gone (the files are the only copy; rows with
+    a process inside, or where processes cannot be listed, are `review`). Worktrees git still knows show up in
+    `bdt cleanup inspect`. Deletes nothing: `bdt cleanup claude-plugins --yes` removes stale plugin versions.
+    """
+    report = cleanup_claude_mod.scan(
+        cleanup_claude_mod.claude_dir(), (root or find_repo_mod.work_dir()).expanduser().resolve(), depth
+    )
+    if as_json:
+        _echo_json(asdict(report))
+        return
+    stale = [r for r in report.plugins if r.verdict == "stale"]
+    typer.echo(
+        f"Plugin cache: {len(stale)} stale versions ({sum(r.size_mb for r in stale) / 1024:.1f} GB) "
+        f"in {cleanup_claude_mod.claude_dir() / 'plugins' / 'cache'}"
+    )
+    for r in report.plugins:
+        age = f"orphaned {r.orphaned_days}d ago" if r.orphaned_days is not None else "not installed"
+        typer.echo(f"{r.size_mb / 1024:6.2f} GB  {r.plugin:<45} {r.version:<14} {age}; {r.verdict}")
+    orphans = [r for r in report.worktrees if r.verdict == "orphan"]
+    typer.echo(
+        f"\n.claude/worktrees dirs unknown to git: {len(orphans)} orphan "
+        f"({sum(r.size_mb for r in orphans) / 1024:.1f} GB), {len(report.worktrees) - len(orphans)} to review"
+    )
+    if not report.process_check_available:
+        typer.echo("note: running processes cannot be listed on this platform, so none of these is marked `orphan`")
+    for r in report.worktrees:
+        typer.echo(
+            f"{r.size_mb / 1024:6.2f} GB  {r.repo.name}: {r.path.name:<35} {r.verdict} ({r.why}, touched {r.idle_days}d ago)\n"
+            f"          {r.path}"
+        )
+
+
+@cleanup_app.command("claude-plugins")
+def cleanup_claude_plugins(
+    paths: list[Path] = typer.Argument(None, help="Only these plugin version dirs (default: every stale one)"),
+    yes: bool = typer.Option(False, "--yes", help="Actually delete; without it only list what would go"),
+) -> None:
+    """Remove `stale` Claude Code plugin versions from ~/.claude/plugins/cache (see `bdt cleanup claude-home`).
+
+    Installed versions, `data/` and installed_plugins.json are never touched; installed/live state is re-checked
+    at delete time, so a version a live session registered in the meantime is skipped.
+    """
+    claude = cleanup_claude_mod.claude_dir()
+    wanted = {p.resolve() for p in paths or []}
+    stale = [
+        r
+        for r in cleanup_claude_mod.plugin_versions(claude, with_size=False)
+        if r.verdict == "stale" and (not wanted or r.path.resolve() in wanted)
+    ]
+    if not yes:
+        for r in stale:
+            typer.echo(f"would remove {r.plugin} {r.version}  {r.path}")
+        typer.echo(f"\n{len(stale)} stale plugin versions; re-run with --yes to remove")
+        return
+    removed = cleanup_claude_mod.delete_stale_plugins(claude, list(wanted))
+    typer.echo(f"removed {removed} stale plugin versions")
 
 
 def _draft_feat_pr(target: str | None, pat: str | None) -> None:

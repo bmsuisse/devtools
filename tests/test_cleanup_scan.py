@@ -217,3 +217,13 @@ def test_inspect_worktrees_needs_review_when_a_git_probe_fails(repo_with_worktre
     (row,) = cleanup_scan.inspect_worktrees(repo_with_worktrees, idle_hours=0)
 
     assert row.verdict.startswith("review: git check failed")
+
+
+def test_inspect_worktrees_never_reads_unknown_processes_as_safe(repo_with_worktrees, monkeypatch) -> None:
+    _add_worktree(repo_with_worktrees, "feature")
+    monkeypatch.setattr(cleanup_scan, "active_cwds", lambda: None)
+
+    (row,) = cleanup_scan.inspect_worktrees(repo_with_worktrees, idle_hours=0)
+
+    assert not row.active
+    assert "cannot tell if a process is inside" in row.verdict
