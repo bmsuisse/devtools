@@ -1,15 +1,18 @@
-import pytest
+import json
+from dataclasses import replace
 
 from bmsdna.devtools.pr_logs import (
     NO_LOG,
     LogSection,
     LogSource,
+    Options,
     ado_sections,
     clean_log,
     github_source,
     matches_step,
     render,
     tail_lines,
+    to_json,
 )
 
 TS = "2024-03-21T15:01:23.1234567Z "
@@ -63,48 +66,77 @@ def test_matches_step_is_case_insensitive_substring() -> None:
     assert matches_step("anything", None)
 
 
-def test_ado_sections_default_is_failed_tasks_with_path() -> None:
-    sections = ado_sections(TIMELINE, fetch, show_all=False, step=None)
-    assert [(s.title, s.result) for s in sections] == [("Test / unit / pytest", "failed")]
-    assert sections[0].fetch() == f"{TS}log of https://ado/logs/2"
-
-
-def test_ado_sections_all_is_chronological_and_skips_tasks_without_log() -> None:
-    sections = ado_sections(TIMELINE, fetch, show_all=True, step=None)
-    assert [s.title for s in sections] == ["Test / unit / uv sync", "Test / unit / pytest"]
+def test_ado_sections_lists_every_task_with_a_log_chronologically() -> None:
+    sections = ado_sections(TIMELINE, fetch, step=None)
+    assert [(s.title, s.result) for s in sections] == [
+        ("Test / unit / uv sync", "succeeded"),
+        ("Test / unit / pytest", "failed"),
+    ]
+    assert sections[1].fetch() == f"{TS}log of https://ado/logs/2"
 
 
 def test_ado_sections_step_filter() -> None:
-    sections = ado_sections(TIMELINE, fetch, show_all=True, step="sync")
+    sections = ado_sections(TIMELINE, fetch, step="sync")
     assert [s.title for s in sections] == ["Test / unit / uv sync"]
 
 
-def test_render_fetches_lazily_and_formats() -> None:
-    calls: list[int] = []
-
-    def log() -> str:
-        calls.append(1)
-        return f"{TS}boom\n{TS}again"
-
-    source = LogSource("Build 7  ci  [failed]", [LogSection("unit / pytest", "failed", log)])
-    listed = render(source, list_only=True, tail=0, timestamps=False, show_all=False)
-    assert calls == []
-    assert listed.splitlines() == ["=== Build 7  ci  [failed] ===", "--- [failed] unit / pytest ---"]
-    shown = render(source, list_only=False, tail=1, timestamps=False, show_all=False)
-    assert shown.splitlines()[0] == "=== Build 7  ci  [failed] ==="
-    assert shown.endswith("again") and "boom" not in shown
+def make_source() -> LogSource:
+    ok = LogSection("unit / sync", "succeeded", lambda: f"{TS}installed")
+    bad = LogSection("unit / pytest", "failed", lambda: f"{TS}boom\n{TS}again")
+    return LogSource(7, "ci", "failed", "https://dev.azure.com/o/p/_build/results?buildId=7", [ok, bad])
 
 
-def test_render_empty_log_and_empty_source() -> None:
-    assert NO_LOG in render(
-        LogSource("h", [LogSection("a", "failed", lambda: "  \n")]),
-        list_only=False,
-        tail=0,
-        timestamps=False,
-        show_all=True,
+OPTS = Options()
+
+
+def test_render_default_is_one_line_for_succeeded_and_full_log_for_failed() -> None:
+    out = render(make_source(), OPTS).splitlines()
+    assert out[:3] == [
+        "=== Build 7  ci  [failed] ===",
+        "https://dev.azure.com/o/p/_build/results?buildId=7",
+        "[succeeded] unit / sync",
+    ]
+    assert "installed" not in "\n".join(out)
+    assert out[-3:] == ["--- [failed] unit / pytest ---", "boom", "again"]
+
+
+def test_render_all_and_step_print_succeeded_logs_too() -> None:
+    assert "installed" in render(make_source(), replace(OPTS, show_all=True))
+    picked = render(make_source(), replace(OPTS, step="sync"))
+    assert "installed" in picked and "boom" in picked  # the filter itself is applied by the sources
+
+
+def test_render_list_only_never_fetches() -> None:
+    def explode() -> str:
+        raise AssertionError("fetched")
+
+    source = LogSource(1, "ci", "failed", "", [LogSection("a", "failed", explode)])
+    assert render(source, replace(OPTS, list_only=True)).splitlines() == ["=== Build 1  ci  [failed] ===", "[failed] a"]
+
+
+def test_render_tail_and_empty_log() -> None:
+    assert render(make_source(), replace(OPTS, tail=1)).endswith("again") and "boom" not in render(
+        make_source(), replace(OPTS, tail=1)
     )
-    hint = render(LogSource("h", []), list_only=False, tail=0, timestamps=False, show_all=False)
-    assert "no failed steps" in hint and "--all" in hint
+    blank = LogSource(1, "ci", "failed", "", [LogSection("a", "failed", lambda: "  \n")])
+    assert NO_LOG in render(blank, OPTS)
+    assert "(no steps with logs)" in render(LogSource(1, "ci", "failed", "", []), OPTS)
+
+
+def test_to_json_has_log_only_for_failed_steps() -> None:
+    doc = json.loads(to_json([make_source()], OPTS))
+    assert doc[0]["id"] == 7 and doc[0]["name"] == "ci" and doc[0]["result"] == "failed"
+    assert [(s["name"], s["result"], s["log"]) for s in doc[0]["steps"]] == [
+        ("unit / sync", "succeeded", None),
+        ("unit / pytest", "failed", "boom\nagain"),
+    ]
+
+
+def test_to_json_all_and_list() -> None:
+    steps = json.loads(to_json([make_source()], replace(OPTS, show_all=True)))[0]["steps"]
+    assert steps[0]["log"] == "installed"
+    steps = json.loads(to_json([make_source()], replace(OPTS, list_only=True)))[0]["steps"]
+    assert [s["log"] for s in steps] == [None, None]
 
 
 class FakeGh:
@@ -129,11 +161,8 @@ class FakeGh:
         return {"name": "CI", "conclusion": "failure", "html_url": "https://github.com/o/r/actions/runs/9"}
 
 
-@pytest.mark.parametrize(("show_all", "expected"), [(False, ["test -- failed step(s): pytest"]), (True, 2)])
-def test_github_source_jobs(show_all: bool, expected: list[str] | int) -> None:
-    source = github_source(FakeGh(), 9, None, show_all=show_all, step=None)  # ty: ignore[invalid-argument-type]
-    assert "Run 9  CI  [failure]" in source.header
-    if isinstance(expected, int):
-        assert len(source.sections) == expected
-    else:
-        assert [s.title for s in source.sections] == expected
+def test_github_source_lists_every_job_with_failed_steps_named() -> None:
+    source = github_source(FakeGh(), 9, None, step=None)  # ty: ignore[invalid-argument-type]
+    assert source.header == "Run 9  CI  [failure]"
+    assert source.url.endswith("/actions/runs/9")
+    assert [(s.title, s.failed) for s in source.sections] == [("test -- failed step(s): pytest", True), ("lint", False)]

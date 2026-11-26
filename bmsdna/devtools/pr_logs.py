@@ -1,11 +1,13 @@
 """`bdt pr logs`: print the logs of a PR's builds (Azure DevOps) / workflow runs (GitHub).
 
 `bdt pr status` only shows the failed steps while it reports status; this is the dedicated viewer:
-choose failed steps (default) or every step, filter by name, tail, list without content.
+every step is listed, but only failed ones (or those picked with `--step`, or all with `--all`) print their
+log; succeeded ones stay one line. Also as JSON.
 """
 
 from __future__ import annotations
 
+import json
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -21,6 +23,9 @@ from bmsdna.devtools.gitrepo import AdoRemote
 NO_LOG = "(no log available)"
 
 
+FAILED_RESULTS = frozenset({"failed", "failure", "timed_out", "action_required"})
+
+
 @dataclass
 class LogSection:
     """One step (Azure DevOps) or job (GitHub) with a log. `fetch` is only called when the text is shown."""
@@ -29,13 +34,25 @@ class LogSection:
     result: str
     fetch: Callable[[], str] = field(repr=False, default=lambda: "")
 
+    @property
+    def failed(self) -> bool:
+        return self.result.casefold() in FAILED_RESULTS
+
 
 @dataclass
 class LogSource:
     """A build / workflow run and its sections."""
 
-    header: str
+    id: int
+    name: str
+    result: str
+    url: str
     sections: list[LogSection]
+
+    @property
+    def header(self) -> str:
+        kind = "Run" if "/actions/" in self.url else "Build"
+        return f"{kind} {self.id}  {self.name}  [{self.result}]"
 
 
 def clean_log(text: str, timestamps: bool = False) -> str:
@@ -58,12 +75,9 @@ def matches_step(title: str, step: str | None) -> bool:
     return step is None or step.casefold() in title.casefold()
 
 
-def ado_sections(
-    records: list[dict], fetch_log: Callable[[str], str], *, show_all: bool, step: str | None
-) -> list[LogSection]:
-    """The timeline's tasks that have a log, as `Stage / Job / Task` sections in start order.
-
-    Without `show_all` only failed tasks; `step` keeps those whose path contains it (case-insensitive).
+def ado_sections(records: list[dict], fetch_log: Callable[[str], str], *, step: str | None) -> list[LogSection]:
+    """The timeline's tasks that have a log, as `Stage / Job / Task` sections in start order;
+    `step` keeps those whose path contains it (case-insensitive).
     """
     by_id = {rec.get("id"): rec for rec in records}
 
@@ -82,15 +96,13 @@ def ado_sections(
     for rec in tasks:
         result = rec.get("result") or rec.get("state") or "?"
         title = path(rec)
-        if (show_all or result == "failed") and matches_step(title, step):
+        if matches_step(title, step):
             url = rec["log"]["url"]
             sections.append(LogSection(title, result, lambda url=url: fetch_log(url)))
     return sections
 
 
-def ado_source(
-    session: requests.Session, remote: AdoRemote, build: dict, *, show_all: bool, step: str | None
-) -> LogSource:
+def ado_source(session: requests.Session, remote: AdoRemote, build: dict, *, step: str | None) -> LogSource:
     def fetch_log(url: str) -> str:
         r = session.get(url, params={"api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS)
         r.raise_for_status()
@@ -98,27 +110,31 @@ def ado_source(
 
     pipeline = (build.get("definition") or {}).get("name", "?")
     state = build.get("result") or build.get("status") or "?"
-    header = f"Build {build['id']}  {pipeline}  [{state}]\n{pr_build.build_web_url(remote, build['id'])}"
     records = pr_build.get_timeline_records(session, remote, build["id"])
-    return LogSource(header, ado_sections(records, fetch_log, show_all=show_all, step=step))
+    return LogSource(
+        build["id"],
+        pipeline,
+        state,
+        pr_build.build_web_url(remote, build["id"]),
+        ado_sections(records, fetch_log, step=step),
+    )
 
 
-def github_source(gh: GitHubClient, run_id: int, label: str | None, *, show_all: bool, step: str | None) -> LogSource:
+def github_source(gh: GitHubClient, run_id: int, label: str | None, *, step: str | None) -> LogSource:
     """A workflow run's jobs. GitHub serves one log per *job* (not per step), so a failed job's
     header names its failed steps instead."""
     run = gh.get(f"{gh.repo_path}/actions/runs/{run_id}")
     name = label or run.get("name") or "?"
     state = run.get("conclusion") or run.get("status") or "?"
-    header = f"Run {run_id}  {name}  [{state}]\n{run.get('html_url', '')}"
     jobs = gh.get(f"{gh.repo_path}/actions/runs/{run_id}/jobs", params={"filter": "latest", "per_page": 100})
     sections = []
     for job in jobs.get("jobs") or []:
         result = job.get("conclusion") or job.get("status") or "?"
         failed_steps = [s.get("name", "?") for s in job.get("steps") or [] if s.get("conclusion") == "failure"]
         title = job.get("name", "?") + (f" -- failed step(s): {', '.join(failed_steps)}" if failed_steps else "")
-        if (show_all or result == "failure") and matches_step(title, step):
+        if matches_step(title, step):
             sections.append(LogSection(title, result, lambda job_id=job["id"]: _github_job_log(gh, job_id)))
-    return LogSource(header, sections)
+    return LogSource(run_id, name, state, run.get("html_url", ""), sections)
 
 
 def _github_job_log(gh: GitHubClient, job_id: int) -> str:
@@ -127,27 +143,71 @@ def _github_job_log(gh: GitHubClient, job_id: int) -> str:
     return r.text if r.status_code < 400 else ""
 
 
-def render(source: LogSource, *, list_only: bool, tail: int, timestamps: bool, show_all: bool) -> str:
-    title, _, url = source.header.partition("\n")
-    out = [f"=== {title} ===", *([url] if url else [])]
+@dataclass(frozen=True)
+class Options:
+    """What to print: the `bdt pr logs` flags."""
+
+    show_all: bool = False
+    step: str | None = None
+    tail: int = 0
+    list_only: bool = False
+    timestamps: bool = False
+    as_json: bool = False
+
+
+def shows_log(section: LogSection, opts: Options) -> bool:
+    """Failed steps always print their log; the others only with `--all` or when `--step` picked them."""
+    return not opts.list_only and (section.failed or opts.show_all or opts.step is not None)
+
+
+def step_text(section: LogSection, opts: Options) -> str:
+    return tail_lines(clean_log(section.fetch(), opts.timestamps), opts.tail).strip() or NO_LOG
+
+
+def render(source: LogSource, opts: Options) -> str:
+    out = [f"=== {source.header} ===", source.url] if source.url else [f"=== {source.header} ==="]
     if not source.sections:
-        out.append("(no failed steps with logs)" if not show_all else "(no steps with logs)")
-        if not show_all:
-            out.append("Use --all to show every step.")
+        out.append("(no steps with logs)")
     for section in source.sections:
-        out.append(
-            f"--- [{section.result}] {section.title} ---"
-            if list_only
-            else f"\n--- [{section.result}] {section.title} ---"
-        )
-        if not list_only:
-            text = tail_lines(clean_log(section.fetch(), timestamps), tail).strip()
-            out.append(text or NO_LOG)
+        if not shows_log(section, opts):
+            out.append(f"[{section.result}] {section.title}")
+            continue
+        out.append(f"\n--- [{section.result}] {section.title} ---")
+        out.append(step_text(section, opts))
     return "\n".join(out)
 
 
-def _print(sources: list[LogSource], **render_options: bool | int) -> None:
-    print("\n\n".join(render(s, **render_options) for s in sources))  # ty: ignore[invalid-argument-type]
+def to_json(sources: list[LogSource], opts: Options) -> str:
+    """One JSON document: the sources, each with its steps; `log` is the text for steps that print one
+    (see `shows_log`), else null."""
+    return json.dumps(
+        [
+            {
+                "id": src.id,
+                "name": src.name,
+                "result": src.result,
+                "url": src.url,
+                "steps": [
+                    {
+                        "name": sec.title,
+                        "result": sec.result,
+                        "log": step_text(sec, opts) if shows_log(sec, opts) else None,
+                    }
+                    for sec in src.sections
+                ],
+            }
+            for src in sources
+        ],
+        indent=2,
+        ensure_ascii=False,
+    )
+
+
+def _print(sources: list[LogSource], opts: Options) -> None:
+    if opts.as_json:
+        print(to_json(sources, opts))
+    else:
+        print("\n\n".join(render(src, opts) for src in sources))
 
 
 def run_ado(
@@ -157,9 +217,7 @@ def run_ado(
     *,
     pr_id: int | None,
     build_id: int | None,
-    show_all: bool,
-    step: str | None,
-    **render_options: bool | int,
+    opts: Options,
 ) -> None:
     session = ado_session(pat)
     if build_id is not None:
@@ -177,8 +235,8 @@ def run_ado(
         )
         if not builds:
             sys.exit(pr_build.no_builds_message(session, remote, pr, "show logs of"))
-    sources = [ado_source(session, remote, b, show_all=show_all, step=step) for b in builds]
-    _print(sources, show_all=show_all, **render_options)
+    sources = [ado_source(session, remote, b, step=opts.step) for b in builds]
+    _print(sources, opts)
 
 
 def run_github(
@@ -186,22 +244,14 @@ def run_github(
     *,
     pr_id: int | None,
     build_id: int | None,
-    show_all: bool,
-    step: str | None,
-    **render_options: bool | int,
+    opts: Options,
 ) -> None:
     if build_id is not None:
         runs: list[tuple[int, str | None]] = [(build_id, None)]
     else:
         checks = gh_pr.get_pr(gh, pr_id)["statusCheckRollup"]
-        buckets = {"fail", "pass", "pending", "cancel", "skipping"} if show_all else {"fail"}
-        runs = list(gh_pr.check_runs(checks, buckets))
+        runs = list(gh_pr.check_runs(checks, {"fail", "pass", "pending", "cancel", "skipping"}))
         if not runs:
-            sys.exit(
-                "No GitHub Actions runs "
-                + ("found" if show_all else "with failed checks")
-                + " for this PR."
-                + ("" if show_all else " Use --all to show every run.")
-            )
-    sources = [github_source(gh, rid, label, show_all=show_all, step=step) for rid, label in runs]
-    _print(sources, show_all=show_all, **render_options)
+            sys.exit("No GitHub Actions runs found for this PR.")
+    sources = [github_source(gh, rid, label, step=opts.step) for rid, label in runs]
+    _print(sources, opts)

@@ -758,12 +758,18 @@ def pr_logs(
         "--run-id",
         help="Show this Azure DevOps build / GitHub Actions run directly instead of the PR's latest ones",
     ),
-    show_all: bool = typer.Option(False, "--all", help="Every step/job with a log, not just the failed ones"),
+    show_all: bool = typer.Option(
+        False, "--all", help="Print the log of succeeded steps too (they are one line each by default)"
+    ),
     step: str | None = typer.Option(
-        None, "--step", help="Only steps/jobs whose name (Stage / Job / Task on Azure DevOps) contains this text"
+        None,
+        "--step",
+        help="Only steps/jobs whose name (Stage / Job / Task on Azure DevOps) contains this text; their logs are printed, "
+        "succeeded or not",
     ),
     tail: int = typer.Option(0, "--tail", help="Only the last N lines of each log (0 = everything, the default)"),
     list_only: bool = typer.Option(False, "--list", help="Only list the steps/jobs and their result, without logs"),
+    as_json: bool = typer.Option(False, "--json", help="Print machine-readable JSON instead of text"),
     timestamps: bool = typer.Option(False, "--timestamps", help="Keep the per-line timestamps (stripped by default)"),
     pat: str | None = typer.Option(
         None,
@@ -773,7 +779,8 @@ def pr_logs(
     ),
 ) -> None:
     """Print the logs of the PR's builds (Azure DevOps) / workflow runs (GitHub, auto-detected):
-    the failed steps by default, `--all` for every step. The PR is the one opened from the
+    every step is listed, but only failed steps print their log (succeeded ones are one line;
+    `--all` or `--step` print theirs too). The PR is the one opened from the
     current branch, or --pr-id; --build-id picks one build/run directly.
     GitHub keeps one log per job, so there `--step` filters jobs.
     """
@@ -782,6 +789,9 @@ def pr_logs(
     if build_id_arg is not None and build_id is not None and build_id_arg != build_id:
         raise typer.BadParameter("BUILD_ID and --build-id differ; give only one", param_hint="--build-id")
     build_id = build_id if build_id is not None else build_id_arg
+    opts = pr_logs_mod.Options(
+        show_all=show_all, step=step, tail=tail, list_only=list_only, timestamps=timestamps, as_json=as_json
+    )
     remote = current_remote()
     if isinstance(remote, GitHubRemote):
         gh = require_gh()
@@ -789,11 +799,7 @@ def pr_logs(
             gh,
             pr_id=None if build_id else gh_pr.resolve_pr_id(gh, pr_id, target_branch),
             build_id=build_id,
-            show_all=show_all,
-            step=step,
-            tail=tail,
-            list_only=list_only,
-            timestamps=timestamps,
+            opts=opts,
         )
         return
     pr_logs_mod.run_ado(
@@ -802,11 +808,7 @@ def pr_logs(
         target_branch,
         pr_id=pr_id,
         build_id=build_id,
-        show_all=show_all,
-        step=step,
-        tail=tail,
-        list_only=list_only,
-        timestamps=timestamps,
+        opts=opts,
     )
 
 
