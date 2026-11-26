@@ -54,6 +54,7 @@ from bmsdna.devtools import lint as lint_mod
 from bmsdna.devtools import logs as logs_mod
 from bmsdna.devtools import pr_info as pr_info_mod
 from bmsdna.devtools import pr_list as pr_list_mod
+from bmsdna.devtools import pr_logs as pr_logs_mod
 from bmsdna.devtools import pull as pull_mod
 from bmsdna.devtools import translate as translate_mod
 from bmsdna.devtools import worktree as worktree_mod
@@ -742,6 +743,73 @@ def _echo_infos(infos: list[pr_info_mod.PrInfo], as_json: bool, with_repo: bool)
         typer.echo(json.dumps([i.to_json_dict() for i in infos]))
     elif infos:
         typer.echo("\n\n".join(_info_text(i, with_repo) for i in infos))
+
+
+@pr_app.command("logs")
+def pr_logs(
+    build_id_arg: int | None = typer.Argument(
+        None, metavar="[BUILD_ID]", help="Same as --build-id (default: the PR's latest build per pipeline)"
+    ),
+    target_branch: str | None = typer.Option(None, "--target-branch", help=_LOOKUP_TARGET_HELP),
+    pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
+    build_id: int | None = typer.Option(
+        None,
+        "--build-id",
+        "--run-id",
+        help="Show this Azure DevOps build / GitHub Actions run directly instead of the PR's latest ones",
+    ),
+    show_all: bool = typer.Option(
+        False, "--all", help="Print the log of succeeded steps too (they are one line each by default)"
+    ),
+    step: str | None = typer.Option(
+        None,
+        "--step",
+        help="Only steps/jobs whose name (Stage / Job / Task on Azure DevOps) contains this text; their logs are printed, "
+        "succeeded or not",
+    ),
+    tail: int = typer.Option(0, "--tail", help="Only the last N lines of each log (0 = everything, the default)"),
+    list_only: bool = typer.Option(False, "--list", help="Only list the steps/jobs and their result, without logs"),
+    as_json: bool = typer.Option(False, "--json", help="Print machine-readable JSON instead of text"),
+    timestamps: bool = typer.Option(False, "--timestamps", help="Keep the per-line timestamps (stripped by default)"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
+    ),
+) -> None:
+    """Print the logs of the PR's builds (Azure DevOps) / workflow runs (GitHub, auto-detected):
+    every step is listed, but only failed steps print their log (succeeded ones are one line;
+    `--all` or `--step` print theirs too). The PR is the one opened from the
+    current branch, or --pr-id; --build-id picks one build/run directly.
+    GitHub keeps one log per job, so there `--step` filters jobs.
+    """
+    if tail < 0:
+        raise typer.BadParameter("must be >= 0", param_hint="--tail")
+    if build_id_arg is not None and build_id is not None and build_id_arg != build_id:
+        raise typer.BadParameter("BUILD_ID and --build-id differ; give only one", param_hint="--build-id")
+    build_id = build_id if build_id is not None else build_id_arg
+    opts = pr_logs_mod.Options(
+        show_all=show_all, step=step, tail=tail, list_only=list_only, timestamps=timestamps, as_json=as_json
+    )
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh = require_gh()
+        pr_logs_mod.run_github(
+            gh,
+            pr_id=None if build_id else gh_pr.resolve_pr_id(gh, pr_id, target_branch),
+            build_id=build_id,
+            opts=opts,
+        )
+        return
+    pr_logs_mod.run_ado(
+        remote,
+        pat,
+        target_branch,
+        pr_id=pr_id,
+        build_id=build_id,
+        opts=opts,
+    )
 
 
 @pr_app.command("info")
