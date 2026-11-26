@@ -117,6 +117,25 @@ locally at all (it also settles which PR when several are open for the branch). 
 all accept the same option, for the same reason. (`pr watch-deploy` doesn't:
 it watches a branch-triggered build/workflow run, not any particular PR.)
 
+## `bdt pr logs`
+
+Print the logs of a PR's builds (Azure DevOps) or workflow runs (GitHub) — the dedicated viewer behind the
+failed-step output of `bdt pr status`.
+
+```bash
+bdt pr logs [BUILD_ID] [--pr-id N] [--build-id N] [--all] [--step TEXT] [--tail N] [--list] [--timestamps]
+```
+
+- Default: the **failed** steps (Azure DevOps: tasks, as `Stage / Job / Task`) of the latest build per pipeline of the PR
+  opened from the current branch (or `--pr-id`). GitHub keeps one log per *job*, so there the failed jobs are shown with
+  their failed step names in the header.
+- `--all`: every step/job with a log, also for builds that are still running (partial logs).
+- `--step TEXT`: only steps whose name contains `TEXT` (case-insensitive; GitHub: job names).
+- `--tail N`: only the last `N` lines of each log (0 = everything, the default).
+- `--list`: just the steps/jobs and their result, without the logs (to find the `--step` you want).
+- `BUILD_ID` or `--build-id N` (alias `--run-id`): one Azure DevOps build / GitHub Actions run directly instead of the PR's latest.
+- Azure Pipelines' per-line timestamps are stripped unless `--timestamps` is given.
+
 ## `bdt pr list`
 
 ```bash
