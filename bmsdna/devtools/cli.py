@@ -1074,6 +1074,9 @@ def pr_watch_deploy(
     actual deployment -- as opposed to `bdt pr status`, which watches builds/checks tied to a PR
     (Azure DevOps or GitHub, auto-detected).
 
+    On Azure DevOps only the runs of the commit the branch points at (the merge) count; with --wait
+    one not queued yet is waited for, up to 10 minutes.
+
     No --pr-id here: this watches a branch-triggered run, not any particular PR.
     """
     remote = current_remote()

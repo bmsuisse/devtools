@@ -244,6 +244,14 @@ second build. `bdt pr watch-deploy` does: it finds the most recent build/
 workflow run triggered *directly* on `--target-branch` and reports its
 status the same way `pr status` does (failed steps print their logs inline).
 
+On Azure DevOps it only watches the builds of the commit the branch points at
+(the merge that just landed). An older run of another pipeline waiting on an
+approval is printed as a note, never as the reason to stop. With `--wait`, a
+merge whose run isn't queued yet is waited for (up to 10 minutes, then exit 4).
+A run of the merge that waits on a stage approval or a first-time resource
+authorization (e.g. "permit this pipeline to use a secret") stops with exit 3
+and the build's link.
+
 ```bash
 bdt pr watch-deploy [--target-branch dev] [--wait]
 ```

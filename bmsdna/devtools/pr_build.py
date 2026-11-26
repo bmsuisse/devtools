@@ -16,6 +16,7 @@ from bmsdna.devtools import pr_cancel, pr_drift
 from bmsdna.devtools.ado_auth import AdoAuthError, ado_session
 from bmsdna.devtools.cli_tools import (
     EXIT_NEEDS_APPROVAL,
+    EXIT_WAIT_TIMEOUT,
     HTTP_TIMEOUT_SECS,
     PollHeartbeat,
     WaitDeadline,
@@ -37,6 +38,8 @@ TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*")
 # "inProgress" (like an ordinary running step) until someone approves/rejects it or it times
 # out — indistinguishable from "still building" unless you look at the timeline specifically.
 CHECKPOINT_APPROVAL_NAME = "Checkpoint.Approval"
+# a first-time "permit this pipeline to use <secret / service connection>" gate; blocks a run just like an approval
+CHECKPOINT_AUTHORIZATION_NAME = "Checkpoint.Authorization"
 
 # `HTTP_TIMEOUT_SECS` is generous for a plain JSON GET/PATCH, but too tight for uploading a
 # whole file's bytes (a screenshot/attachment) -- give those more room instead of failing an
@@ -885,9 +888,14 @@ def get_builds_for_branch(session: requests.Session, remote: AdoRemote, branch: 
     just a different `branchName` ref.
     """
     url = f"{_base_url(remote)}/_apis/build/builds"
-    r = session.get(
-        url, params={"branchName": f"refs/heads/{branch}", "$top": top, "api-version": "7.1"}, timeout=HTTP_TIMEOUT_SECS
-    )
+    # queue order, not ADO's default: a just-queued run has no finish time yet and must not fall outside `$top`
+    params = {
+        "branchName": f"refs/heads/{branch}",
+        "$top": top,
+        "queryOrder": "queueTimeDescending",
+        "api-version": "7.1",
+    }
+    r = session.get(url, params=params, timeout=HTTP_TIMEOUT_SECS)
     r.raise_for_status()
     builds = r.json().get("value", [])
     builds.sort(key=lambda b: b["id"], reverse=True)
@@ -979,8 +987,9 @@ def get_timeline_records(session: requests.Session, remote: AdoRemote, build_id:
 
 
 def pending_approval_records(records: list) -> list:
-    """Timeline records for still-open `Checkpoint.Approval` gates (manual stage approvals)."""
-    return [rec for rec in records if rec.get("state") == "inProgress" and rec.get("name") == CHECKPOINT_APPROVAL_NAME]
+    """Timeline records for still-open manual gates: stage approvals and first-time resource authorizations."""
+    gates = (CHECKPOINT_APPROVAL_NAME, CHECKPOINT_AUTHORIZATION_NAME)
+    return [rec for rec in records if rec.get("state") == "inProgress" and rec.get("name") in gates]
 
 
 def approval_stage_name(records: list, approval_record: dict) -> str:
@@ -1564,26 +1573,68 @@ def _status(
             deadline.sleep(30)
 
 
-def run_watch_deploy(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool) -> None:
-    """Watch the most recent build(s) triggered directly on `target_branch` -- e.g. a
-    post-merge pipeline that only runs on the target branch once a PR merges into it, and
-    usually does the actual deployment -- until they complete.
+DEPLOY_APPEAR_TIMEOUT_SECS = 600  # how long `watch-deploy --wait` waits for the merge's first run to be queued
 
-    Mirrors `run()`'s polling/reporting shape (same `latest_per_pipeline`/`print_build`
-    helpers), but looks at builds tied to the branch itself via `get_builds_for_branch`
-    rather than a specific PR's merge/source refs.
+
+def builds_of_commit(builds: list, commit: str) -> list:
+    """The builds of `commit` -- on a target branch, the runs a merge triggered -- leaving out older runs of other
+    pipelines that happen to still be the latest on that branch (e.g. one parked on an approval for days)."""
+    return [b for b in builds if b.get("sourceVersion") == commit]
+
+
+def note_other_pending_approvals(session: requests.Session, remote: AdoRemote, builds: list) -> None:
+    """Mention runs of older commits that wait for an approval: worth knowing, but nothing this merge waits on."""
+    for build, records, approvals in find_pending_approvals(session, remote, latest_per_pipeline(builds)):
+        name = build.get("definition", {}).get("name", "?")
+        for rec in approvals:
+            print(
+                f"Note: {name} #{build['id']} (commit {build.get('sourceVersion', '?')[:8]}, not this merge) waits for "
+                f"approval of stage '{approval_stage_name(records, rec)}' — {build_web_url(remote, build['id'])}"
+            )
+
+
+def run_watch_deploy(remote: AdoRemote, pat: str | None, target_branch: str, wait: bool) -> None:
+    """Watch the build(s) of the commit `target_branch` points at now -- normally the merge that just landed, whose
+    post-merge pipeline(s) usually do the actual deployment -- until they complete.
+
+    Mirrors `run()`'s polling/reporting shape (same `latest_per_pipeline`/`print_build` helpers), but looks at builds
+    tied to the branch itself via `get_builds_for_branch`, keeping only those of that commit (`builds_of_commit`).
+    With --wait, a merge whose run isn't queued yet is waited for, up to `DEPLOY_APPEAR_TIMEOUT_SECS`.
     """
     session = ado_session(pat)
+    merge_commit = _poll_or_exit(target_tip, session, remote, target_branch)
+    if merge_commit is None:
+        sys.exit(f"No branch '{target_branch}' in {remote.repo}.")
 
     heartbeat = PollHeartbeat()
+    appear_by = time.monotonic() + DEPLOY_APPEAR_TIMEOUT_SECS
+    others_noted = False
     while True:
-        builds = _poll_or_exit(get_builds_for_branch, session, remote, target_branch)
-        if not builds:
-            print(f"No builds found on '{target_branch}'.")
-            return
+        builds = _poll_or_exit(get_builds_for_branch, session, remote, target_branch, top=20)
+        own = builds_of_commit(builds, merge_commit)
+        if not others_noted:
+            note_other_pending_approvals(session, remote, [b for b in builds if b not in own])
+            others_noted = True
+        if not own:
+            msg = f"\rBranch '{target_branch}' at {merge_commit[:8]} | no build of this commit yet"
+            if not wait:
+                print(
+                    f"{msg}.\n\nTip: Use --wait to wait up to {DEPLOY_APPEAR_TIMEOUT_SECS // 60} min for one to start."
+                )
+                return
+            if time.monotonic() > appear_by:
+                print(msg)
+                print(
+                    f"\nNo build of {merge_commit[:8]} started on '{target_branch}' within "
+                    f"{DEPLOY_APPEAR_TIMEOUT_SECS // 60} min: this branch may have no post-merge pipeline."
+                )
+                sys.exit(EXIT_WAIT_TIMEOUT)
+            heartbeat.show(f"{msg}, waiting up to {DEPLOY_APPEAR_TIMEOUT_SECS // 60} min for one to start")
+            time.sleep(30)
+            continue
 
-        pipeline_builds = latest_per_pipeline(builds)
-        msg = f"\rBranch '{target_branch}' | " + ", ".join(
+        pipeline_builds = latest_per_pipeline(own)
+        msg = f"\rBranch '{target_branch}' at {merge_commit[:8]} | " + ", ".join(
             f"{b.get('definition', {}).get('name', '?')} #{b['id']} {b.get('status')} ({b.get('result') or '—'})"
             for b in pipeline_builds
         )
