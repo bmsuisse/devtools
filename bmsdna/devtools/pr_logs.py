@@ -23,6 +23,7 @@ from bmsdna.devtools.gitrepo import AdoRemote
 NO_LOG = "(no log available)"
 
 
+ALL_BUCKETS = {"fail", "pass", "pending", "cancel", "skipping", "waiting_approval"}
 FAILED_RESULTS = frozenset({"failed", "failure", "timed_out", "action_required"})
 
 
@@ -81,24 +82,35 @@ def ado_sections(records: list[dict], fetch_log: Callable[[str], str], *, step: 
     """
     by_id = {rec.get("id"): rec for rec in records}
 
-    def path(rec: dict) -> str:
-        names = [rec.get("name") or "?"]
+    def ancestors(rec: dict) -> list[dict]:
+        found = []
         parent = by_id.get(rec.get("parentId"))
         while parent is not None:
-            if parent.get("type") in ("Stage", "Job"):
-                names.append(parent.get("name") or "?")
+            found.append(parent)
             parent = by_id.get(parent.get("parentId"))
-        return " / ".join(reversed(names))
+        return found
 
-    tasks = [r for r in records if r.get("type") == "Task" and (r.get("log") or {}).get("url")]
-    tasks.sort(key=lambda r: r.get("startTime") or "")
+    def path(rec: dict) -> str:
+        names = [a.get("name") or "?" for a in ancestors(rec) if a.get("type") in ("Stage", "Job")]
+        return " / ".join([*reversed(names), rec.get("name") or "?"])
+
+    def position(rec: dict) -> tuple[str, str, int]:
+        # a skipped task never started: place it by its job and its `order` in it
+        job = next((a for a in ancestors(rec) if a.get("type") == "Job"), {})
+        return job.get("startTime") or "", job.get("id") or "", rec.get("order") or 0
+
     sections = []
-    for rec in tasks:
-        result = rec.get("result") or rec.get("state") or "?"
+    for rec in sorted((r for r in records if r.get("type") == "Task"), key=position):
         title = path(rec)
         if matches_step(title, step):
-            url = rec["log"]["url"]
-            sections.append(LogSection(title, result, lambda url=url: fetch_log(url)))
+            url = (rec.get("log") or {}).get("url")
+            sections.append(
+                LogSection(
+                    title,
+                    rec.get("result") or rec.get("state") or "?",
+                    (lambda url=url: fetch_log(url)) if url else str,
+                )
+            )
     return sections
 
 
@@ -110,7 +122,12 @@ def ado_source(session: requests.Session, remote: AdoRemote, build: dict, *, ste
 
     pipeline = (build.get("definition") or {}).get("name", "?")
     state = build.get("result") or build.get("status") or "?"
-    records = pr_build.get_timeline_records(session, remote, build["id"])
+    try:
+        records = pr_build.get_timeline_records(session, remote, build["id"])
+    except requests.HTTPError as e:
+        if e.response is None or e.response.status_code != 404:
+            raise
+        records = []  # queued / postponed: no timeline yet
     return LogSource(
         build["id"],
         pipeline,
@@ -126,9 +143,9 @@ def github_source(gh: GitHubClient, run_id: int, label: str | None, *, step: str
     run = gh.get(f"{gh.repo_path}/actions/runs/{run_id}")
     name = label or run.get("name") or "?"
     state = run.get("conclusion") or run.get("status") or "?"
-    jobs = gh.get(f"{gh.repo_path}/actions/runs/{run_id}/jobs", params={"filter": "latest", "per_page": 100})
+    jobs = gh.paginate(f"{gh.repo_path}/actions/runs/{run_id}/jobs", {"filter": "latest"}, items_key="jobs")
     sections = []
-    for job in jobs.get("jobs") or []:
+    for job in jobs:
         result = job.get("conclusion") or job.get("status") or "?"
         failed_steps = [s.get("name", "?") for s in job.get("steps") or [] if s.get("conclusion") == "failure"]
         title = job.get("name", "?") + (f" -- failed step(s): {', '.join(failed_steps)}" if failed_steps else "")
@@ -250,7 +267,7 @@ def run_github(
         runs: list[tuple[int, str | None]] = [(build_id, None)]
     else:
         checks = gh_pr.get_pr(gh, pr_id)["statusCheckRollup"]
-        runs = list(gh_pr.check_runs(checks, {"fail", "pass", "pending", "cancel", "skipping"}))
+        runs = list(gh_pr.check_runs(checks, ALL_BUCKETS))
         if not runs:
             sys.exit("No GitHub Actions runs found for this PR.")
     sources = [github_source(gh, rid, label, step=opts.step) for rid, label in runs]
