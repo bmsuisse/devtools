@@ -391,15 +391,31 @@ def test_fix_base_check_only_runs_for_main(config) -> None:
     assert plan_for(config, pr("fix/x", "dev"), labels=["test-full"], fix_base=must_not_run).kind == "full"
 
 
-def test_push_to_test_or_main_runs_nothing(config) -> None:
+def test_push_or_manual_run_of_test_or_main_runs_nothing(config) -> None:
     for branch in ("main", "test"):
-        for reason in ("IndividualCI", "BatchedCI"):
+        for reason in ("IndividualCI", "BatchedCI", "Manual"):
             assert plan_for(config, Context(branch=branch, reason=reason)).kind == "none"
 
 
+@pytest.mark.parametrize("branch", ["master", "stage"])
+def test_default_release_branches_also_cover_master_and_stage(config, branch) -> None:
+    assert plan_for(config, Context(branch=branch, reason="Manual")).kind == "none"
+
+
+def test_release_branches_can_be_overridden(repo) -> None:
+    pyproject = repo / "pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text().replace("[tool.bdt.ci.plan]\n", '[tool.bdt.ci.plan]\nrelease_branches = ["prod"]\n', 1)
+    )
+    custom = load_plan_config(repo)
+    assert custom is not None
+    assert plan_for(custom, Context(branch="prod", reason="Manual")).kind == "none"
+    assert plan_for(custom, Context(branch="main", reason="Manual")).kind == "full"
+
+
 @pytest.mark.parametrize("branch", ["main", "test"])
-@pytest.mark.parametrize("reason", ["Manual", "Schedule", ""])
-def test_manual_and_scheduled_runs_on_test_or_main_run_everything(config, branch, reason) -> None:
+@pytest.mark.parametrize("reason", ["Schedule", ""])
+def test_scheduled_and_unknown_runs_on_test_or_main_run_everything(config, branch, reason) -> None:
     assert plan_for(config, Context(branch=branch, reason=reason)).kind == "full"
 
 
@@ -650,4 +666,10 @@ def test_folder_mode_without_test_files_still_finds_suffix_tests(tmp_path) -> No
 def test_test_files_with_folders_are_rejected(tmp_path, value: str) -> None:
     (tmp_path / "pyproject.toml").write_text(f'[tool.bdt.ci.plan.tiers.e2e]\ndir = "e2e"\ntest_files = {value}\n')
     with pytest.raises(ValueError, match="no folders"):
+        load_plan_config(tmp_path)
+
+
+def test_release_branches_must_be_a_list_of_strings(tmp_path) -> None:
+    (tmp_path / "pyproject.toml").write_text('[tool.bdt.ci.plan]\nrelease_branches = "main"\n')
+    with pytest.raises(ValueError, match="release_branches"):
         load_plan_config(tmp_path)

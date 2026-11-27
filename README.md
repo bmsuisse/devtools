@@ -1004,6 +1004,7 @@ the `branching-strategy` skill). Add the table to pyproject.toml (an empty one s
 on_missing = "infer"            # PR without a usable label: infer from the changed files (default) or "fail"
 non_code = ["docs/**", "*.md"]  # files no test reads or ships; explicit per repo (full-match globs: `*.md` = root only, `**/*.md` = every folder)
                                 # the `bdt translate` source file (`[tool.bdt.translate] file`, default translations.toml) always counts too
+release_branches = ["main", "master", "test", "stage"]  # runs of these branches (push or manual) plan no tests (default as shown)
 
 [tool.bdt.ci.plan.tiers.unit]   # default tiers: unit = tests/unit, e2e = tests/e2e (a tier whose folder is missing is skipped)
 dir = "tests/unit"              # areas = sub-folders with tests (test_*.py / *_test.py); `route_planning` <-> `test-route-planning`
@@ -1039,8 +1040,8 @@ in such a repo: that would skip those tests.
 
 Order of decision, always logged with its reason:
 
-1. Not a PR: the CI run after a push (merge) to `test`/`main` runs nothing (that code was tested on its way into
-   `dev`); the nightly, manual runs (also on `test`/`main`), other branches and forks run everything. A manual run of
+1. Not a PR: a run of a release branch itself (`release_branches`, default `main`, `master`, `test`, `stage`), after a
+   push (merge) or started manually, runs nothing (that code was tested on its way into `dev`); the nightly, manual runs on other branches and forks run everything. A manual run of
    `refs/pull/<id>/merge` is planned like that PR (a fork PR still runs everything).
 2. Branch flow: promotions (`dev` -> `test`, `test` -> `main`, `main` -> `dev`) run nothing. `fix/*` / `hotfix/*` into
    `main` are tested and must be cut from `main` (no unreleased `dev` commits). `cherry/*` ports a subset of
