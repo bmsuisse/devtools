@@ -29,6 +29,7 @@ from bmsdna.devtools import pr_cancel, pr_issue_link
 from bmsdna.devtools.cli_tools import (
     CLI_TIMEOUT_SECS,
     EXIT_NEEDS_APPROVAL,
+    EXIT_WAIT_TIMEOUT,
     PollHeartbeat,
     WaitDeadline,
     detect_agent_session,
@@ -491,15 +492,20 @@ def abandon(gh: GitHubClient, reason: str, pr_id: int | None = None, session_id:
     print(f"Added an '{pr_cancel.ABANDON_PREFIX}' comment to PR #{number}")
 
 
-def get_workflow_runs_for_branch(gh: GitHubClient, branch: str, limit: int = 5) -> list[dict]:
+def get_workflow_runs_for_branch(
+    gh: GitHubClient, branch: str, limit: int = 5, head_sha: str | None = None
+) -> list[dict]:
     """Workflow runs triggered directly by a push to `branch` -- e.g. a post-merge/deployment
     workflow that only runs on the target branch once a PR merges into it -- as opposed to a
     run some open PR's `pull_request` trigger produced. `event=push` is what distinguishes the
     two on the same branch name.
 
-    Each run is `{databaseId, name, workflowName, status, conclusion, url, headBranch}`.
+    Each run is `{databaseId, name, workflowName, status, conclusion, url, headBranch, headSha}`.
     """
-    data = gh.get(f"{gh.repo_path}/actions/runs", params={"branch": branch, "event": "push", "per_page": limit})
+    params: dict[str, Any] = {"branch": branch, "event": "push", "per_page": limit}
+    if head_sha:
+        params["head_sha"] = head_sha
+    data = gh.get(f"{gh.repo_path}/actions/runs", params=params)
     return [
         {
             "databaseId": r["id"],
@@ -509,9 +515,28 @@ def get_workflow_runs_for_branch(gh: GitHubClient, branch: str, limit: int = 5) 
             "conclusion": r.get("conclusion"),
             "url": r.get("html_url"),
             "headBranch": r.get("head_branch"),
+            "headSha": r.get("head_sha"),
         }
         for r in (data.get("workflow_runs") or [])[:limit]
     ]
+
+
+def branch_tip(gh: GitHubClient, branch: str) -> str | None:
+    """The commit `branch` points at now; None if there is no such branch."""
+    r = gh.request("GET", f"{gh.repo_path}/git/ref/heads/{quote(branch, safe='/')}", ok=(404,))
+    return None if r.status_code == 404 else r.json()["object"]["sha"]
+
+
+def note_other_waiting_runs(gh: GitHubClient, branch: str, merge_commit: str) -> None:
+    """Mention runs of older commits that wait for a reviewer: worth knowing, but nothing this merge waits on."""
+    others = [r for r in get_workflow_runs_for_branch(gh, branch, limit=20) if r.get("headSha") != merge_commit]
+    for r in latest_per_workflow(others):
+        if r.get("status") == "waiting":
+            print(
+                f"Note: {r.get('workflowName') or r.get('name') or '?'} #{r['databaseId']} (commit "
+                f"{(r.get('headSha') or '?')[:8]}, not this merge) waits for a reviewer to approve the deployment "
+                f"— {r.get('url', '?')}"
+            )
 
 
 def latest_per_workflow(runs: list[dict]) -> list[dict]:
@@ -734,23 +759,49 @@ def print_run(gh: GitHubClient, run: dict) -> None:
         print_failed_step_logs(gh, run_id)
 
 
-def run_watch_deploy(gh: GitHubClient, target_branch: str, wait: bool) -> None:
-    """Watch the most recent workflow run(s) triggered directly by a push to `target_branch`
-    -- e.g. a post-merge workflow that only runs on the target branch once a PR merges into
-    it, and usually does the actual deployment -- until they complete.
+DEPLOY_APPEAR_TIMEOUT_SECS = 600  # how long `watch-deploy --wait` waits for the merge's first run to be queued
 
-    Mirrors `run()`'s polling/reporting shape, but looks at runs tied to the branch's push
-    event via `get_workflow_runs_for_branch` rather than a PR's `statusCheckRollup`.
+
+def run_watch_deploy(gh: GitHubClient, target_branch: str, wait: bool) -> None:
+    """Watch the workflow run(s) of the commit `target_branch` points at now -- normally the merge that just landed,
+    whose post-merge workflow usually does the actual deployment -- until they complete.
+
+    Mirrors `run()`'s polling/reporting shape, but looks at runs tied to the branch's push event via
+    `get_workflow_runs_for_branch`, asking for those of that commit only. With --wait, a merge whose
+    run isn't queued yet is waited for, up to `DEPLOY_APPEAR_TIMEOUT_SECS`.
     """
+    merge_commit = branch_tip(gh, target_branch)
+    if merge_commit is None:
+        sys.exit(f"No branch '{target_branch}' in {gh.repo_path} (or the token cannot read the repository contents).")
+
     heartbeat = PollHeartbeat()
+    appear_by = time.monotonic() + DEPLOY_APPEAR_TIMEOUT_SECS
+    others_noted = False
     while True:
-        runs = get_workflow_runs_for_branch(gh, target_branch)
+        runs = get_workflow_runs_for_branch(gh, target_branch, head_sha=merge_commit)
+        if not others_noted:
+            note_other_waiting_runs(gh, target_branch, merge_commit)
+            others_noted = True
         if not runs:
-            print(f"No workflow runs found on '{target_branch}' triggered by a push.")
-            return
+            msg = f"\rBranch '{target_branch}' at {merge_commit[:8]} | no workflow run of this commit yet"
+            if not wait:
+                print(
+                    f"{msg}.\n\nTip: Use --wait to wait up to {DEPLOY_APPEAR_TIMEOUT_SECS // 60} min for one to start."
+                )
+                return
+            if time.monotonic() > appear_by:
+                print(msg)
+                print(
+                    f"\nNo workflow run of {merge_commit[:8]} started on '{target_branch}' within "
+                    f"{DEPLOY_APPEAR_TIMEOUT_SECS // 60} min: this branch may have no post-merge workflow."
+                )
+                sys.exit(EXIT_WAIT_TIMEOUT)
+            heartbeat.show(f"{msg}, waiting up to {DEPLOY_APPEAR_TIMEOUT_SECS // 60} min for one to start")
+            time.sleep(30)
+            continue
 
         latest_runs = latest_per_workflow(runs)
-        msg = f"\rBranch '{target_branch}' | " + ", ".join(
+        msg = f"\rBranch '{target_branch}' at {merge_commit[:8]} | " + ", ".join(
             f"{(r.get('workflowName') or r.get('name'))} #{r['databaseId']} {r.get('status')} ({r.get('conclusion') or '—'})"
             for r in latest_runs
         )

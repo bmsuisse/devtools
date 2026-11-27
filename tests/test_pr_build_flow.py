@@ -404,6 +404,7 @@ def make_builds_session_with_timeline(builds: list[dict], timeline_records: list
     session = MagicMock()
 
     def fake_get(url, params=None, **kwargs):
+        params = params or {}
         if url.endswith("/_apis/build/builds"):
             return FakeResponse({"value": builds})
         if "/timeline" in url:
@@ -429,9 +430,7 @@ def test_run_watch_deploy_follows_the_merge_run_not_an_older_run_parked_on_appro
     run_watch_deploy(REMOTE, "fake-pat", "main", wait=True)
 
     out = capsys.readouterr().out
-    assert (
-        "Note: Infra #300 (commit 0ld0c0mm, not this merge) waits for approval of stage 'Deploy to Production'" in out
-    )
+    assert "Note: Infra #300 (commit 0ld0c0mm, not this merge): stage 'Deploy to Production' needs approval" in out
     assert "Deploy #99" in out and "Infra #300" not in out.split("Note:")[1].split("\n", 1)[1]
 
 
@@ -451,6 +450,47 @@ def test_run_watch_deploy_wait_stops_and_reports_pending_approval(monkeypatch, c
     assert exc_info.value.code == EXIT_NEEDS_APPROVAL
     out = capsys.readouterr().out
     assert "Deploy to Production" in out
+
+
+def test_run_watch_deploy_wait_reports_a_resource_authorization_gate_as_such(monkeypatch, capsys) -> None:
+    """A first-time "permit this pipeline to use a secret" gate blocks the merge's run: exit 3 with the build link and
+    the right action, not "approve a stage"."""
+    blocked_build = {**DEPLOY_BUILD, "id": 200, "status": "inProgress", "result": None}
+    authorization = {**PENDING_APPROVAL_RECORD, "type": "Checkpoint.Authorization", "name": "Checkpoint.Authorization"}
+    session = make_builds_session_with_timeline([blocked_build], [STAGE_RECORD, CHECKPOINT_RECORD, authorization])
+    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: session)
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_watch_deploy(REMOTE, "fake-pat", "main", wait=True)
+
+    assert exc_info.value.code == EXIT_NEEDS_APPROVAL
+    out = capsys.readouterr().out
+    assert "stage 'Deploy to Production' waits for a resource authorization" in out
+    assert "needs approval" not in out
+    assert "/_build/results?buildId=200" in out
+
+
+def test_run_watch_deploy_finds_the_merge_run_behind_many_newer_builds(monkeypatch, capsys) -> None:
+    """The merge's run is not among the newest 20 builds of the branch (a busy branch): it must still be found."""
+    newer = [
+        {**DEPLOY_BUILD, "id": 1000 - i, "sourceVersion": f"other{i}", "definition": {"id": 50 + i, "name": f"P{i}"}}
+        for i in range(30)
+    ]
+    session = make_builds_session_with_timeline([*newer, DEPLOY_BUILD], [])
+    plain_get = session.get.side_effect
+
+    def limited_get(url, params=None, **kwargs):
+        if url.endswith("/_apis/build/builds") and params:
+            builds = [*newer, DEPLOY_BUILD][: params["$top"]]
+            return FakeResponse({"value": builds})
+        return plain_get(url, params=params, **kwargs)
+
+    session.get.side_effect = limited_get
+    monkeypatch.setattr("bmsdna.devtools.pr_build.requests.Session", lambda: session)
+
+    run_watch_deploy(REMOTE, "fake-pat", "main", wait=False)
+
+    assert "Deploy #99" in capsys.readouterr().out
 
 
 def test_run_watch_deploy_wait_exits_1_not_2_when_another_pipeline_already_failed(monkeypatch, capsys) -> None:

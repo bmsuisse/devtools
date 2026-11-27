@@ -1004,6 +1004,14 @@ def approval_stage_name(records: list, approval_record: dict) -> str:
     return (stage or {}).get("name") or approval_record.get("name") or "?"
 
 
+def gate_wait_text(records: list, rec: dict) -> str:
+    """What a pending gate waits for: a stage approval, or a first-time permit for the pipeline to use a resource."""
+    stage = approval_stage_name(records, rec)
+    if rec.get("name") == CHECKPOINT_AUTHORIZATION_NAME:
+        return f"stage '{stage}' waits for a resource authorization (permit the pipeline to use a secret / service connection)"
+    return f"stage '{stage}' needs approval"
+
+
 def find_pending_approvals(session: requests.Session, remote: AdoRemote, builds: list) -> list:
     """(build, timeline records, pending approval records) for each build that's actually
     blocked on a stage approval, not just still running.
@@ -1358,9 +1366,8 @@ def exit_if_blocked_on_approval(
     for build, records, approvals in pending_approvals:
         pipeline_name = build.get("definition", {}).get("name", "?")
         for rec in approvals:
-            stage = approval_stage_name(records, rec)
             print(
-                f"  {pipeline_name} #{build['id']}: stage '{stage}' needs approval — {build_web_url(remote, build['id'])}"
+                f"  {pipeline_name} #{build['id']}: {gate_wait_text(records, rec)} — {build_web_url(remote, build['id'])}"
             )
     if already_failed:
         print("\nDetails:")
@@ -1369,7 +1376,7 @@ def exit_if_blocked_on_approval(
         if show_retry_hint:
             print(f"\n{retry_hint()}")
         sys.exit(1)
-    print(f"\nApprove at the link(s) above, then re-run `{rerun_cmd}`.")
+    print(f"\nApprove (or authorize) at the link(s) above, then re-run `{rerun_cmd}`.")
     sys.exit(EXIT_NEEDS_APPROVAL)
 
 
@@ -1573,6 +1580,7 @@ def _status(
             deadline.sleep(30)
 
 
+WATCH_DEPLOY_BUILDS = 100  # newest branch builds to scan for the merge's own (ADO cannot filter builds by commit)
 DEPLOY_APPEAR_TIMEOUT_SECS = 600  # how long `watch-deploy --wait` waits for the merge's first run to be queued
 
 
@@ -1588,8 +1596,8 @@ def note_other_pending_approvals(session: requests.Session, remote: AdoRemote, b
         name = build.get("definition", {}).get("name", "?")
         for rec in approvals:
             print(
-                f"Note: {name} #{build['id']} (commit {build.get('sourceVersion', '?')[:8]}, not this merge) waits for "
-                f"approval of stage '{approval_stage_name(records, rec)}' — {build_web_url(remote, build['id'])}"
+                f"Note: {name} #{build['id']} (commit {build.get('sourceVersion', '?')[:8]}, not this merge): "
+                f"{gate_wait_text(records, rec)} — {build_web_url(remote, build['id'])}"
             )
 
 
@@ -1610,7 +1618,7 @@ def run_watch_deploy(remote: AdoRemote, pat: str | None, target_branch: str, wai
     appear_by = time.monotonic() + DEPLOY_APPEAR_TIMEOUT_SECS
     others_noted = False
     while True:
-        builds = _poll_or_exit(get_builds_for_branch, session, remote, target_branch, top=20)
+        builds = _poll_or_exit(get_builds_for_branch, session, remote, target_branch, top=WATCH_DEPLOY_BUILDS)
         own = builds_of_commit(builds, merge_commit)
         if not others_noted:
             note_other_pending_approvals(session, remote, [b for b in builds if b not in own])

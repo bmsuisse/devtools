@@ -3,11 +3,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from bmsdna.devtools.cli_tools import CLI_TIMEOUT_SECS, EXIT_NEEDS_APPROVAL
+from bmsdna.devtools.cli_tools import CLI_TIMEOUT_SECS, EXIT_NEEDS_APPROVAL, EXIT_WAIT_TIMEOUT
 from bmsdna.devtools.gh_pr import (
     CLI_UPLOAD_TIMEOUT_SECS,
     add_attachments,
     add_files,
+    branch_tip,
     check_bucket,
     check_label,
     comment_with_screenshots,
@@ -44,6 +45,17 @@ class FakeResponse:
     def __init__(self, text: str = "", status_code: int = 200) -> None:
         self.text = text
         self.status_code = status_code
+
+
+class RefResponse:
+    """What `GET git/ref/heads/<branch>` answers: the branch's commit, or 404 when `sha` is None."""
+
+    def __init__(self, sha: str | None) -> None:
+        self.sha = sha
+        self.status_code = 200 if sha else 404
+
+    def json(self) -> dict:
+        return {"object": {"sha": self.sha}}
 
 
 class FakeGH(GitHubClient):
@@ -1046,6 +1058,7 @@ REST_DEPLOY_RUN = {
     "conclusion": "success",
     "html_url": "https://github.com/owner/repo/actions/runs/555",
     "head_branch": "main",
+    "head_sha": "mergesha",
 }
 
 
@@ -1056,6 +1069,20 @@ def test_get_workflow_runs_for_branch_filters_by_branch_and_push_event() -> None
 
     assert runs == [DEPLOY_RUN]
     assert gh.sent("GET", RUNS) == [{"branch": "main", "event": "push", "per_page": 3}]
+
+
+def test_get_workflow_runs_for_branch_can_ask_for_one_commit() -> None:
+    gh = FakeGH({("GET", RUNS): {"workflow_runs": []}})
+
+    get_workflow_runs_for_branch(gh, "main", head_sha="abc")  # type: ignore[arg-type]
+
+    assert gh.sent("GET", RUNS) == [{"branch": "main", "event": "push", "per_page": 5, "head_sha": "abc"}]
+
+
+def test_branch_tip_reads_the_ref_and_is_none_for_a_missing_branch() -> None:
+    ref = "repos/owner/repo/git/ref/heads/feature/x"
+    assert branch_tip(FakeGH({("GET", ref): RefResponse("abc")}), "feature/x") == "abc"  # type: ignore[arg-type]
+    assert branch_tip(FakeGH({("GET", ref): RefResponse(None)}), "feature/x") is None  # type: ignore[arg-type]
 
 
 def test_get_workflow_runs_for_branch_exits_on_api_failure() -> None:
@@ -1122,10 +1149,19 @@ def _runs_gh(runs_json: list[dict], **extra) -> FakeGH:
             "conclusion": r["conclusion"],
             "html_url": r["url"],
             "head_branch": "main",
+            "head_sha": r.get("headSha", "mergesha"),
         }
         for r in runs_json
     ]
-    return FakeGH({("GET", RUNS): {"workflow_runs": rest}, **extra})
+    return FakeGH(
+        {
+            ("GET", RUNS): lambda params: {
+                "workflow_runs": [r for r in rest if r["head_sha"] == params.get("head_sha", r["head_sha"])]
+            },
+            ("GET", "repos/owner/repo/git/ref/heads/main"): RefResponse("mergesha"),
+            **extra,
+        }
+    )
 
 
 def _no_logs(monkeypatch) -> None:
@@ -1143,7 +1179,36 @@ def test_run_watch_deploy_prints_completed_run_and_returns_without_wait(capsys) 
 def test_run_watch_deploy_no_runs_prints_message_and_returns(capsys) -> None:
     run_watch_deploy(_runs_gh([]), "main", wait=False)  # type: ignore[arg-type]
 
-    assert "No workflow runs found on 'main'" in capsys.readouterr().out
+    assert "no workflow run of this commit yet" in capsys.readouterr().out
+
+
+def test_run_watch_deploy_follows_the_merge_run_not_an_older_run_parked_on_approval(capsys) -> None:
+    parked = {**DEPLOY_RUN, "databaseId": 300, "workflowName": "Infra", "status": "waiting", "conclusion": None}
+    parked["headSha"] = "0ld0c0mm1t"
+
+    run_watch_deploy(_runs_gh([parked, DEPLOY_RUN]), "main", wait=True)  # type: ignore[arg-type]
+
+    out = capsys.readouterr().out
+    assert "Note: Infra #300 (commit 0ld0c0mm, not this merge) waits for a reviewer" in out
+    assert "Deploy #555" in out and "Infra #300" not in out.split("Note:")[1].split("\n", 1)[1]
+
+
+def test_run_watch_deploy_wait_exits_4_when_the_merge_never_gets_a_run(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("bmsdna.devtools.gh_pr.DEPLOY_APPEAR_TIMEOUT_SECS", -1)
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_watch_deploy(_runs_gh([]), "main", wait=True)  # type: ignore[arg-type]
+
+    assert exc_info.value.code == EXIT_WAIT_TIMEOUT
+    assert "No workflow run of mergesha started on 'main'" in capsys.readouterr().out
+
+
+def test_run_watch_deploy_exits_when_the_branch_does_not_exist() -> None:
+    gh = _runs_gh([])
+    gh.routes[("GET", "repos/owner/repo/git/ref/heads/main")] = RefResponse(None)
+
+    with pytest.raises(SystemExit, match="No branch 'main'"):
+        run_watch_deploy(gh, "main", wait=False)  # type: ignore[arg-type]
 
 
 def test_run_watch_deploy_exits_1_on_failed_run(monkeypatch) -> None:
@@ -1272,6 +1337,7 @@ DEPLOY_RUN = {
     "conclusion": "success",
     "url": "https://github.com/owner/repo/actions/runs/555",
     "headBranch": "main",
+    "headSha": "mergesha",
 }
 
 
