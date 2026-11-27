@@ -6,6 +6,7 @@ Configured under `[tool.bdt.ci.plan]` in pyproject.toml (the table must exist, e
     on_missing = "infer"            # PR without a usable label: "infer" from the changed files (default) or "fail"
     non_code = ["docs/**", "*.md"]  # files no test reads or ships; explicit per repo (`*.md` = root only, `**/*.md` = all)
                                     # (the `bdt translate` file, translations.toml, is always one of them)
+    release_branches = ["main", "master", "test", "stage"]  # runs of these (push or manual) plan no tests (default as shown)
 
     [tool.bdt.ci.plan.tiers.unit]   # default tiers: unit = tests/unit, e2e = tests/e2e
     dir = "tests/unit"              # areas = sub-folders with tests (snake_case folder <-> kebab-case label)
@@ -24,8 +25,9 @@ to that folder, so a file outside it is a `../` path: own it with `paths` (`infr
 Labels: `test-<area>`, `test-full` (everything), `test-none` (no tests; lint and build still run). The legacy
 `e2e-<area>` labels count as `test-<area>`. Order of decision (the reason is always reported):
 
-1. Not a PR: the CI run after a push (merge) to `test`/`main` runs nothing (promoted code was tested on its way
-   into `dev`); anything else (nightly, manual runs, other branches) and forks run everything.
+1. Not a PR: a run of a release branch itself (`release_branches`, default main, master, test, stage), after a push or
+   started manually, runs nothing (promoted code was tested on its way into `dev`); anything else (nightly, manual runs
+   on other branches) and forks run everything.
 2. Branch flow: promotions (dev -> test -> main -> dev) run nothing; `fix/*` and `hotfix/*` into `main` are tested and `cherry/*` (a subset of `test` ported to `main`) runs
    the full suite whatever its label; both must be cut from `main`; any other PR into `test`/`main` is an error.
 3. PR labels decide. Without a usable label the changed files decide (`on_missing = "infer"`): nothing changed or
@@ -59,7 +61,9 @@ LONG_LIVED = frozenset({"dev", "test", "main"})
 PROMOTIONS = frozenset({("dev", "test"), ("test", "main"), ("main", "dev")})
 FIX_PREFIXES = ("fix/", "hotfix/")
 PORT_PREFIXES = ("cherry/",)  # a subset of test cherry-picked onto a branch cut from main
-PUSH_REASONS = frozenset({"IndividualCI", "BatchedCI"})  # a merge landed on the branch: deploy only
+DEFAULT_RELEASE_BRANCHES = ("main", "master", "test", "stage")  # environment branches: code lands here after dev
+# A merge landed on the branch, or a manual re-run of it: deploy only.
+PUSH_REASONS = frozenset({"IndividualCI", "BatchedCI", "Manual"})
 INFRA_AREA = "infra"  # owns `infra/**` by default when the repo has an infra/ folder; usually has no tests
 RESERVED_AREAS = frozenset({"full", "none"})  # test-full / test-none are the control labels
 
@@ -157,6 +161,7 @@ class PlanConfig:
     on_missing: OnMissing = "infer"
     non_code: tuple[str, ...] = ()
     paths: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    release_branches: tuple[str, ...] = DEFAULT_RELEASE_BRANCHES
 
     def all_areas(self) -> set[str]:
         """Areas with tests in a tier, plus areas that only own paths (such as `infra`, which may have no tests)."""
@@ -228,6 +233,7 @@ def load_plan_config(start: Path | None = None) -> PlanConfig | None:
     if (pyproject.parent / "infra").is_dir():
         paths.setdefault(INFRA_AREA, ("infra/**",))
     non_code = _strings(raw.get("non_code", []), "non_code")
+    release_branches = _strings(raw.get("release_branches", list(DEFAULT_RELEASE_BRANCHES)), "release_branches")
     if translations := _translations_file(start):
         non_code += (glob.escape(translations),)
     config = PlanConfig(
@@ -236,6 +242,7 @@ def load_plan_config(start: Path | None = None) -> PlanConfig | None:
         on_missing=on_missing,
         non_code=non_code,
         paths=paths,
+        release_branches=release_branches,
     )
     if clash := sorted(config.all_areas() & RESERVED_AREAS):
         raise ValueError(
@@ -394,10 +401,10 @@ def make_plan(
     """The decision. The three callables are the only I/O: PR labels, changed files, and the fix-branch base check
     (raises BranchFlowError on a violation). Unreadable inputs (OSError, ValueError, RuntimeError) select everything."""
     if ctx.pr_id is None:
-        if ctx.branch in {"test", "main"} and ctx.reason in PUSH_REASONS:
+        if ctx.branch in config.release_branches and ctx.reason in PUSH_REASONS:
             return Plan(
                 "none",
-                f"push to {ctx.branch}: that code was tested on its way into dev, deploy only",
+                f"{ctx.reason or 'run'} of {ctx.branch}: that code was tested on its way into dev, deploy only",
             )
         return _full(config, "not a PR build")
     if ctx.is_fork:
