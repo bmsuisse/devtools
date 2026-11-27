@@ -40,6 +40,7 @@ from bmsdna.devtools import (
 )
 from bmsdna.devtools import api_usage as api_usage_mod
 from bmsdna.devtools import business_user as business_user_mod
+from bmsdna.devtools import ci_warnings as ci_warnings_mod
 from bmsdna.devtools import cleanup_claude as cleanup_claude_mod
 from bmsdna.devtools import cleanup_scan as cleanup_scan_mod
 from bmsdna.devtools import commit as commit_mod
@@ -2203,6 +2204,18 @@ def ci_plan_cmd(
     if bool(pr_source) != bool(pr_target):
         raise typer.BadParameter("--pr-source and --pr-target go together")
     raise typer.Exit(ci_plan_env.run(pr_source, pr_target, label))
+
+
+@ci_app.command("warnings", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def ci_warnings_cmd(
+    command: list[str] = typer.Argument(..., help="The command to run, after `--`: `bdt ci warnings -- bun run build`"),
+) -> None:
+    """Run a command and report the warnings it only prints to the CI system (a pipeline warning on Azure
+    Pipelines, an annotation on GitHub Actions), so `bdt pr status` counts them and `bdt pr warnings` lists them.
+    Recognises vite/rolldown (`[INEFFECTIVE_DYNAMIC_IMPORT] ...`, `(!) ...`) and the `warnings summary` of pytest.
+    The output is passed through as it comes and the command's exit code is kept.
+    """
+    raise typer.Exit(ci_warnings_mod.run(command))
 
 
 @app.command("lint")

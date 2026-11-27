@@ -189,6 +189,14 @@ def test_requeue_queues_cancelled_and_failed_pipelines_only(monkeypatch, capsys)
     assert "Queued build #203 (CI)" in capsys.readouterr().out
 
 
+def test_requeue_treats_a_build_that_only_reported_warnings_as_succeeded(monkeypatch) -> None:
+    _plumbing(monkeypatch, [{**SUCCEEDED, "result": "partiallySucceeded"}])
+    monkeypatch.setattr("bmsdna.devtools.pr_build.queue_build", lambda *a: pytest.fail("nothing to requeue"))
+
+    with pytest.raises(SystemExit, match="nothing to requeue"):
+        pr_build.requeue(REMOTE, "pat", None, source_branch="feature-x")
+
+
 def test_requeue_all_includes_succeeded_builds(monkeypatch) -> None:
     _plumbing(monkeypatch, [SUCCEEDED])
     queued: list[int] = []

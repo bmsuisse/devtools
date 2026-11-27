@@ -1,5 +1,6 @@
 """The warnings of a build (Azure DevOps timeline issues) / workflow run (GitHub check-run annotations):
-counted for `bdt pr status`, listed by `bdt pr warnings`."""
+counted for `bdt pr status`, listed by `bdt pr warnings`. Tools that only print their warnings are scanned by
+`tool_warnings`, which `bdt ci warnings` uses to report them to the CI system in the first place."""
 
 from __future__ import annotations
 
@@ -12,6 +13,10 @@ import requests
 from bmsdna.devtools.github_api import GitHubClient
 
 LOG_WARNING_RE = re.compile(r"##\[warning\]\s*(.*)")
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+# rolldown (the bundler of vite 8) prints its warnings as `<yellow>[CODE] <reset>message`
+BUNDLER_WARNING_RE = re.compile(r"\x1b\[33m\[([A-Z][A-Z0-9_]+)\]\s*(?:\x1b\[0m)?(.+)")
+PYTEST_WARNING_RE = re.compile(r"^\s*(\S+:\d+): (\w*Warning): (.*)$")
 
 
 @dataclass(frozen=True)
@@ -30,6 +35,43 @@ def _is_task(rec: dict) -> bool:
 
 def ado_warning_issues(rec: dict) -> list[dict]:
     return [i for i in rec.get("issues") or [] if (i.get("type") or "").casefold() == "warning"]
+
+
+def _vite_warning(lines: list[str], start: int) -> str:
+    """`(!) message` plus the bullet lines under it (`- hint`)."""
+    parts = [lines[start].removeprefix("(!) ").strip()]
+    for line in lines[start + 1 :]:
+        if not line.lstrip().startswith("- "):
+            break
+        parts.append(line.strip().removeprefix("- "))
+    return " ".join(parts)
+
+
+def _pytest_warnings(lines: list[str], start: int) -> list[str]:
+    """The entries of a pytest `warnings summary` section, which ends at `-- Docs:`."""
+    found = []
+    for line in lines[start + 1 :]:
+        if line.startswith("-- Docs:"):
+            break
+        if m := PYTEST_WARNING_RE.match(line):
+            found.append(f"{m.group(1)}: {m.group(2)}: {m.group(3)}")
+    return found
+
+
+def tool_warnings(output: str) -> list[str]:
+    """What tools print for warnings, without telling the CI system: rolldown/vite (`[CODE] message`, `(!) message`)
+    and the entries of pytest's `warnings summary`, each once, in order."""
+    found: list[str] = []
+    raw_lines = output.splitlines()
+    lines = [ANSI_RE.sub("", line) for line in raw_lines]
+    for i, line in enumerate(lines):
+        if m := BUNDLER_WARNING_RE.match(raw_lines[i]):
+            found.append(f"[{m.group(1)}] {ANSI_RE.sub('', m.group(2)).strip()}")
+        elif line.startswith("(!) "):
+            found.append(_vite_warning(lines, i))
+        elif line.strip("= ") == "warnings summary":
+            found.extend(_pytest_warnings(lines, i))
+    return list(dict.fromkeys(found))
 
 
 def ado_warning_count(records: list[dict]) -> int:

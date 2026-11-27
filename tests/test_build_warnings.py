@@ -11,6 +11,7 @@ from bmsdna.devtools.build_warnings import (
     count_text,
     github_warnings,
     log_warnings,
+    tool_warnings,
 )
 from bmsdna.devtools.gitrepo import AdoRemote
 from bmsdna.devtools.pr_warnings import WarningSource, ado_source, render, to_json
@@ -46,6 +47,53 @@ def path(rec: dict) -> str:
 def test_count_text_pluralises_and_names_the_command() -> None:
     assert count_text(12, 5) == "12 Warnings (see with bdt pr warnings --build-id 5)"
     assert count_text(1, 5).startswith("1 Warning (")
+
+
+ESC = "\x1b"
+VITE_LOG = f"""$ tsc -b && vite build
+(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`:
+  - `__dirname` (vite.config.ts:48:32). Use `import.meta.dirname` instead
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.
+dist/assets/index.js   1,183.44 kB
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+{ESC}[33m[INEFFECTIVE_DYNAMIC_IMPORT] {ESC}[0mDesktop.tsx is dynamically imported by Calendar.tsx but also statically imported by Mobile.tsx.
+{ESC}[31m[UNRESOLVED_IMPORT] {ESC}[0man error, not a warning
+[plugin builtin:vite-reporter]
+"""
+PYTEST_LOG = """=============================== warnings summary ===============================
+.venv/slowapi/extension.py:720
+.venv/slowapi/extension.py:720
+  /w/.venv/slowapi/extension.py:720: DeprecationWarning: 'asyncio.iscoroutinefunction' is deprecated
+    if asyncio.iscoroutinefunction(func):
+
+tests/test_a.py::test_x
+  /w/_pytest/fixtures.py:1392: PytestRemovedIn10Warning: Session-scoped fixtures are deprecated.
+    fixturefunc = resolve_fixture_function(fixturedef, request)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+  /w/other.py:1: UserWarning: not in the summary
+"""
+
+
+def test_tool_warnings_reads_vite_and_rolldown_output() -> None:
+    assert tool_warnings(VITE_LOG) == [
+        "Your Vite config uses features that are unsupported by `configLoader: 'native'`: "
+        "`__dirname` (vite.config.ts:48:32). Use `import.meta.dirname` instead",
+        "Some chunks are larger than 500 kB after minification. Consider: Using dynamic import() to code-split the "
+        "application Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.",
+        "[INEFFECTIVE_DYNAMIC_IMPORT] Desktop.tsx is dynamically imported by Calendar.tsx but also statically "
+        "imported by Mobile.tsx.",
+    ]
+
+
+def test_tool_warnings_reads_the_pytest_warnings_summary_once_per_warning() -> None:
+    assert tool_warnings(PYTEST_LOG) == [
+        "/w/.venv/slowapi/extension.py:720: DeprecationWarning: 'asyncio.iscoroutinefunction' is deprecated",
+        "/w/_pytest/fixtures.py:1392: PytestRemovedIn10Warning: Session-scoped fixtures are deprecated.",
+    ]
+    assert tool_warnings("all good\n") == []
 
 
 def test_ado_warning_count_uses_task_counts_not_the_aggregating_job_count() -> None:

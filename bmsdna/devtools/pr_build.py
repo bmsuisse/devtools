@@ -54,6 +54,9 @@ BAD_MERGE_STATUSES = {
     "rejectedByPolicy": "merge was rejected by branch policy",
 }
 
+# a build whose steps reported warnings ends `partiallySucceeded`; it still passes policies and `succeeded()` conditions
+SUCCESS_RESULTS = ("succeeded", "partiallySucceeded")
+
 
 def _base_url(remote: AdoRemote) -> str:
     return f"https://dev.azure.com/{remote.org}/{quote(remote.project, safe='')}"
@@ -1259,7 +1262,9 @@ def requeue(
 
     latest = latest_per_pipeline(builds)
     todo = [
-        b for b in latest if b.get("status") == "completed" and (include_succeeded or b.get("result") != "succeeded")
+        b
+        for b in latest
+        if b.get("status") == "completed" and (include_succeeded or b.get("result") not in SUCCESS_RESULTS)
     ]
     if not todo:
         running = [b for b in latest if b.get("status") != "completed"]
@@ -1324,7 +1329,7 @@ def print_build(session: requests.Session, remote: AdoRemote, build: dict) -> No
     finish = build.get("finishTime", "?")
     source_version = build.get("sourceVersion", "?")[:8]
 
-    icon = {"succeeded": "✓", "failed": "✗", "canceled": "⊘"}.get(result, "…")
+    icon = {"succeeded": "✓", "partiallySucceeded": "✓", "failed": "✗", "canceled": "⊘"}.get(result, "…")
 
     print(f"\n{'-' * 60}")
     print(f"Build #{build_id}  [{icon} {result.upper()}]")
