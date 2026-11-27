@@ -40,6 +40,7 @@ from bmsdna.devtools import (
 )
 from bmsdna.devtools import api_usage as api_usage_mod
 from bmsdna.devtools import business_user as business_user_mod
+from bmsdna.devtools import ci_warnings as ci_warnings_mod
 from bmsdna.devtools import cleanup_claude as cleanup_claude_mod
 from bmsdna.devtools import cleanup_scan as cleanup_scan_mod
 from bmsdna.devtools import commit as commit_mod
@@ -55,6 +56,7 @@ from bmsdna.devtools import logs as logs_mod
 from bmsdna.devtools import pr_info as pr_info_mod
 from bmsdna.devtools import pr_list as pr_list_mod
 from bmsdna.devtools import pr_logs as pr_logs_mod
+from bmsdna.devtools import pr_warnings as pr_warnings_mod
 from bmsdna.devtools import pull as pull_mod
 from bmsdna.devtools import translate as translate_mod
 from bmsdna.devtools import worktree as worktree_mod
@@ -810,6 +812,47 @@ def pr_logs(
         build_id=build_id,
         opts=opts,
     )
+
+
+@pr_app.command("warnings")
+def pr_warnings(
+    build_id_arg: int | None = typer.Argument(
+        None, metavar="[BUILD_ID]", help="Same as --build-id (default: the PR's latest build per pipeline)"
+    ),
+    target_branch: str | None = typer.Option(None, "--target-branch", help=_LOOKUP_TARGET_HELP),
+    pr_id: int | None = typer.Option(None, "--pr-id", help=_PR_ID_HELP),
+    build_id: int | None = typer.Option(
+        None,
+        "--build-id",
+        "--run-id",
+        help="Show this Azure DevOps build / GitHub Actions run directly instead of the PR's latest ones",
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Print machine-readable JSON instead of text"),
+    pat: str | None = typer.Option(
+        None,
+        "--pat",
+        envvar=["AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT"],
+        help="Azure DevOps PAT (else uses DefaultAzureCredential, e.g. your `az login`)",
+    ),
+) -> None:
+    """List the warnings of the PR's builds (Azure DevOps) / workflow runs (GitHub, auto-detected), by step:
+    the ones `bdt pr status` only counts. The PR is the one opened from the current branch, or --pr-id;
+    --build-id picks one build/run directly.
+    """
+    if build_id_arg is not None and build_id is not None and build_id_arg != build_id:
+        raise typer.BadParameter("BUILD_ID and --build-id differ; give only one", param_hint="--build-id")
+    build_id = build_id if build_id is not None else build_id_arg
+    remote = current_remote()
+    if isinstance(remote, GitHubRemote):
+        gh = require_gh()
+        pr_warnings_mod.run_github(
+            gh,
+            pr_id=None if build_id else gh_pr.resolve_pr_id(gh, pr_id, target_branch),
+            build_id=build_id,
+            as_json=as_json,
+        )
+        return
+    pr_warnings_mod.run_ado(remote, pat, target_branch, pr_id=pr_id, build_id=build_id, as_json=as_json)
 
 
 @pr_app.command("info")
@@ -2161,6 +2204,18 @@ def ci_plan_cmd(
     if bool(pr_source) != bool(pr_target):
         raise typer.BadParameter("--pr-source and --pr-target go together")
     raise typer.Exit(ci_plan_env.run(pr_source, pr_target, label))
+
+
+@ci_app.command("warnings", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def ci_warnings_cmd(
+    command: list[str] = typer.Argument(..., help="The command to run, after `--`: `bdt ci warnings -- bun run build`"),
+) -> None:
+    """Run a command and report the warnings it only prints to the CI system (a pipeline warning on Azure
+    Pipelines, an annotation on GitHub Actions), so `bdt pr status` counts them and `bdt pr warnings` lists them.
+    Recognises vite/rolldown (`[INEFFECTIVE_DYNAMIC_IMPORT] ...`, `(!) ...`) and the `warnings summary` of pytest.
+    The output is passed through as it comes and the command's exit code is kept.
+    """
+    raise typer.Exit(ci_warnings_mod.run(command))
 
 
 @app.command("lint")

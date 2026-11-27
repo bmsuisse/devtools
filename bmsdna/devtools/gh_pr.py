@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from bmsdna.devtools import pr_cancel, pr_issue_link
+from bmsdna.devtools import build_warnings, pr_cancel, pr_issue_link
 from bmsdna.devtools.cli_tools import (
     CLI_TIMEOUT_SECS,
     EXIT_NEEDS_APPROVAL,
@@ -578,6 +578,21 @@ def print_check(check: dict) -> None:
     print(f"  [{icon} {bucket.upper()}] {check_label(check)}")
 
 
+def print_warning_counts(gh: GitHubClient, checks: list[dict]) -> None:
+    """Best-effort: the warning count of each finished run behind `checks`, if it has any."""
+    lines = []
+    for run_id, label in check_runs(checks, {"pass", "fail", "cancel"}):
+        try:
+            count = len(build_warnings.github_warnings(gh, run_id))
+        except SystemExit:
+            continue
+        if count:
+            lines.append(f"  Run #{run_id} ({label}): {build_warnings.count_text(count, run_id)}")
+    if lines:
+        print("\nWarnings:")
+        print("\n".join(lines))
+
+
 def exit_needs_approval(msg: str, item_lines: list[str], rerun_cmd: str) -> None:
     """Print the "Waiting for approval" report for already-formatted `item_lines` and exit
     EXIT_NEEDS_APPROVAL -- shared by `run()` and `run_watch_deploy()`, which differ only in
@@ -687,6 +702,7 @@ def _status(gh: GitHubClient, wait: bool, pr_id: int | None, timeout: float, dea
         print("\nDetails:")
         for c in checks:
             print_check(c)
+        print_warning_counts(gh, checks)
 
         cancelled = cancellation(gh, pr["number"], checks) if "cancel" in buckets else None
         if cancelled is not None:

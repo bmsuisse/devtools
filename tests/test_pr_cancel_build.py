@@ -189,6 +189,14 @@ def test_requeue_queues_cancelled_and_failed_pipelines_only(monkeypatch, capsys)
     assert "Queued build #203 (CI)" in capsys.readouterr().out
 
 
+def test_requeue_treats_a_build_that_only_reported_warnings_as_succeeded(monkeypatch) -> None:
+    _plumbing(monkeypatch, [{**SUCCEEDED, "result": "partiallySucceeded"}])
+    monkeypatch.setattr("bmsdna.devtools.pr_build.queue_build", lambda *a: pytest.fail("nothing to requeue"))
+
+    with pytest.raises(SystemExit, match="nothing to requeue"):
+        pr_build.requeue(REMOTE, "pat", None, source_branch="feature-x")
+
+
 def test_requeue_all_includes_succeeded_builds(monkeypatch) -> None:
     _plumbing(monkeypatch, [SUCCEEDED])
     queued: list[int] = []
@@ -826,7 +834,12 @@ def test_github_wait_with_a_cancelled_run_reports_and_exits_1(monkeypatch, capsy
         },
     )
     monkeypatch.setattr("bmsdna.devtools.gh_pr.deploy_run_hint", lambda *a: None)
-    gh = GH({("GET", COMMENTS): [{"body": pr_cancel.comment_body("deploy raced", [("CI", 8, "u")])}]})
+    gh = GH(
+        {
+            ("GET", COMMENTS): [{"body": pr_cancel.comment_body("deploy raced", [("CI", 8, "u")])}],
+            ("GET", "repos/owner/repo/actions/runs/8/jobs"): [],
+        }
+    )
 
     with pytest.raises(SystemExit) as exc_info:
         gh_pr.run(gh, True, pr_id=9)  # type: ignore[arg-type]
