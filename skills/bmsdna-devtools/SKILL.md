@@ -179,6 +179,7 @@ from the current branch, or one build/run by `BUILD_ID` (`--build-id`). Every st
 line, failed ones with their log; `--all` prints succeeded logs too, `--step TEXT` prints the matching steps' logs,
 `--tail N` keeps the last N lines of each, `--list` never prints a log, `--json` is machine-readable (`log` is null
 where none is printed). Start here when `bdt pr status` reports a failure; GitHub has one log per job, not per step.
+`bdt pr status` also counts warnings (`12 Warnings (see with bdt pr warnings --build-id N)`); `bdt pr warnings [BUILD_ID]` lists them.
 
 ## PR summary
 

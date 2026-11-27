@@ -12,7 +12,7 @@ from urllib.parse import quote
 
 import requests
 
-from bmsdna.devtools import pr_cancel, pr_drift
+from bmsdna.devtools import build_warnings, pr_cancel, pr_drift
 from bmsdna.devtools.ado_auth import AdoAuthError, ado_session
 from bmsdna.devtools.cli_tools import (
     EXIT_NEEDS_APPROVAL,
@@ -1037,15 +1037,7 @@ def find_pending_approvals(session: requests.Session, remote: AdoRemote, builds:
     return result
 
 
-def get_failed_step_logs(session: requests.Session, remote: AdoRemote, build_id: int) -> None:
-    r = session.get(
-        f"{_base_url(remote)}/_apis/build/builds/{build_id}/timeline",
-        params={"api-version": "7.1"},
-        timeout=HTTP_TIMEOUT_SECS,
-    )
-    r.raise_for_status()
-    records = r.json().get("records", [])
-
+def get_failed_step_logs(session: requests.Session, build_id: int, records: list) -> None:
     failed = [rec for rec in records if rec.get("result") == "failed" and rec.get("type") == "Task" and rec.get("log")]
 
     if not failed:
@@ -1061,6 +1053,16 @@ def get_failed_step_logs(session: requests.Session, remote: AdoRemote, build_id:
         r2.raise_for_status()
         for line in r2.text.splitlines():
             print(f"    {TIMESTAMP_RE.sub('', line)}")
+
+
+def warning_count_or_none(session: requests.Session, remote: AdoRemote, build: dict) -> int | None:
+    """Best-effort: a build that has not started has no timeline, and the count is not worth failing a status over."""
+    if build.get("status") in ("notStarted", "postponed"):
+        return None
+    try:
+        return build_warnings.ado_warning_count(get_timeline_records(session, remote, build["id"]))
+    except requests.RequestException:
+        return None
 
 
 def retry_failed_build(session: requests.Session, remote: AdoRemote, build_id: int) -> None:
@@ -1333,8 +1335,14 @@ def print_build(session: requests.Session, remote: AdoRemote, build: dict) -> No
     print(f"  Started  : {start}")
     print(f"  Finished : {finish}")
 
-    if status == "completed" and result == "failed":
-        get_failed_step_logs(session, remote, build_id)
+    failed = status == "completed" and result == "failed"
+    # a failed build's timeline is needed for its logs, so its errors are not swallowed
+    records = get_timeline_records(session, remote, build_id) if failed else []
+    warnings = build_warnings.ado_warning_count(records) if failed else warning_count_or_none(session, remote, build)
+    if warnings:
+        print(f"  {build_warnings.count_text(warnings, build_id)}")
+    if failed:
+        get_failed_step_logs(session, build_id, records)
 
 
 def exit_if_blocked_on_approval(

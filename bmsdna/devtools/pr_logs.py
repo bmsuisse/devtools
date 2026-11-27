@@ -76,32 +76,36 @@ def matches_step(title: str, step: str | None) -> bool:
     return step is None or step.casefold() in title.casefold()
 
 
+def record_ancestors(by_id: dict, rec: dict) -> list[dict]:
+    """The timeline record's parents, nearest first."""
+    found = []
+    parent = by_id.get(rec.get("parentId"))
+    while parent is not None:
+        found.append(parent)
+        parent = by_id.get(parent.get("parentId"))
+    return found
+
+
+def record_path(by_id: dict, rec: dict) -> str:
+    """`Stage / Job / Task` of a timeline record."""
+    names = [a.get("name") or "?" for a in record_ancestors(by_id, rec) if a.get("type") in ("Stage", "Job")]
+    return " / ".join([*reversed(names), rec.get("name") or "?"])
+
+
 def ado_sections(records: list[dict], fetch_log: Callable[[str], str], *, step: str | None) -> list[LogSection]:
     """The timeline's tasks that have a log, as `Stage / Job / Task` sections in start order;
     `step` keeps those whose path contains it (case-insensitive).
     """
     by_id = {rec.get("id"): rec for rec in records}
 
-    def ancestors(rec: dict) -> list[dict]:
-        found = []
-        parent = by_id.get(rec.get("parentId"))
-        while parent is not None:
-            found.append(parent)
-            parent = by_id.get(parent.get("parentId"))
-        return found
-
-    def path(rec: dict) -> str:
-        names = [a.get("name") or "?" for a in ancestors(rec) if a.get("type") in ("Stage", "Job")]
-        return " / ".join([*reversed(names), rec.get("name") or "?"])
-
     def position(rec: dict) -> tuple[str, str, int]:
         # a skipped task never started: place it by its job and its `order` in it
-        job = next((a for a in ancestors(rec) if a.get("type") == "Job"), {})
+        job = next((a for a in record_ancestors(by_id, rec) if a.get("type") == "Job"), {})
         return job.get("startTime") or "", job.get("id") or "", rec.get("order") or 0
 
     sections = []
     for rec in sorted((r for r in records if r.get("type") == "Task"), key=position):
-        title = path(rec)
+        title = record_path(by_id, rec)
         if matches_step(title, step):
             url = (rec.get("log") or {}).get("url")
             sections.append(

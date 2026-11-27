@@ -734,6 +734,7 @@ def test_target_options_default_to_dev_except_lookups_which_do_not_filter() -> N
         "pr status",
         "pr info",
         "pr logs",
+        "pr warnings",
         "pr retry",
         "pr cancel-build",
         "pr requeue-build",
