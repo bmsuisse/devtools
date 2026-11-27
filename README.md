@@ -1031,8 +1031,8 @@ in such a repo: that would skip those tests.
 
 Order of decision, always logged with its reason:
 
-1. Not a PR: the CI run after a push (merge) to `test`/`main` runs nothing (that code was tested on its way into
-   `dev`); the nightly, manual runs (also on `test`/`main`), other branches and forks run everything. A manual run of
+1. Not a PR: a run of `test`/`main` itself, after a push (merge) or started manually, runs nothing (that code was
+   tested on its way into `dev`); the nightly, manual runs on other branches and forks run everything. A manual run of
    `refs/pull/<id>/merge` is planned like that PR (a fork PR still runs everything).
 2. Branch flow: promotions (`dev` -> `test`, `test` -> `main`, `main` -> `dev`) run nothing. `fix/*` / `hotfix/*` into
    `main` are tested and must be cut from `main` (no unreleased `dev` commits). `cherry/*` ports a subset of

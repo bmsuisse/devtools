@@ -391,15 +391,15 @@ def test_fix_base_check_only_runs_for_main(config) -> None:
     assert plan_for(config, pr("fix/x", "dev"), labels=["test-full"], fix_base=must_not_run).kind == "full"
 
 
-def test_push_to_test_or_main_runs_nothing(config) -> None:
+def test_push_or_manual_run_of_test_or_main_runs_nothing(config) -> None:
     for branch in ("main", "test"):
-        for reason in ("IndividualCI", "BatchedCI"):
+        for reason in ("IndividualCI", "BatchedCI", "Manual"):
             assert plan_for(config, Context(branch=branch, reason=reason)).kind == "none"
 
 
 @pytest.mark.parametrize("branch", ["main", "test"])
-@pytest.mark.parametrize("reason", ["Manual", "Schedule", ""])
-def test_manual_and_scheduled_runs_on_test_or_main_run_everything(config, branch, reason) -> None:
+@pytest.mark.parametrize("reason", ["Schedule", ""])
+def test_scheduled_and_unknown_runs_on_test_or_main_run_everything(config, branch, reason) -> None:
     assert plan_for(config, Context(branch=branch, reason=reason)).kind == "full"
 
 

@@ -24,8 +24,8 @@ to that folder, so a file outside it is a `../` path: own it with `paths` (`infr
 Labels: `test-<area>`, `test-full` (everything), `test-none` (no tests; lint and build still run). The legacy
 `e2e-<area>` labels count as `test-<area>`. Order of decision (the reason is always reported):
 
-1. Not a PR: the CI run after a push (merge) to `test`/`main` runs nothing (promoted code was tested on its way
-   into `dev`); anything else (nightly, manual runs, other branches) and forks run everything.
+1. Not a PR: any run of `test`/`main` itself (the CI run after a push, or a manual run) runs nothing (promoted code was
+   tested on its way into `dev`); anything else (nightly, manual runs on other branches) and forks run everything.
 2. Branch flow: promotions (dev -> test -> main -> dev) run nothing; `fix/*` and `hotfix/*` into `main` are tested and `cherry/*` (a subset of `test` ported to `main`) runs
    the full suite whatever its label; both must be cut from `main`; any other PR into `test`/`main` is an error.
 3. PR labels decide. Without a usable label the changed files decide (`on_missing = "infer"`): nothing changed or
@@ -59,7 +59,8 @@ LONG_LIVED = frozenset({"dev", "test", "main"})
 PROMOTIONS = frozenset({("dev", "test"), ("test", "main"), ("main", "dev")})
 FIX_PREFIXES = ("fix/", "hotfix/")
 PORT_PREFIXES = ("cherry/",)  # a subset of test cherry-picked onto a branch cut from main
-PUSH_REASONS = frozenset({"IndividualCI", "BatchedCI"})  # a merge landed on the branch: deploy only
+# A merge landed on the branch, or a manual re-run of it: deploy only.
+PUSH_REASONS = frozenset({"IndividualCI", "BatchedCI", "Manual"})
 INFRA_AREA = "infra"  # owns `infra/**` by default when the repo has an infra/ folder; usually has no tests
 RESERVED_AREAS = frozenset({"full", "none"})  # test-full / test-none are the control labels
 
@@ -397,7 +398,7 @@ def make_plan(
         if ctx.branch in {"test", "main"} and ctx.reason in PUSH_REASONS:
             return Plan(
                 "none",
-                f"push to {ctx.branch}: that code was tested on its way into dev, deploy only",
+                f"{ctx.reason or 'run'} of {ctx.branch}: that code was tested on its way into dev, deploy only",
             )
         return _full(config, "not a PR build")
     if ctx.is_fork:
